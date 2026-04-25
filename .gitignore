@@ -1,0 +1,32 @@
+.env
+node_modules/
+output/
+*.log
+dist/
+
+# 临时文件
+tmp_*.js
+*.tmp
+
+# 包含敏感信息的发布脚本（硬编码了 GitHub Token）
+publish.js
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 大模型文件
+electron/models/*.bin
+
+# FFmpeg 二进制文件（超过 100MB，GitHub 不允许直接提交）
+electron/bin/ffmpeg.exe
+electron/bin/ffprobe.exe
+
+# 备份文件
+*.bak_*

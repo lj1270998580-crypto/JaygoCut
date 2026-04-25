@@ -1,0 +1,76 @@
+{
+  "name": "jaygo-cut",
+  "version": "0.1.10",
+  "private": true,
+  "description": "Jaygo Cut desktop app",
+  "author": "Jaygo Team",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "check": "node --check electron/main.js && node --check electron/preload.js && node --check electron/renderer/renderer.js",
+    "pack:win": "electron-builder --win --dir",
+    "pack:win:local": "electron-builder --win --dir --config.electronDist=node_modules/electron/dist --config.electronVersion=31.7.7",
+    "dist:win": "electron-builder --win nsis",
+    "dist:win:local": "electron-builder --win nsis --config.electronDist=node_modules/electron/dist --config.electronVersion=31.7.7"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.jaygo.cut",
+    "productName": "Jaygo Cut",
+    "asarUnpack": [
+      "electron/bin/**/*",
+      "electron/assets/**/*"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "!electron/models/*.bin",
+      "talkcut/**/*",
+      "subtitles/**/*",
+      "install/**/*",
+      "evolution/**/*",
+      ".env",
+      "README.md",
+      "SKILL.md",
+      "DESKTOP_APP.md",
+      "package.json"
+    ],
+    "win": {
+      "icon": "electron/assets/app-icon.ico",
+      "executableName": "JaygoCut",
+      "artifactName": "JaygoCut-Setup-${version}.${ext}",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "installerIcon": "electron/assets/app-icon.ico",
+      "uninstallerIcon": "electron/assets/app-icon.ico",
+      "shortcutName": "Jaygo Cut",
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://ailabing.cn/downloads/jaygo/"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3"
+  }
+}

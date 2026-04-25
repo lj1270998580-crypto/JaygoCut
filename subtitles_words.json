@@ -1,0 +1,122 @@
+[
+  {
+    "text": "请",
+    "start": 0,
+    "end": 1.5,
+    "isGap": false
+  },
+  {
+    "text": "不",
+    "start": 1.5,
+    "end": 3,
+    "isGap": false
+  },
+  {
+    "text": "吝",
+    "start": 3,
+    "end": 4.5,
+    "isGap": false
+  },
+  {
+    "text": "点",
+    "start": 4.5,
+    "end": 6,
+    "isGap": false
+  },
+  {
+    "text": "赞",
+    "start": 6,
+    "end": 7.5,
+    "isGap": false
+  },
+  {
+    "text": "订",
+    "start": 7.5,
+    "end": 8.99,
+    "isGap": false
+  },
+  {
+    "text": "阅",
+    "start": 8.99,
+    "end": 10.49,
+    "isGap": false
+  },
+  {
+    "text": "转",
+    "start": 10.49,
+    "end": 11.99,
+    "isGap": false
+  },
+  {
+    "text": "发",
+    "start": 11.99,
+    "end": 13.49,
+    "isGap": false
+  },
+  {
+    "text": "打",
+    "start": 13.49,
+    "end": 14.99,
+    "isGap": false
+  },
+  {
+    "text": "赏",
+    "start": 14.99,
+    "end": 16.49,
+    "isGap": false
+  },
+  {
+    "text": "支",
+    "start": 16.49,
+    "end": 17.99,
+    "isGap": false
+  },
+  {
+    "text": "持",
+    "start": 17.99,
+    "end": 19.49,
+    "isGap": false
+  },
+  {
+    "text": "明",
+    "start": 19.49,
+    "end": 20.99,
+    "isGap": false
+  },
+  {
+    "text": "镜",
+    "start": 20.99,
+    "end": 22.49,
+    "isGap": false
+  },
+  {
+    "text": "与",
+    "start": 22.49,
+    "end": 23.98,
+    "isGap": false
+  },
+  {
+    "text": "点",
+    "start": 23.98,
+    "end": 25.48,
+    "isGap": false
+  },
+  {
+    "text": "点",
+    "start": 25.48,
+    "end": 26.98,
+    "isGap": false
+  },
+  {
+    "text": "栏",
+    "start": 26.98,
+    "end": 28.48,
+    "isGap": false
+  },
+  {
+    "text": "目",
+    "start": 28.48,
+    "end": 29.98,
+    "isGap": false
+  }
+]
