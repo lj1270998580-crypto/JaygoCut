@@ -45,7 +45,6 @@ const els = {
   modelInstallState: $('modelInstallState'),
   modelProgressBar: $('modelProgressBar'),
   modelInstallHint: $('modelInstallHint'),
-  stepIndicator: $('stepIndicator'),
 };
 
 
@@ -116,21 +115,6 @@ const UPDATE_STATUS_LABELS = {
   downloaded: '\u5df2\u4e0b\u8f7d',
   error: '\u66f4\u65b0\u5931\u8d25',
   unavailable: '\u4e0d\u53ef\u7528',
-};
-
-const STEP_STAGE_MAP = {
-  queued: 0,
-  extract_audio: 1,
-  prepare_upload: 1,
-  upload_audio: 2,
-  transcribe_remote: 2,
-  transcribe_local: 2,
-  build_subtitles: 2,
-  auto_select_silence: 3,
-  generate_review: 3,
-  start_review_server: 3,
-  completed: 4,
-  failed: -1,
 };
 
 const LLM_PROVIDER_PRESETS = {
@@ -283,26 +267,6 @@ function setLogs(lines) {
   els.taskLogs.scrollTop = els.taskLogs.scrollHeight;
 }
 
-function renderStepIndicator(state, stage) {
-  if (!els.stepIndicator) return;
-  const items = els.stepIndicator.querySelectorAll('.step-item');
-  const stepIndex = STEP_STAGE_MAP[stage] ?? 0;
-  const isFailed = state === 'failed';
-
-  items.forEach((item, idx) => {
-    item.classList.remove('done', 'active', 'failed');
-    if (isFailed && idx === stepIndex - 1) {
-      item.classList.add('failed');
-    } else if (stepIndex >= 4) {
-      item.classList.add('done');
-    } else if (idx < stepIndex) {
-      item.classList.add('done');
-    } else if (idx === stepIndex && stepIndex > 0) {
-      item.classList.add('active');
-    }
-  });
-}
-
 function setTask(data) {
   if (!data) {
     els.taskState.textContent = STATE_LABELS.idle;
@@ -311,7 +275,6 @@ function setTask(data) {
     els.projectDir.textContent = '-';
     setLogs([]);
     setBusy(false);
-    renderStepIndicator('idle', 'queued');
     return;
   }
 
@@ -321,7 +284,6 @@ function setTask(data) {
   els.projectDir.textContent = data.projectDir || '-';
   setLogs(data.logs || []);
   setBusy(data.state === 'running');
-  renderStepIndicator(data.state, data.stage);
 }
 
 function setBusy(isBusy) {
@@ -332,7 +294,7 @@ function setBusy(isBusy) {
 function renderHistory(list) {
   historyCache = Array.isArray(list) ? list : [];
   if (!historyCache.length) {
-    els.historyList.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🎬</div><div class="empty-state-text">完成项目后，历史记录会显示在这里</div></div>';
+    els.historyList.innerHTML = '<div class="history-item"><div class="history-meta">暂无历史项目。</div></div>';
     return;
   }
 
@@ -679,24 +641,8 @@ async function refreshUpdateState() {
   renderUpdateState(await window.talkcut.getUpdateState());
 }
 
-function initSectionToggles() {
-  const toggles = document.querySelectorAll('.section-toggle');
-  toggles.forEach((toggle) => {
-    toggle.addEventListener('click', () => {
-      const expanded = toggle.getAttribute('aria-expanded') === 'true';
-      const section = toggle.getAttribute('data-section');
-      const body = document.getElementById(`section-${section}`);
-      if (body) {
-        body.hidden = expanded;
-        toggle.setAttribute('aria-expanded', String(!expanded));
-      }
-    });
-  });
-}
-
 async function boot() {
   requireElementsReady();
-  initSectionToggles();
   const settings = await window.talkcut.getSettings();
   applySettingsToForm(settings);
   loadSettingsCollapsed();
