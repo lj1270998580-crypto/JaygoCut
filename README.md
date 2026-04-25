@@ -1,534 +1,122 @@
-# TalkCut — 口播快剪 🎬
+# Jaygo Cut 🎬
 
-> **让 AI 帮你自动剪掉口播视频中的"说错部分"**
-> 🤯 不用再手动一帧帧找错词！
-> 🤖 AI 自动识别，你确认一下就搞定！
+> AI 精准口播剪辑工具 —— 做自媒体最好用的口播剪辑助手！
 
----
-
-## 👋 你好，创作者！
-
-你是不是也遇到过这些问题：
-
-- 录了 10 分钟口播，中间卡壳了 3 次 😫
-- 说了两遍一样的话，不知道该保留哪个 🤔
-- "那个""就是""嗯"太多，看着很乱 😓
-- 说错了重新说，前面说错的部分得手动剪掉 ✂️
-
-**现在有 TalkCut 帮你解决！**
-
-> **只需 3 步，10 分钟视频 2 分钟搞定！**
+Jaygo Cut 是一款 Windows 桌面端口播视频自动剪辑工具。核心流程：**选择视频 → 提取音频 → 语音转录 → 智能审核 → FFmpeg 精确裁剪**，帮助创作者快速删除静音、语气词、重复句和语义冗余内容。
 
 ---
 
-## 🎯 核心功能
+## ✨ 核心功能
 
-| 问题 | TalkCut 怎么处理 |
-|------|-----------------|
-| 说了两遍一样的话 | 自动识别重复句，保留最完整的那一遍 |
-| 话说到一半卡住了 | 识别残句，整句标记删除 |
-| "那个""就是""嗯"太多 | 标记卡顿词和语气词 |
-| 说错了重新说 | 识别纠正重说，删掉前面说错的部分 |
-| 中间停顿太久 | 自动检测静音段（≥0.5 秒可自定义） |
-| 想顺手配一段发布文案 | **AI 自动生成视频介绍草稿**（标题+正文+标签+摘要） |
-
-## 🧠 AI 会学习你的使用习惯
-
-TalkCut 有一个聪明的"大脑"，它会记住你的每一个偏好，越用越懂你！
-
-### 📝 自定义词典支持
-- **subtitles生成**时可添加专业术语、人名、品牌名等作为热词
-- 提高语音识别准确率，避免专业词汇被误识别
-- 支持同音字纠错（如"Agent"被识别为"IT"）
-
-### 🎯 智能偏好记忆
-- **静音处理**：默认 0.5 秒以下保留，1 秒以上建议删除
-- **语气词**：适量保留"嗯"作为过渡，不会一刀切
-- **重复句**：优先保留后面说的完整版本
-- **个性化阈值**：你可以自定义每个检测的敏感度
-
-### 🔄 evolution机制
-- **记住你的每一次调整**：AI 会学习你的剪辑习惯
-- **自动优化规则**：根据反馈持续改进识别算法
-- **越用越准**：下次遇到类似情况，AI 会更了解你的想法
+| 功能 | 说明 |
+|------|------|
+| 🎙️ **多引擎转录** | 支持火山引擎 ASR、阿里 Qwen3-ASR（云端）及本地 Whisper |
+| 🤖 **AI 智能标记** | 自动识别静音、语气词、重复句；LLM 语义分析建议删除内容 |
+| 📝 **可视化审核** | 文本与音频实时联动，精确到字的标记和编辑 |
+| ✂️ **一键剪辑** | FFmpeg 精确裁剪，支持 filter_complex 重新编码 |
+| 🎬 **字幕生成** | 火山转录结果自动生成字幕，支持自定义词典纠错 |
+| 🚀 **自动更新** | 基于 electron-updater，支持在线差分更新 |
 
 ---
 
-## ✨ 特色功能详解
+## 🚀 快速开始
 
-### 📚 智能词典系统
+### 方式一：下载安装包（推荐）
 
-**添加你的专属词汇**：
-```
-在 字典/dictionary.txt 中添加：
-Claude Code
-Agent
-AI剪辑
-口播技巧
-```
+从 [GitHub Releases](https://github.com/lj1270998580-crypto/JaygoCut/releases) 下载最新版本的 `JaygoCut-Setup-<version>.exe`，双击安装即可。
 
-**AI 会自动使用这些词**：
-- 转录时优先识别这些专业术语
-- 避免同音字错误（如"IT"→"Agent"）
-- subtitles编辑时可快速插入
+### 方式二：从源码运行
 
-### 🧠 个人偏好学习
+```bash
+# 克隆仓库
+git clone https://github.com/lj1270998580-crypto/JaygoCut.git
+cd JaygoCut
 
-**你的习惯，AI 记在心里**：
-```
-首次使用：AI 使用默认规则
-你说："静音阈值改成 1 秒"
-→ AI 记录，下次按 1 秒处理
-你说："保留一些嗯作为过渡"
-→ AI 记住，不会全部删除
-你说："这个重复句我想要保留"
-→ AI 学习，下次类似情况更智能
+# 安装依赖
+npm install
+
+# 开发模式运行
+npm run dev
 ```
 
-**偏好自动存储在**：
-- `talkcut/user_rules/` - 你的剪辑偏好
-- `subtitles/dictionary.txt` - 你的专业词汇
-- `evolution/` - AI 的学习记录
-
-### 🎬 完整工作流
-
-- **转录**：火山引擎 API（快速云端）或 Whisper（本地免费）
-- **分析**：AI 逐句识别口误、重复、卡顿，并参考你的偏好
-- **审核**：可视化网页，精确到字的标记和编辑
-- **剪辑**：一键生成成品视频
-- **subtitles**：可选烧录subtitles到视频（支持词典纠错）
-- **文案**：自动生成可直接复制使用的视频介绍
+> **注意**：源码仓库不包含 FFmpeg 二进制文件（超过 GitHub 100MB 限制）。你需要手动下载 [FFmpeg](https://www.gyan.dev/ffmpeg/builds/)，将 `ffmpeg.exe` 和 `ffprobe.exe` 放到 `electron/bin/` 目录下。
 
 ---
 
-## 🚀 快速开始（5分钟搞定）
-
-### 第一步：install TalkCut（只需一次）
-
-选择任意一种方法下载：
-
----
-
-#### 🎯 方法一：下载 ZIP（最简单，推荐新手）
-
-**全程只需鼠标点击 + 1句话告诉 Claude！**
-
-1. **点击下载 ZIP**：
-   - 点击这个页面的绿色 **"Code"** 按钮
-   - 在弹出的菜单中选择 **"Download ZIP"**
-   - 等待下载完成
-
-2. **解压文件**：
-   - 找到下载的 `talkcut-claude-skill-main.zip` 文件
-   - 右键选择"解压"或在 Mac 上双击解压
-   - 你会得到一个名为 `talkcut-claude-skill-main` 的文件夹
-
-3. **让 Claude 帮你放到正确位置**：
-   - 解压后，告诉 Claude：
-   ```
-   请把 talkcut-claude-skill-main 文件夹移动到正确位置
-   ```
-   - Claude 会自动帮你：
-     - 创建 `.claude/skills/videocut` 文件夹（如果不存在）
-     - 把文件复制到正确位置
-     - 清理临时文件
-   - 你完全不需要自己找文件夹！
-
----
-
-#### 💻 方法二：使用 Git 命令（适合熟悉命令行的用户）
-
-如果你已经install了 Git，并且喜欢用命令行：
-
----
-
-##### 🤖 选项1：让 AI 帮你install（推荐）
-
-**前提条件**：需要先配置 GitHub，详情教程请见
-https://my.feishu.cn/wiki/J1YcwUDXkiYxw2kjcDXcMScJnQe?from=from_copylink
-
-如果你已经配置好 GitHub，可以直接让 AI 帮你搞定：
-
-**告诉 Claude：**
+## 📁 项目结构
 
 ```
-请用 Git 克隆 https://github.com/rongmiao926-hub/talkcut-claude-skill.git 仓库到 ~/.claude/skills/videocut
-```
-
-Claude 会自动：
-- 检查你的 Git 环境
-- 克隆仓库到正确位置
-- 处理所有权限问题
-- 完成后告诉你
-
-> 💡 **推荐**：如果已经配置好 GitHub，这个方法最方便！一句话搞定！
-
----
-
-##### 🔧 选项2：手动操作（传统方式）
-
-如果你更喜欢自己控制过程：
-
-1. **打开终端**：
-   - **Mac**：在启动台搜索"终端"（图标是一个黑色盒子）
-   - **Windows**：按 Win+R，输入 `cmd`，回车
-
-2. **输入命令**：
-   ```bash
-   git clone https://github.com/rongmiao926-hub/talkcut-claude-skill.git ~/.claude/skills/videocut
-   ```
-
-3. **等待完成**：
-   - 终端会显示下载进度
-   - 需要自己确认命令是否正确执行
-
----
-
-### 💡 两种方法对比
-
-| 特点 | 方法一（ZIP） | 方法二（Git） |
-|------|-------------|-------------|
-| **难度** | 🟢 非常简单，AI 全程指导 | 🟢 AI 可全程指导<br>🟡 需要提前配置 GitHub |
-| **更新** | 手动下载新版 | 一条命令更新<br>（AI 可帮你执行） |
-| **网络** | 不需要 Git | 需要 Git 环境 |
-| **AI 帮助** | ✅ AI 帮你处理所有文件位置 | ✅ AI 可帮你执行命令<br>❌ 或手动操作终端 |
-| **推荐** | 🔥 新手首选 | ⚡ 已配 GitHub 的用户<br>🤖 AI 帮助选项优先 |
-
----
-
-💡 **小贴士**：
-- **新手**？选方法一，点点鼠标就行
-- **已有 GitHub**？选方法二的 AI 选项，一句话搞定
-- **喜欢命令行**？选方法二的手动选项
-- **想更新方便**？用 Git 方案，一条命令更新
-
----
-
-### 第二步：install依赖
-
-**打开 Claude Code，告诉它：**
-
-```
-帮我install videocut 环境
-```
-
-Claude 会自动：
-- 检查你的电脑环境
-- install需要的 Node.js、FFmpeg
-- 询问你选择语音识别方案（火山引擎或 Whisper）
-- 完成所有配置
-
-### 第三步：选择语音方案
-
-install过程中，Claude 会问你用哪种语音识别方案：
-
-| 方案 | 优点 | 缺点 |
-|------|------|------|
-| **火山引擎 API** | 速度快，识别准，全平台可用 | 需要注册账号，有 20 小时免费额度 |
-| **Whisper 本地模型** | 完全免费，不需要联网 | 速度较慢，首次下载模型占 1.5GB 磁盘，**仅支持 macOS（Apple Silicon）** |
-
-**如果选火山引擎**，需要获取 API Key：
-1. 打开火山引擎控制台：https://console.volcengine.com/speech/new/setting/activate
-2. 开通"音视频subtitles生成"服务
-3. 获取 API Key
-
-> 详细指南：https://my.feishu.cn/wiki/Gh0MwxHePidsYfkIx7zcvJQynqc?from=from_copylink
-
-**如果选 Whisper**，Claude 会自动install，无需额外操作。
-
----
-
-### 第四步：开始使用（和 Claude 聊天就搞定！）
-
-#### 🎬 剪辑口播视频
-
-**告诉 Claude：**
-
-```
-帮我剪这个口播视频 /Users/你的名字/Downloads/我的视频.mp4
-```
-
-#### 📝 添加subtitles（可选）
-
-**告诉 Claude：**
-
-```
-给我的视频添加subtitles
-```
-
-#### 📚 添加你的专业术语
-
-**告诉 Claude：**
-
-```
-请在词典里添加这些词：Claude Code、AI 剪辑、口播技巧
-```
-
-#### 🧠 记住你的剪辑偏好
-
-**告诉 Claude：**
-
-```
-记住我的剪辑偏好
-```
-
-比如：
-- "静音阈值改成 1 秒"
-- "保留适量嗯作为过渡"
-- "这个重复句我想要保留前面版本"
-
----
-
-## 🎯 AI 如何学习你的习惯
-
-### 第一次使用
-- AI 使用默认规则处理视频
-- 你在网页上确认或调整删除项
-
-### AI 记住你的选择
-```
-你说："静音阈值改成 1 秒"
-→ AI 修改 user_rules/3-silence-segments.md
-→ 下次按 1 秒处理
-
-你说："保留一些嗯作为过渡"
-→ AI 更新 user_rules/2-filler-words.md
-→ 下次不会全部删除语气词
-
-你说："这个重复句我喜欢保留前面"
-→ AI 记录到 evolution/SKILL.md
-→ 下次遇到类似情况更智能
-```
-
-### 查看和编辑偏好
-```
-videocut 字典文件在哪里？
-→ subtitles/dictionary.txt
-
-videocut user_rules文件在哪里？
-→ talkcut/user_rules/
-
-videocut 的配置文件有哪些？
-→ 列出所有重要文件和用途
+JaygoCut/
+├── electron/              # Electron 主进程、渲染层、资源
+│   ├── main.js            # 主进程：设置、任务编排、模型检查、自动更新
+│   ├── preload.js         # IPC API 暴露
+│   ├── renderer/          # 主界面（HTML / CSS / JS）
+│   ├── assets/            # 应用图标
+│   └── bin/               # FFmpeg / ffprobe（需手动放置）
+├── talkcut/               # 口播剪辑核心逻辑
+│   ├── scripts/           # 转录、审核页、裁剪脚本
+│   └── user_rules/        # 语气词、重复句、静音段等规则文档
+├── subtitles/             # 字幕相关功能
+│   ├── dictionary.txt     # 字幕词典
+│   └── scripts/           # 字幕服务
+├── server/jaygo-upload/   # 服务器音频上传中转服务
+├── install/               # 安装说明
+└── evolution/             # 自进化资料
 ```
 
 ---
 
-## ✨ AI 视频介绍草稿
+## 🔧 构建
 
-审核页下方会自动显示一份 **AI 视频介绍草稿**，包含：
+```bash
+# 语法检查
+npm run check
 
-- 🎯 **标题**：吸引眼球的钩子
-- 📝 **正文**：围绕核心观点展开
-- 🏷️ **标签**：4-6 个相关标签
-- 📋 **摘要**：3-5 点核心内容
+# 打包未压缩版本（用于本地测试）
+npm run pack:win:local
 
-**特点：**
-- 不是机械摘要，而是像创作者自己发的帖子
-- 直接复制使用，无需二次编辑
-- 根据保留内容智能生成，风格匹配原口播
-
----
-
-## 🔄 工作原理
-
-```
-你的口播视频
-    ↓
-① 提取音频（FFmpeg）
-    ↓
-② 语音转文字（火山引擎 API 或本地 Whisper）
-    ↓
-③ AI 分析：哪些是口误？哪些是重复？（参考你的偏好）
-    ↓
-④ 生成审核网页 + **AI 视频介绍草稿**
-    ↓
-⑤ 一键剪辑，输出成品视频（FFmpeg）
-    ↓
-⑥ 可选：生成subtitles（带词典纠错）
+# 打包 NSIS 安装包
+npm run dist:win:local
 ```
 
-整个过程中，**真正需要你动手的只有第 ④ 步**——在网页上看一眼 AI 标记得对不对，不对的调整一下，然后点按钮。
+打包产物位于 `dist/` 目录：
+- `JaygoCut-Setup-<version>.exe`
+- `JaygoCut-Setup-<version>.exe.blockmap`
+- `latest.yml`
 
 ---
 
-## 📁 目录结构
+## ⚙️ 配置说明
 
-```
-~/.claude/skills/videocut/
-├── install/           # 环境install说明
-├── talkcut/         # 核心功能：转录 + AI 分析 + 审核 + 剪辑
-│   ├── scripts/    # 脚本文件
-│   │   ├── volcengine_transcribe.js   # 火山引擎转录
-│   │   ├── whisper_transcribe.py      # Whisper 本地转录
-│   │   ├── generate_subtitles.js      # 生成subtitles数据
-│   │   ├── generate_review.js         # 生成审核网页 + 视频介绍草稿
-│   │   ├── review_server.js           # 审核服务器
-│   │   └── cut_video.js               # FFmpeg 剪辑
-│   ├── user_rules/   # **你的个性化审核规则**（AI 会学习）
-│   │   ├── 1-core-principles.md              # 删前保后原则
-│   │   ├── 2-filler-words.md            # 嗯啊呃词处理
-│   │   ├── 3-silence-segments.md            # 静音阈值设置
-│   │   └── ...                        # 其他检测规则
-│   └── show-notes.md                  # **视频介绍草稿生成规则**
-├── subtitles/           # subtitles生成功能（含词典纠错）
-│   ├── dictionary.txt                       # **你的专业词汇**
-│   └── scripts/                        # subtitles脚本
-└── evolution/         # **AI 的学习记录**
-    ├── README.md                       # evolution说明
-    └── SKILL.md                        # 用户偏好记录
-```
+### 转录服务
+
+| 服务商 | 类型 | 说明 |
+|--------|------|------|
+| 火山引擎 | 云端 | 速度快，识别准，需 API Key |
+| 阿里 Qwen3-ASR | 云端 | DashScope 平台，需 API Key |
+| Whisper 本地 | 本地 | 完全免费，速度取决于硬件 |
+
+### LLM 服务商
+
+支持 OpenAI 兼容接口的多种提供商：OpenAI、Claude、OpenRouter、xAI、Groq、DeepSeek、Qwen、Moonshot、SiliconFlow 等，以及自定义端点。
+
+配置位置：应用设置页面。
 
 ---
 
-## 🔍 如何查找和编辑文件？
+## 📝 开发规范
 
-### 查看文件路径的方法
-
-你可以这样问 AI 帮你找到文件：
-
-1. **查看字典位置**：
-   ```
-   videocut 字典文件在哪里？
-   ```
-   AI 会告诉你：`subtitles/dictionary.txt`
-
-2. **查看user_rules目录**：
-   ```
-   videocut user_rules文件在哪里？
-   ```
-   AI 会告诉你：`talkcut/user_rules/`
-
-3. **查看所有配置文件**：
-   ```
-   videocut 的配置文件有哪些？
-   ```
-   AI 会列出所有重要文件和它们的用途
-
-### 编辑文件的步骤
-
-1. **让 AI 打开文件**：
-   ```
-   打开 subtitles/dictionary.txt
-   ```
-
-2. **添加你的术语**：
-   直接告诉 AI 要加什么词：
-   ```
-   请在词典里添加这些词：Claude Code、AI 剪辑、口播技巧
-   ```
-   AI 会自动帮你添加到文件里，每行一个
-
-3. **保存文件**：
-   ```
-   保存
-   ```
-
-### 常用文件位置速查
-
-| 功能 | 文件路径 | 用途 |
-|------|---------|------|
-| **自定义词典** | `subtitles/dictionary.txt` | 提高语音识别准确率 |
-| **审核规则** | `talkcut/user_rules/` | 自定义 AI 审核偏好 |
-| **文案规则** | `talkcut/show-notes.md` | 视频介绍草稿生成规则 |
-| **evolution记录** | `evolution/` | AI 学习记录 |
+- **Runtime**: Node.js >= 18（无转译，纯 CommonJS）
+- **测试**: `node tests/run-all.js`
+- **代码风格**: ESLint（flat config）
+- **Markdown 检查**: `npx markdownlint-cli '**/*.md' --ignore node_modules`
 
 ---
-
-## ❓ 常见问题
-
-### Q: 我不会用终端 / 命令行怎么办？
-
-没关系！TalkCut 专门为新手优化过：
-
-**install时**：
-- 使用上面的"下载 ZIP"方法，完全不需要终端
-
-**日常使用**：
-- 只需要在 Claude Code 里和它说话就行，比如：
-  ```
-  帮我剪这个视频 我的视频.mp4
-  ```
-- 不需要记任何命令，也不需要打开终端
-
-**如果你真的需要打开终端**（仅install时可能需要）：
-1. **Mac**：在启动台搜索"终端"（图标是一个黑色盒子）
-2. **Windows**：按 Win+R，输入 `cmd`，回车
-3. 复制粘贴命令，按回车就行
-
-### Q: AI 真的能学会我的习惯吗？
-
-是的！TalkCut 有完整的记忆系统：
-
-- **每次调整都会记录**：你修改的阈值、偏好都会保存
-- **下次自动应用**：AI 会记住你的选择
-- **持续学习**：越用越了解你的风格
-
-### Q: 视频很长，会不会很慢？
-
-转录速度取决于你选的方案：
-- **火山引擎**：几分钟内完成（云端处理）
-- **Whisper 本地**：大约是视频时长的 1-3 倍（取决于你的电脑性能）
-
-剪辑本身很快，通常几秒到十几秒。
-
-### Q: 审核页面打不开？
-
-试试这几个简单步骤：
-
-1. **检查浏览器**：确保浏览器没有阻止弹窗
-2. **刷新页面**：按 F5 或点击刷新按钮
-3. **换个浏览器**：试试 Chrome、Edge 或 Safari
-4. **关闭其他程序**：如果有其他程序占用 8899 端口，先关掉它们
-
-**如果还是不行**，可以：
-- **Mac**：打开"活动监视器"，找到占用 8899 端口的程序，右键"强制退出"
-- **Windows**：打开"任务管理器"，找到对应进程，右键"结束任务"
-
-### Q: 可以在 Windows 上用吗？
-
-可以。核心功能完全支持 Windows。选择火山引擎 API 方案即可，它是云端处理，不挑系统。唯一不能用的是 Whisper 本地模型——它依赖 Apple Silicon 的 MLX 框架，仅限 Mac。
-
-### Q: Linux 支持吗？
-
-部分支持！核心功能（talkcut、subtitles生成）完全支持，但 Whisper 本地模型暂不支持。推荐使用火山引擎 API。
-
-### Q: 免费吗？
-
-TalkCut 本身完全免费开源。费用取决于你的选择：
-- **使用 Whisper 本地模型**：完全免费
-- **使用火山引擎 API**：有 20 小时免费额度，超出后按量计费
-- **Claude Code 本身的费用**：需要 Anthropic 账号（有免费额度）
-
-### Q: AI 生成的文案质量如何？
-
-AI 会分析保留的内容，生成像创作者自己发的帖子，不是机械摘要。包含标题、正文、标签和摘要，可直接复制使用。
-
----
-
-## 🏗️ 技术架构
-
-TalkCut 采用模块化设计，各组件独立：
-
-- **转录引擎**：火山引擎 API（云端）+ Whisper（本地）
-- **分析引擎**：Claude AI 语义理解 + 用户偏好学习
-- **审核界面**：Web-based 实时编辑
-- **剪辑引擎**：FFmpeg 高性能处理
-- **subtitles系统**：支持自定义词典纠错
-- **进化系统**：用户偏好持续学习
-
----
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-## 致谢
-
-- **原作**：成峰（公众号「AI 产品自由」）—— 原始项目 [videocut-skills](https://github.com/Ceeon/videocut-skills)
-- **当前版本完善**：[Dogtor 大王](https://xhslink.com/m/1GxnHJxjrnd)（小红书）
-- **感谢所有贡献者**：让 TalkCut 越来越好用！
 
 ## 📄 License
 
-MIT License - 详见 [LICENSE](LICENSE) 文件
+MIT License
+
+---
+
+> 做自媒体最好用的口播剪辑助手！
