@@ -7,6 +7,7 @@ const subtitlesPath = process.argv[2];
 const outputPath = process.argv[3] || 'auto_selected.json';
 const thresholdArg = Number(process.argv[4]);
 const threshold = Number.isFinite(thresholdArg) && thresholdArg >= 0.2 ? thresholdArg : 0.2;
+const thresholdEpsilon = 0.0005;
 
 if (!subtitlesPath) {
   console.error('Usage: node auto_select_silence.js <subtitles_words.json> [auto_selected.json] [thresholdSec]');
@@ -174,7 +175,7 @@ for (let i = 0; i < words.length; i += 1) {
   const item = words[i];
   if (!item || !item.isGap) continue;
   const dur = Number(item.end) - Number(item.start);
-  if (Number.isFinite(dur) && dur >= threshold) {
+  if (Number.isFinite(dur) && dur + thresholdEpsilon >= threshold) {
     if (!selectedSet.has(i)) stats.silence += 1;
     selectedSet.add(i);
     addReason(i, `silence >= ${threshold.toFixed(2)}s`);

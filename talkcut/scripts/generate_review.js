@@ -532,7 +532,7 @@ const html = `<!doctype html>
       border-radius: 6px;
       cursor: pointer;
       user-select: none;
-      transition: background-color 120ms ease;
+      transition: background-color 140ms ease, color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
     }
     .token:hover {
       background: var(--token-hover);
@@ -708,6 +708,7 @@ const html = `<!doctype html>
         <button id="btnSelectSilence">按阈值选择静音</button>
         <button id="btnLlmMark">LLM标记</button>
         <button id="btnApplyLlm">应用LLM建议</button>
+        <button id="btnClearLlm">清除LLM标记</button>
         <button id="btnCut" class="warn">执行裁剪</button>
       </div>
       <div id="status" class="status">就绪</div>
@@ -720,7 +721,7 @@ const html = `<!doctype html>
           <span class="legend-item"><span class="legend-dot repeat"></span>重复句规则（自动）</span>
           <span class="legend-item"><span class="legend-dot llm"></span>LLM建议</span>
         </div>
-        <div class="meta">操作提示：单击定位播放点；双击切换删除/取消；按住鼠标左键拖过文本可连续标记；空格键可播放/暂停；播放时文本会实时跟随并自动跳过已选段。</div>
+        <div class="meta">操作提示：单击定位播放点；双击切换删除/取消；拖过文本可连续标记；Ctrl+Z 撤回上一步标记；空格键播放/暂停；鼠标滚轮可缩放波形；播放时自动跳过已选段。</div>
         <div class="meta" id="llmSummary" style="margin-top:4px"></div>
         <div class="meta" id="runtime" style="margin-top:4px"></div>
         <div class="meta" id="draftState" style="margin-top:4px">草稿状态：未保存</div>
@@ -812,6 +813,7 @@ const html = `<!doctype html>
     const waveZoomTextEl = document.getElementById('waveZoomText');
     const btnLlmMark = document.getElementById('btnLlmMark');
     const btnApplyLlm = document.getElementById('btnApplyLlm');
+    const btnClearLlm = document.getElementById('btnClearLlm');
     const btnCut = document.getElementById('btnCut');
     const leftPanelEl = document.querySelector('.floating-side.left');
     const rightPanelEl = document.querySelector('.floating-side.right');
@@ -937,6 +939,7 @@ const html = `<!doctype html>
     let llmMarking = false;
     let syncTimer = null;
     let lastAutoScrollAt = 0;
+    let lastDragAutoScrollAt = 0;
     let mergedSelected = [];
     let lastSkipAt = 0;
     let lastSkipTarget = -1;
@@ -947,6 +950,7 @@ const html = `<!doctype html>
     let waveDurationSec = 0;
     let waveReady = false;
     let waveZoom = 1;
+    let waveViewCenterSec = 0;
     let waveStaticCanvas = null;
     let waveStaticKey = '';
     let publishLoading = false;
@@ -1077,6 +1081,11 @@ const html = `<!doctype html>
         selected: Array.from(selected),
         llmSuggested: Array.from(llmSuggested),
         llmReasonEntries: Array.from(llmReasonByIndex.entries()),
+        llmPunctEntries: Array.from(llmPunctByIndex.entries()),
+        llmParagraphAfter: Array.from(llmParagraphAfterIndex),
+        llmTopic,
+        llmOutline,
+        llmMultiSpeaker,
       };
     }
 
@@ -1091,6 +1100,11 @@ const html = `<!doctype html>
       selected.clear();
       llmSuggested.clear();
       llmReasonByIndex.clear();
+      llmPunctByIndex.clear();
+      llmParagraphAfterIndex.clear();
+      llmTopic = '';
+      llmOutline = '';
+      llmMultiSpeaker = false;
       for (const i of snapshot.selected) {
         const idx = Number(i);
         if (Number.isInteger(idx) && idx >= 0 && idx < WORDS.length) selected.add(idx);
@@ -1107,11 +1121,41 @@ const html = `<!doctype html>
           llmReasonByIndex.set(idx, reason);
         }
       }
+      for (const pair of snapshot.llmPunctEntries || []) {
+        if (!Array.isArray(pair) || pair.length < 2) continue;
+        const idx = Number(pair[0]);
+        const punct = String(pair[1] || '').trim();
+        if (Number.isInteger(idx) && idx >= 0 && idx < WORDS.length && /[，。！？；：]/.test(punct)) {
+          llmPunctByIndex.set(idx, punct[0]);
+        }
+      }
+      for (const i of snapshot.llmParagraphAfter || []) {
+        const idx = Number(i);
+        if (Number.isInteger(idx) && idx >= 0 && idx < WORDS.length) llmParagraphAfterIndex.add(idx);
+      }
+      llmTopic = String(snapshot.llmTopic || '').trim().slice(0, 80);
+      llmOutline = String(snapshot.llmOutline || '').trim().slice(0, 120);
+      llmMultiSpeaker = !!snapshot.llmMultiSpeaker;
       render();
       syncCurrentToken();
       updateSelectionStats();
       refreshLlmSummary();
       scheduleReviewStateSave(200);
+    }
+
+    function undoLastSelectionChange(source) {
+      if (!selectionUndoStack.length) return false;
+      const snapshot = selectionUndoStack.pop();
+      restoreSelectionState(snapshot);
+      syncUndoButton();
+      if (source === 'chat') {
+        pushChatMessage('assistant', '已撤回上一步对话调标记。');
+        setLlmChatStatus('已撤回最近一次对话调整');
+      } else {
+        setStatus('已撤回上一步标记');
+        setTimeout(refreshIdleStatus, 1000);
+      }
+      return true;
     }
 
     function addChatRow(role, text) {
@@ -1419,11 +1463,19 @@ const html = `<!doctype html>
       return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
     }
 
-    function setWaveZoom(nextZoom) {
+    function setWaveZoom(nextZoom, anchorTime) {
       const z = Math.max(1, Math.min(8, Number(nextZoom) || 1));
       waveZoom = z;
+      const duration = getWaveDuration();
+      const anchor = Number(anchorTime);
+      if (Number.isFinite(anchor) && duration > 0) {
+        waveViewCenterSec = Math.max(0, Math.min(duration, anchor));
+      } else if (duration > 0) {
+        waveViewCenterSec = Math.max(0, Math.min(duration, Number(audio.currentTime) || 0));
+      }
       if (waveZoomEl) waveZoomEl.value = String(z);
       if (waveZoomTextEl) waveZoomTextEl.textContent = z.toFixed(1) + 'x';
+      waveStaticKey = '';
       drawWaveform();
     }
 
@@ -1437,11 +1489,31 @@ const html = `<!doctype html>
       const z = Math.max(1, Number(waveZoom) || 1);
       const span = Math.max(0.2, duration / z);
       if (span >= duration) return { start: 0, end: duration, duration };
-      const center = Math.max(0, Math.min(duration, Number(audio.currentTime) || 0));
+      if (!Number.isFinite(waveViewCenterSec) || waveViewCenterSec <= 0) {
+        waveViewCenterSec = Math.max(0, Math.min(duration, Number(audio.currentTime) || 0));
+      }
+      const playTime = Math.max(0, Math.min(duration, Number(audio.currentTime) || 0));
+      let center = Math.max(0, Math.min(duration, waveViewCenterSec));
       let start = center - (span / 2);
       if (start < 0) start = 0;
       if (start + span > duration) start = duration - span;
-      const end = Math.min(duration, start + span);
+      let end = Math.min(duration, start + span);
+
+      if (!audio.paused) {
+        const margin = Math.max(0.3, span * 0.18);
+        if (playTime < start + margin) {
+          center = playTime + (span * 0.32);
+        } else if (playTime > end - margin) {
+          center = playTime - (span * 0.32);
+        }
+        waveViewCenterSec = Math.max(0, Math.min(duration, center));
+      }
+
+      center = Math.max(0, Math.min(duration, waveViewCenterSec));
+      start = center - (span / 2);
+      if (start < 0) start = 0;
+      if (start + span > duration) start = duration - span;
+      end = Math.min(duration, start + span);
       return { start, end, duration };
     }
 
@@ -1914,6 +1986,7 @@ const html = `<!doctype html>
     }
 
     function beginDrag(mode, startIdx) {
+      pushSelectionUndo();
       isDragging = true;
       dragMode = mode;
       dragVisited = new Set();
@@ -1968,16 +2041,23 @@ const html = `<!doctype html>
     }
 
     function maybeAutoScrollDuringDrag(clientY) {
-      const edge = 70;
       if (!contentViewportEl) return;
+      const now = Date.now();
+      if (now - lastDragAutoScrollAt < 70) return;
+      const edge = 56;
       const vr = contentViewportEl.getBoundingClientRect();
+      let delta = 0;
       if (clientY < vr.top + edge) {
-        contentViewportEl.scrollTop -= 24;
-        return;
+        const intensity = Math.min(1, Math.max(0, (vr.top + edge - clientY) / edge));
+        delta = -Math.max(3, Math.round(18 * intensity));
+      } else if (clientY > vr.bottom - edge) {
+        const intensity = Math.min(1, Math.max(0, (clientY - (vr.bottom - edge)) / edge));
+        delta = Math.max(3, Math.round(18 * intensity));
       }
-      if (clientY > vr.bottom - edge) {
-        contentViewportEl.scrollTop += 24;
-      }
+      if (!delta) return;
+      contentViewportEl.scrollTop += delta;
+      lastDragAutoScrollAt = now;
+      rebuildTokenRects();
     }
 
     function clearPointerState() {
@@ -2019,6 +2099,7 @@ const html = `<!doctype html>
 
     function toggleTokenSelection(i) {
       if (!Number.isInteger(i) || i < 0 || i >= WORDS.length) return;
+      pushSelectionUndo();
       if (selected.has(i)) selected.delete(i);
       else selected.add(i);
       refreshToken(i);
@@ -2077,26 +2158,31 @@ const html = `<!doctype html>
       if (isDragging || isPointerDown) return;
       if (now < suppressAutoFollowUntil) return;
       if (now - lastUserScrollAt < 850) return;
-      if (now - lastAutoScrollAt < 600) return;
+      if (now - lastAutoScrollAt < 360) return;
 
       const tokenEl = tokenEls[currentIndex];
-      const tokenTop = tokenEl.offsetTop;
-      const tokenBottom = tokenTop + tokenEl.offsetHeight;
-      const viewTop = contentViewportEl.scrollTop + 44;
-      const viewBottom = contentViewportEl.scrollTop + contentViewportEl.clientHeight - 64;
-      if (tokenTop < viewTop) {
-        const nextTop = Math.max(0, tokenTop - 56);
-        setProgrammaticScroll(true);
-        contentViewportEl.scrollTo({ top: nextTop, behavior: 'smooth' });
-        lastAutoScrollAt = now;
-        return;
+      const tokenRect = tokenEl.getBoundingClientRect();
+      const viewportRect = contentViewportEl.getBoundingClientRect();
+      const visibleTop = Math.max(viewportRect.top, 0);
+      const visibleBottom = Math.min(viewportRect.bottom, window.innerHeight || document.documentElement.clientHeight || viewportRect.bottom);
+      if (visibleBottom <= visibleTop + 40) return;
+      const topSafe = visibleTop + 18;
+      const bottomSafe = visibleBottom - 28;
+      let delta = 0;
+      if (tokenRect.top < topSafe) {
+        delta = tokenRect.top - topSafe;
+      } else if (tokenRect.bottom > bottomSafe) {
+        delta = tokenRect.bottom - bottomSafe;
       }
-      if (tokenBottom > viewBottom) {
-        const nextTop = Math.max(0, tokenBottom - contentViewportEl.clientHeight + 74);
-        setProgrammaticScroll(true);
-        contentViewportEl.scrollTo({ top: nextTop, behavior: 'smooth' });
-        lastAutoScrollAt = now;
-      }
+      if (!delta) return;
+
+      // Only nudge the independent text container. Large jumps during playback
+      // make the current word disappear and are worse than a short catch-up.
+      const maxStep = Math.max(72, contentViewportEl.clientHeight * 0.42);
+      delta = Math.max(-maxStep, Math.min(maxStep, delta));
+      setProgrammaticScroll(true);
+      contentViewportEl.scrollBy({ top: delta, behavior: 'smooth' });
+      lastAutoScrollAt = now;
     }
 
     function syncCurrentToken() {
@@ -2105,7 +2191,7 @@ const html = `<!doctype html>
       const idx = findCurrentIndex(Number(audio.currentTime) || 0);
       setCurrentIndex(idx);
       drawWaveform();
-      if (!audio.paused && idx !== prev) {
+      if (!audio.paused) {
         ensureCurrentVisible();
       }
     }
@@ -2156,6 +2242,7 @@ const html = `<!doctype html>
 
     function selectSilenceByThreshold() {
       const t = Math.max(0.2, Number(thresholdEl.value) || 0.2);
+      pushSelectionUndo();
       let selectedCount = 0;
       let removedCount = 0;
       WORDS.forEach((w, i) => {
@@ -2165,7 +2252,7 @@ const html = `<!doctype html>
       WORDS.forEach((w, i) => {
         if (!w.isGap) return;
         const d = Number(w.end) - Number(w.start);
-        if (Number.isFinite(d) && d >= t) {
+        if (Number.isFinite(d) && d + 0.0005 >= t) {
           selected.add(i);
           selectedCount += 1;
         }
@@ -2179,8 +2266,9 @@ const html = `<!doctype html>
       scheduleReviewStateSave(250);
     }
 
-    function clearLlmMarks() {
+    function clearLlmMarks(recordUndo = true) {
       if (!llmSuggested.size && !llmReasonByIndex.size && !llmPunctByIndex.size && !llmParagraphAfterIndex.size && !llmTopic && !llmOutline && !llmMultiSpeaker) return;
+      if (recordUndo) pushSelectionUndo();
       llmSuggested.clear();
       llmReasonByIndex.clear();
       llmPunctByIndex.clear();
@@ -2201,6 +2289,7 @@ const html = `<!doctype html>
         return;
       }
       let added = 0;
+      pushSelectionUndo();
       llmSuggested.forEach((idx) => {
         if (!selected.has(idx)) {
           selected.add(idx);
@@ -2231,7 +2320,8 @@ const html = `<!doctype html>
           throw new Error(data.error || 'LLM 标记失败');
         }
 
-        clearLlmMarks();
+        pushSelectionUndo();
+        clearLlmMarks(false);
         const indices = Array.isArray(data.indices) ? data.indices : [];
         const suggestions = Array.isArray(data.suggestions) ? data.suggestions : [];
         const punctuationByIndex = (data && typeof data.punctuationByIndex === 'object' && data.punctuationByIndex) ? data.punctuationByIndex : {};
@@ -2382,12 +2472,7 @@ const html = `<!doctype html>
     }
 
     function undoLastChatAdjust() {
-      if (!selectionUndoStack.length) return;
-      const snapshot = selectionUndoStack.pop();
-      restoreSelectionState(snapshot);
-      syncUndoButton();
-      pushChatMessage('assistant', '已撤回上一步对话调标记。');
-      setLlmChatStatus('已撤回最近一次对话调整');
+      undoLastSelectionChange('chat');
     }
 
     async function sendLlmChatAdjust() {
@@ -2448,22 +2533,114 @@ const html = `<!doctype html>
     }
 
     function mergedSegmentsFromSelection() {
+      const residualGapSec = 0.18;
+      const speechPadBeforeSec = 0.07;
+      const speechPadAfterSec = 0.13;
+      const silenceEdgeGuardSec = 0.045;
+      const speechEntryOverlapSec = 0.04;
+      const fillerEntryOverlapSec = 0.055;
+      const boundaryGuardSec = 0.005;
+      const minDeleteSec = 0.05;
       const segs = Array.from(selected)
-        .map((i) => WORDS[i])
-        .filter(Boolean)
-        .map((w) => ({ start: Number(w.start), end: Number(w.end) }))
+        .map((i) => ({ idx: Number(i), word: WORDS[i] }))
+        .filter((item) => Number.isInteger(item.idx) && item.word)
+        .map(({ idx, word: w }) => ({
+          idx,
+          start: Number(w.start),
+          end: Number(w.end),
+          hasSpeech: !w.isGap,
+          hasFiller: tokenAutoCategory(idx) === 'filler',
+        }))
         .filter((s) => Number.isFinite(s.start) && Number.isFinite(s.end) && s.end > s.start)
-        .sort((a, b) => a.start - b.start);
+        .sort((a, b) => a.idx - b.idx || a.start - b.start);
 
       const merged = [];
+      function canBridgeSelectionGap(prevIdx, nextIdx) {
+        for (let i = prevIdx + 1; i < nextIdx; i += 1) {
+          if (selected.has(i)) continue;
+          if (!WORDS[i]?.isGap) return false;
+        }
+        return true;
+      }
       for (const s of segs) {
-        if (!merged.length || s.start > merged[merged.length - 1].end + 0.05) {
-          merged.push({ ...s });
+        if (!merged.length) {
+          merged.push({ ...s, minIdx: s.idx, maxIdx: s.idx });
+          continue;
+        }
+
+        const last = merged[merged.length - 1];
+        const gapSec = s.start - last.end;
+        const isContiguousSelection = s.idx <= last.maxIdx + 1;
+        const canBridgeGap = gapSec <= residualGapSec && canBridgeSelectionGap(last.maxIdx, s.idx);
+        if (s.start <= last.end + 0.05 || isContiguousSelection || canBridgeGap) {
+          last.end = Math.max(last.end, s.end);
+          last.hasSpeech = !!(last.hasSpeech || s.hasSpeech);
+          last.hasFiller = !!(last.hasFiller || s.hasFiller);
+          last.maxIdx = Math.max(last.maxIdx, s.idx);
         } else {
-          merged[merged.length - 1].end = Math.max(merged[merged.length - 1].end, s.end);
+          merged.push({ ...s, minIdx: s.idx, maxIdx: s.idx });
         }
       }
-      return merged;
+
+      function getPrevSpeechEnd(idx) {
+        for (let i = idx - 1; i >= 0; i -= 1) {
+          const w = WORDS[i];
+          if (!w || w.isGap) continue;
+          const end = Number(w.end);
+          return Number.isFinite(end) ? end : null;
+        }
+        return null;
+      }
+
+      function getNextSpeechStart(idx) {
+        for (let i = idx + 1; i < WORDS.length; i += 1) {
+          const w = WORDS[i];
+          if (!w || w.isGap) continue;
+          const start = Number(w.start);
+          return Number.isFinite(start) ? start : null;
+        }
+        return null;
+      }
+
+      const adjusted = [];
+      for (const s of merged) {
+        let start = s.start;
+        let end = s.end;
+        if (s.hasSpeech) {
+          const prevSpeechEnd = getPrevSpeechEnd(s.minIdx);
+          const nextSpeechStart = getNextSpeechStart(s.maxIdx);
+          const beforePad = s.hasFiller ? speechPadBeforeSec : 0.045;
+          const afterPad = s.hasFiller ? speechPadAfterSec : 0.09;
+          const entryOverlap = s.hasFiller ? fillerEntryOverlapSec : speechEntryOverlapSec;
+          if (Number.isFinite(prevSpeechEnd) && prevSpeechEnd < start) {
+            // Whisper/ASR timestamps often start a deleted word slightly late.
+            // Allow a tiny overlap into the previous kept word's tail so the
+            // first deleted syllable does not leak into preview/export.
+            start = Math.max(start - beforePad, prevSpeechEnd - entryOverlap);
+          } else {
+            start = Math.max(0, start - Math.min(0.022, beforePad));
+          }
+          if (Number.isFinite(nextSpeechStart) && nextSpeechStart > end) {
+            end = Math.min(end + afterPad, nextSpeechStart - boundaryGuardSec);
+          } else {
+            end += Math.min(0.032, afterPad);
+          }
+        } else {
+          const originalDuration = end - start;
+          if (originalDuration > minDeleteSec + silenceEdgeGuardSec * 2) {
+            const guard = Math.min(silenceEdgeGuardSec, Math.max(0, (originalDuration - minDeleteSec) / 2));
+            start += guard;
+            end -= guard;
+          }
+        }
+        if (end - start >= minDeleteSec) {
+          adjusted.push({
+            start: Number(start.toFixed(3)),
+            end: Number(end.toFixed(3)),
+          });
+        }
+      }
+      return adjusted;
     }
 
     async function waitCut(jobId) {
@@ -2556,6 +2733,13 @@ const html = `<!doctype html>
     }
 
     document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && String(e.key || '').toLowerCase() === 'z') {
+        if (!shouldHandleGlobalHotkey(e)) return;
+        if (undoLastSelectionChange('hotkey')) {
+          e.preventDefault();
+        }
+        return;
+      }
       if (e.key === 'Escape') {
         if (leftPanelOpen || rightPanelOpen) {
           closePanels();
@@ -2571,6 +2755,7 @@ const html = `<!doctype html>
     });
 
     document.getElementById('btnClear').addEventListener('click', () => {
+      if (selected.size) pushSelectionUndo();
       selected.clear();
       WORDS.forEach((_w, i) => refreshToken(i));
       refreshIdleStatus();
@@ -2591,6 +2776,9 @@ const html = `<!doctype html>
       }
     });
     document.getElementById('btnApplyLlm').addEventListener('click', applyLlmSuggestions);
+    if (btnClearLlm) {
+      btnClearLlm.addEventListener('click', clearLlmMarks);
+    }
     if (btnToggleLeftPanel) {
       btnToggleLeftPanel.addEventListener('click', () => {
         setPanelOpen('left', !leftPanelOpen);
@@ -2697,7 +2885,7 @@ const html = `<!doctype html>
         return;
       }
       const moved = Math.abs(e.clientX - pointerDownX) + Math.abs(e.clientY - pointerDownY);
-      if (!isDragging && moved >= 18 && Number.isInteger(pointerDownIdx)) {
+      if (!isDragging && moved >= 24 && Number.isInteger(pointerDownIdx)) {
         beginDrag(selected.has(pointerDownIdx) ? 'remove' : 'add', pointerDownIdx);
       }
       if (!isDragging) return;
@@ -2724,10 +2912,22 @@ const html = `<!doctype html>
         if (rect.width <= 0) return;
         const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
         audio.currentTime = view.start + ratio * Math.max(0.001, view.end - view.start);
+        waveViewCenterSec = audio.currentTime;
         syncCurrentToken();
         drawWaveform();
         scheduleReviewStateSave(120);
       });
+      waveWrapEl.addEventListener('wheel', (e) => {
+        const view = getWaveViewWindow();
+        if (!(view.duration > 0)) return;
+        e.preventDefault();
+        const rect = waveCanvas.getBoundingClientRect();
+        const ratio = rect.width > 0 ? Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) : 0.5;
+        const anchor = view.start + ratio * Math.max(0.001, view.end - view.start);
+        const direction = e.deltaY < 0 ? 1 : -1;
+        const nextZoom = Math.round((waveZoom + direction * 0.5) * 2) / 2;
+        setWaveZoom(nextZoom, anchor);
+      }, { passive: false });
       window.addEventListener('resize', () => {
         rebuildTokenRects();
         drawWaveform();
