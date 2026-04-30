@@ -57,6 +57,7 @@ const WHISPER_MODEL_DOWNLOADS = {
 const UPDATE_FEED_URL = 'https://ailabing.cn/downloads/jaygo/';
 const QWEN_ASR_MODEL = 'qwen3-asr-flash-filetrans';
 const QWEN_ASR_TEST_AUDIO_URL = 'https://dashscope.oss-cn-beijing.aliyuncs.com/samples/audio/paraformer/hello_world.wav';
+const VOLCENGINE_ASR_TEST_AUDIO_URL = QWEN_ASR_TEST_AUDIO_URL;
 const EXPORT_QUALITY_PRESETS = {
   preview: { label: '\u5feb\u901f\u9884\u89c8', crf: 23, preset: 'veryfast', audioBitrate: '160k' },
   standard: { label: '\u6807\u51c6\u9ad8\u8d28\u91cf', crf: 18, preset: 'fast', audioBitrate: '192k' },
@@ -1332,11 +1333,49 @@ function buildLlmTestInput(payload = {}, fallbackSettings = DEFAULT_SETTINGS) {
 }
 
 
+async function fetchTextWithTimeout(url, options = {}, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    const text = await res.text();
+    return { res, text };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchTextWithRetry(url, options = {}, retryOptions = {}) {
+  const attempts = Math.max(1, Number(retryOptions.attempts) || 2);
+  const timeoutMs = Math.max(3000, Number(retryOptions.timeoutMs) || 12000);
+  const delayMs = Math.max(0, Number(retryOptions.delayMs) || 700);
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await fetchTextWithTimeout(url, options, timeoutMs);
+    } catch (err) {
+      lastError = err;
+      if (attempt < attempts - 1 && delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  throw lastError;
+}
+
+function parseJsonSafe(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
 async function testAliyunQwenAsrConnection(settings) {
   const apiKey = String(settings.dashscopeApiKey || '').trim();
-  if (!apiKey) return { ok: false, message: 'DashScope API Key is empty' };
+  if (!apiKey) return { ok: false, message: 'DashScope API Key 为空' };
   const started = Date.now();
-  const submitRes = await fetch('https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription', {
+  const submit = await fetchTextWithRetry('https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -1353,58 +1392,131 @@ async function testAliyunQwenAsrConnection(settings) {
         enable_words: true,
       },
     }),
-  });
-  const submitText = await submitRes.text();
-  let submitJson = null;
-  try { submitJson = JSON.parse(submitText); } catch {}
+  }, { attempts: 3, timeoutMs: 15000, delayMs: 900 });
+  const submitRes = submit.res;
+  const submitText = submit.text;
+  const submitJson = parseJsonSafe(submitText);
   if (!submitRes.ok) {
-    return { ok: false, message: `Aliyun submit failed HTTP ${submitRes.status}: ${submitText.slice(0, 240)}` };
+    return { ok: false, message: `阿里 ASR 提交失败 HTTP ${submitRes.status}: ${submitText.slice(0, 240)}` };
   }
   const taskId = submitJson?.output?.task_id;
   if (!taskId) {
-    return { ok: false, message: `Aliyun did not return task_id: ${submitText.slice(0, 240)}` };
+    return { ok: false, message: `阿里 ASR 未返回 task_id: ${submitText.slice(0, 240)}` };
   }
 
-  for (let i = 0; i < 12; i += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    const queryRes = await fetch(`https://dashscope.aliyuncs.com/api/v1/tasks/${encodeURIComponent(taskId)}`, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'X-DashScope-Async': 'enable',
-      },
-    });
-    const queryText = await queryRes.text();
-    let queryJson = null;
-    try { queryJson = JSON.parse(queryText); } catch {}
-    if (!queryRes.ok) {
-      return { ok: false, message: `Aliyun query failed HTTP ${queryRes.status}: ${queryText.slice(0, 240)}` };
-    }
-    const status = queryJson?.output?.task_status;
-    if (status === 'SUCCEEDED') {
-      return { ok: true, message: `Aliyun Qwen ASR OK (${Date.now() - started}ms)`, taskId };
-    }
-    if (status === 'FAILED' || status === 'UNKNOWN') {
-      return { ok: false, message: `Aliyun task failed: ${JSON.stringify(queryJson?.output || queryJson).slice(0, 260)}` };
+  let queryNote = '';
+  for (let i = 0; i < 3; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, i === 0 ? 800 : 1500));
+    try {
+      const query = await fetchTextWithRetry(`https://dashscope.aliyuncs.com/api/v1/tasks/${encodeURIComponent(taskId)}`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'X-DashScope-Async': 'enable',
+        },
+      }, { attempts: 2, timeoutMs: 10000, delayMs: 600 });
+      const queryRes = query.res;
+      const queryText = query.text;
+      const queryJson = parseJsonSafe(queryText);
+      if (!queryRes.ok) {
+        queryNote = `查询接口暂时不可用 HTTP ${queryRes.status}`;
+        continue;
+      }
+      const status = queryJson?.output?.task_status;
+      if (status === 'SUCCEEDED') {
+        return { ok: true, message: `阿里 Qwen3-ASR 连通成功，任务已完成（${Date.now() - started}ms）`, taskId, status };
+      }
+      if (status === 'FAILED' || status === 'UNKNOWN') {
+        return { ok: false, message: `阿里 ASR 测试任务失败: ${JSON.stringify(queryJson?.output || queryJson).slice(0, 260)}` };
+      }
+      if (status) {
+        return { ok: true, message: `阿里 Qwen3-ASR 连通成功，任务已提交（状态：${status}，${Date.now() - started}ms）`, taskId, status };
+      }
+      queryNote = '查询接口返回状态为空';
+    } catch (err) {
+      queryNote = `查询接口波动：${err.message || String(err)}`;
     }
   }
-  return { ok: true, message: `Aliyun Qwen ASR accepted the task; still processing (task_id=${taskId})`, taskId };
+  return {
+    ok: true,
+    message: `阿里 Qwen3-ASR 连通成功，任务已提交；${queryNote || '结果仍在处理中'}（task_id=${taskId}）`,
+    taskId,
+  };
 }
 
 async function testVolcengineAsrConnection(settings) {
-  if (!String(settings.volcengineApiKey || '').trim()) {
-    return { ok: false, message: 'Volcengine API Key is empty' };
+  const apiKey = String(settings.volcengineApiKey || '').trim();
+  if (!apiKey) {
+    return { ok: false, message: '火山引擎 API Key 为空' };
   }
+  const started = Date.now();
+  const submitUrl = 'https://openspeech.bytedance.com/api/v1/vc/submit?language=zh-CN&use_itn=True&use_capitalize=True&max_lines=1&words_per_line=15';
   try {
-    const uploadEndpoint = buildUploadEndpoints(settings)[0];
-    if (!uploadEndpoint) return { ok: false, message: 'Upload service is not configured' };
-    const healthUrl = new URL(uploadEndpoint.url);
-    healthUrl.pathname = healthUrl.pathname.replace(/\/api\/upload.*$/i, '/health');
-    const res = await fetch(healthUrl.toString(), { method: 'GET' });
-    if (res.ok) return { ok: true, message: 'Volcengine key is configured; upload service is reachable' };
-    return { ok: true, message: 'Volcengine key is configured; upload health endpoint is unavailable' };
+    const submit = await fetchTextWithRetry(submitUrl, {
+      method: 'POST',
+      headers: {
+        Accept: '*/*',
+        'x-api-key': apiKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ url: VOLCENGINE_ASR_TEST_AUDIO_URL }),
+    }, { attempts: 3, timeoutMs: 15000, delayMs: 900 });
+    const submitRes = submit.res;
+    const submitText = submit.text;
+    const submitJson = parseJsonSafe(submitText);
+    if (!submitRes.ok) {
+      return { ok: false, message: `火山 ASR 提交失败 HTTP ${submitRes.status}: ${submitText.slice(0, 240)}` };
+    }
+    const taskId = submitJson?.id;
+    if (!taskId) {
+      return { ok: false, message: `火山 ASR 未返回任务 ID: ${submitText.slice(0, 240)}` };
+    }
+
+    let queryNote = '';
+    for (let i = 0; i < 2; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, i === 0 ? 800 : 1500));
+      try {
+        const query = await fetchTextWithRetry(`https://openspeech.bytedance.com/api/v1/vc/query?id=${encodeURIComponent(taskId)}`, {
+          method: 'GET',
+          headers: {
+            Accept: '*/*',
+            'x-api-key': apiKey,
+          },
+        }, { attempts: 2, timeoutMs: 10000, delayMs: 600 });
+        const queryJson = parseJsonSafe(query.text);
+        const code = Number(queryJson?.code);
+        if (code === 0) {
+          return { ok: true, message: `火山 ASR 连通成功，测试任务已完成（${Date.now() - started}ms）`, taskId, status: 'SUCCEEDED' };
+        }
+        if (code === 1000) {
+          return { ok: true, message: `火山 ASR 连通成功，任务已提交并处理中（${Date.now() - started}ms）`, taskId, status: 'PROCESSING' };
+        }
+        if (Number.isFinite(code)) {
+          return { ok: false, message: `火山 ASR 测试任务失败: ${query.text.slice(0, 260)}` };
+        }
+        queryNote = '查询接口返回状态为空';
+      } catch (err) {
+        queryNote = `查询接口波动：${err.message || String(err)}`;
+      }
+    }
+    return {
+      ok: true,
+      message: `火山 ASR 连通成功，任务已提交；${queryNote || '结果仍在处理中'}（task_id=${taskId}）`,
+      taskId,
+    };
   } catch (err) {
-    return { ok: true, message: `Volcengine key is configured; upload check warning: ${err.message || String(err)}` };
+    const uploadEndpoint = buildUploadEndpoints(settings)[0];
+    if (uploadEndpoint) {
+      try {
+        const healthUrl = new URL(uploadEndpoint.url);
+        healthUrl.pathname = healthUrl.pathname.replace(/\/api\/upload.*$/i, '/health');
+        const health = await fetchTextWithRetry(healthUrl.toString(), { method: 'GET' }, { attempts: 1, timeoutMs: 5000 });
+        if (health.res.ok) {
+          return { ok: false, message: `火山 ASR 提交失败，但上传服务正常；请检查火山 Key 或服务额度。错误：${err.message || String(err)}` };
+        }
+      } catch {}
+    }
+    return { ok: false, message: `火山 ASR 连通失败: ${err.message || String(err)}` };
   }
 }
 

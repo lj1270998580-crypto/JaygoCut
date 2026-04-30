@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { normalizeSelectedIndices } = require('./auto_selected_utils');
+const { analyzeTranscriptQuality } = require('./transcript_quality');
 
 let subtitlesFile = process.argv[2] || 'subtitles_words.json';
 const autoSelectedFile = process.argv[3] || 'auto_selected.json';
@@ -60,6 +61,16 @@ function normalizeReviewWords(items) {
 }
 
 const words = normalizeReviewWords(sourceWords);
+const liveQuality = analyzeTranscriptQuality(words);
+const qualityFile = path.resolve(path.dirname(path.resolve(subtitlesFile)), 'transcript_quality.json');
+let savedQuality = null;
+if (fs.existsSync(qualityFile)) {
+  try {
+    savedQuality = JSON.parse(fs.readFileSync(qualityFile, 'utf8').replace(/^\uFEFF/, ''));
+  } catch (err) {
+    savedQuality = { ok: false, warnings: [`质量报告读取失败: ${err.message}`] };
+  }
+}
 
 let autoSelected = [];
 let autoReasonByIndex = {};
@@ -90,6 +101,10 @@ const wordsJson = JSON.stringify(words).replace(/</g, '\\u003c');
 const selectedJson = JSON.stringify(autoSelected).replace(/</g, '\\u003c');
 const autoReasonsJson = JSON.stringify(autoReasonByIndex || {}).replace(/</g, '\\u003c');
 const autoStatsJson = JSON.stringify(autoStats || {}).replace(/</g, '\\u003c');
+const qualityJson = JSON.stringify({
+  generated: liveQuality,
+  saved: savedQuality,
+}).replace(/</g, '\\u003c');
 
 const html = `<!doctype html>
 <html lang="zh-CN">
@@ -431,6 +446,37 @@ const html = `<!doctype html>
     .fold-panel[open] summary {
       margin-bottom: 8px;
     }
+    .tool-fold {
+      margin-top: 8px;
+    }
+    .tool-actions {
+      margin-bottom: 8px;
+    }
+    .primary-actions {
+      margin-top: 10px;
+    }
+    .primary-actions #selectionStats {
+      flex: 1 1 520px;
+      min-width: 260px;
+    }
+    .primary-actions #status {
+      flex: 0 1 auto;
+      margin-top: 0;
+      min-height: 0;
+      white-space: nowrap;
+    }
+    .compact-status {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: 6px;
+      min-height: 20px;
+    }
+    .compact-status .status {
+      margin-top: 0;
+      min-height: 0;
+    }
     .row {
       display: flex;
       gap: 8px;
@@ -468,6 +514,30 @@ const html = `<!doctype html>
       border-color: var(--focus-border);
       box-shadow: var(--focus-shadow);
       outline: none;
+    }
+    .boundary-row {
+      margin-top: 8px;
+      gap: 8px;
+      align-items: center;
+    }
+    .boundary-row label {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .boundary-row input[type="number"] {
+      width: 72px;
+      padding: 6px 7px;
+    }
+    .quality-warnings {
+      margin-top: 8px;
+      padding: 8px 10px;
+      border: 1px solid color-mix(in oklab, #f59e0b 52%, var(--border));
+      border-radius: 10px;
+      background: color-mix(in oklab, #f59e0b 12%, var(--card-bg));
+      color: var(--text-main);
+      font-size: 13px;
+      line-height: 1.55;
     }
     .meta {
       font-size: 13px;
@@ -700,21 +770,40 @@ const html = `<!doctype html>
           <input id="waveZoom" type="range" min="1" max="8" step="0.5" value="1" />
           <span id="waveZoomText">1.0x</span>
         </div>
-      <div class="row" style="margin-top:10px">
+      <div class="row primary-actions">
         <button id="btnPlay" class="primary">播放/暂停</button>
         <button id="btnClear">清空选择</button>
-        <span class="meta">静音阈值(秒) >=</span>
-        <input id="silenceThreshold" type="number" min="0.2" step="0.05" value="0.2" />
-        <button id="btnSelectSilence">按阈值选择静音</button>
-        <button id="btnLlmMark">LLM标记</button>
-        <button id="btnApplyLlm">应用LLM建议</button>
-        <button id="btnClearLlm">清除LLM标记</button>
         <button id="btnCut" class="warn">执行裁剪</button>
+        <span id="status" class="status">就绪</span>
+        <span class="meta" id="selectionStats"></span>
       </div>
-      <div id="status" class="status">就绪</div>
-      <div class="meta" id="selectionStats" style="margin-top:4px"></div>
-      <details class="fold-panel" style="margin-top:8px">
-        <summary>说明与详细状态（点击展开）</summary>
+      <details class="fold-panel tool-fold">
+        <summary>审核工具与状态（点击展开）</summary>
+        <div class="row tool-actions">
+          <span class="meta">静音阈值(秒) >=</span>
+          <input id="silenceThreshold" type="number" min="0.2" step="0.05" value="0.2" />
+          <button id="btnSelectSilence">按阈值选择静音</button>
+          <button id="btnLlmMark">LLM标记</button>
+          <button id="btnApplyLlm">应用LLM建议</button>
+          <button id="btnClearLlm">清除LLM标记</button>
+        </div>
+        <div class="row compact-row boundary-row">
+          <span class="meta">边界精修</span>
+          <label class="meta">字头提前(ms)
+            <input id="speechLeadMs" type="number" min="0" max="180" step="5" value="45" />
+          </label>
+          <label class="meta">字尾延后(ms)
+            <input id="speechTailMs" type="number" min="0" max="220" step="5" value="90" />
+          </label>
+          <label class="meta">语气词加强(ms)
+            <input id="fillerBoostMs" type="number" min="0" max="120" step="5" value="30" />
+          </label>
+          <label class="meta">静音保护(ms)
+            <input id="silenceGuardMs" type="number" min="0" max="120" step="5" value="45" />
+          </label>
+          <button id="btnResetBoundary" type="button">恢复默认</button>
+        </div>
+        <div id="qualityWarnings" class="quality-warnings" hidden></div>
         <div class="legend" aria-label="标记颜色说明">
           <span class="legend-item"><span class="legend-dot silence"></span>停顿规则（自动）</span>
           <span class="legend-item"><span class="legend-dot filler"></span>语气词规则（自动）</span>
@@ -795,6 +884,7 @@ const html = `<!doctype html>
     const AUTO = ${selectedJson};
     const AUTO_REASONS = ${autoReasonsJson};
     const AUTO_STATS = ${autoStatsJson};
+    const QUALITY = ${qualityJson};
 
     const audio = document.getElementById('audio');
     const content = document.getElementById('content');
@@ -805,6 +895,11 @@ const html = `<!doctype html>
     const draftStateEl = document.getElementById('draftState');
     const logsEl = document.getElementById('logs');
     const thresholdEl = document.getElementById('silenceThreshold');
+    const speechLeadMsEl = document.getElementById('speechLeadMs');
+    const speechTailMsEl = document.getElementById('speechTailMs');
+    const fillerBoostMsEl = document.getElementById('fillerBoostMs');
+    const silenceGuardMsEl = document.getElementById('silenceGuardMs');
+    const qualityWarningsEl = document.getElementById('qualityWarnings');
     const llmSummaryEl = document.getElementById('llmSummary');
     const waveWrapEl = document.getElementById('waveWrap');
     const waveCanvas = document.getElementById('waveCanvas');
@@ -835,6 +930,40 @@ const html = `<!doctype html>
 
     const selected = new Set(AUTO);
     const autoSet = new Set(AUTO);
+    const DEFAULT_BOUNDARY = {
+      speechLeadMs: 45,
+      speechTailMs: 90,
+      fillerBoostMs: 30,
+      silenceGuardMs: 45,
+    };
+
+    function clampNumber(value, min, max, fallback) {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return fallback;
+      return Math.max(min, Math.min(max, parsed));
+    }
+
+    function readBoundarySettings() {
+      return {
+        speechLeadMs: clampNumber(speechLeadMsEl?.value, 0, 180, DEFAULT_BOUNDARY.speechLeadMs),
+        speechTailMs: clampNumber(speechTailMsEl?.value, 0, 220, DEFAULT_BOUNDARY.speechTailMs),
+        fillerBoostMs: clampNumber(fillerBoostMsEl?.value, 0, 120, DEFAULT_BOUNDARY.fillerBoostMs),
+        silenceGuardMs: clampNumber(silenceGuardMsEl?.value, 0, 120, DEFAULT_BOUNDARY.silenceGuardMs),
+      };
+    }
+
+    function applyBoundarySettings(settings = {}) {
+      const next = {
+        speechLeadMs: clampNumber(settings.speechLeadMs, 0, 180, DEFAULT_BOUNDARY.speechLeadMs),
+        speechTailMs: clampNumber(settings.speechTailMs, 0, 220, DEFAULT_BOUNDARY.speechTailMs),
+        fillerBoostMs: clampNumber(settings.fillerBoostMs, 0, 120, DEFAULT_BOUNDARY.fillerBoostMs),
+        silenceGuardMs: clampNumber(settings.silenceGuardMs, 0, 120, DEFAULT_BOUNDARY.silenceGuardMs),
+      };
+      if (speechLeadMsEl) speechLeadMsEl.value = String(next.speechLeadMs);
+      if (speechTailMsEl) speechTailMsEl.value = String(next.speechTailMs);
+      if (fillerBoostMsEl) fillerBoostMsEl.value = String(next.fillerBoostMs);
+      if (silenceGuardMsEl) silenceGuardMsEl.value = String(next.silenceGuardMs);
+    }
 
     function toZhReason(reason, fallback) {
       const raw = String(reason || '').trim();
@@ -966,6 +1095,25 @@ const html = `<!doctype html>
 
     function setStatus(msg) {
       statusEl.textContent = msg;
+    }
+
+    function renderQualityWarnings() {
+      if (!qualityWarningsEl) return;
+      const generated = QUALITY && QUALITY.generated ? QUALITY.generated : {};
+      const saved = QUALITY && QUALITY.saved ? QUALITY.saved : {};
+      const warnings = [
+        ...new Set([
+          ...(Array.isArray(saved.warnings) ? saved.warnings : []),
+          ...(Array.isArray(generated.warnings) ? generated.warnings : []),
+        ]),
+      ];
+      if (!warnings.length) {
+        qualityWarningsEl.hidden = true;
+        qualityWarningsEl.textContent = '';
+        return;
+      }
+      qualityWarningsEl.hidden = false;
+      qualityWarningsEl.textContent = '转录质量提醒：' + warnings.join('；');
     }
 
     function setPanelOpen(side, open) {
@@ -1266,6 +1414,7 @@ const html = `<!doctype html>
         llmOutline,
         llmMultiSpeaker,
         threshold: Math.max(0.2, Number(thresholdEl.value) || 0.2),
+        boundarySettings: readBoundarySettings(),
         currentTimeSec: Math.max(0, Number(audio.currentTime) || 0),
       };
     }
@@ -1390,6 +1539,9 @@ const html = `<!doctype html>
         const threshold = Number(state.threshold);
         if (Number.isFinite(threshold) && threshold >= 0.2) {
           thresholdEl.value = threshold.toFixed(2);
+        }
+        if (state.boundarySettings && typeof state.boundarySettings === 'object') {
+          applyBoundarySettings(state.boundarySettings);
         }
 
         const resumeTime = Number(state.currentTimeSec);
@@ -2534,11 +2686,13 @@ const html = `<!doctype html>
 
     function mergedSegmentsFromSelection() {
       const residualGapSec = 0.18;
-      const speechPadBeforeSec = 0.07;
-      const speechPadAfterSec = 0.13;
-      const silenceEdgeGuardSec = 0.045;
-      const speechEntryOverlapSec = 0.04;
-      const fillerEntryOverlapSec = 0.055;
+      const boundary = readBoundarySettings();
+      const speechPadBeforeSec = boundary.speechLeadMs / 1000;
+      const speechPadAfterSec = boundary.speechTailMs / 1000;
+      const silenceEdgeGuardSec = boundary.silenceGuardMs / 1000;
+      const fillerBoostSec = boundary.fillerBoostMs / 1000;
+      const speechEntryOverlapSec = Math.max(0.025, Math.min(0.08, speechPadBeforeSec * 0.9));
+      const fillerEntryOverlapSec = Math.max(speechEntryOverlapSec, Math.min(0.12, speechEntryOverlapSec + fillerBoostSec));
       const boundaryGuardSec = 0.005;
       const minDeleteSec = 0.05;
       const segs = Array.from(selected)
@@ -2609,8 +2763,8 @@ const html = `<!doctype html>
         if (s.hasSpeech) {
           const prevSpeechEnd = getPrevSpeechEnd(s.minIdx);
           const nextSpeechStart = getNextSpeechStart(s.maxIdx);
-          const beforePad = s.hasFiller ? speechPadBeforeSec : 0.045;
-          const afterPad = s.hasFiller ? speechPadAfterSec : 0.09;
+          const beforePad = s.hasFiller ? speechPadBeforeSec + fillerBoostSec : speechPadBeforeSec;
+          const afterPad = s.hasFiller ? speechPadAfterSec + fillerBoostSec : speechPadAfterSec;
           const entryOverlap = s.hasFiller ? fillerEntryOverlapSec : speechEntryOverlapSec;
           if (Number.isFinite(prevSpeechEnd) && prevSpeechEnd < start) {
             // Whisper/ASR timestamps often start a deleted word slightly late.
@@ -2766,6 +2920,22 @@ const html = `<!doctype html>
     thresholdEl.addEventListener('change', () => {
       selectSilenceByThreshold();
     });
+    [speechLeadMsEl, speechTailMsEl, fillerBoostMsEl, silenceGuardMsEl].forEach((el) => {
+      if (!el) return;
+      el.addEventListener('change', () => {
+        applyBoundarySettings(readBoundarySettings());
+        refreshIdleStatus();
+        scheduleReviewStateSave(250);
+      });
+    });
+    const btnResetBoundary = document.getElementById('btnResetBoundary');
+    if (btnResetBoundary) {
+      btnResetBoundary.addEventListener('click', () => {
+        applyBoundarySettings(DEFAULT_BOUNDARY);
+        refreshIdleStatus();
+        scheduleReviewStateSave(250);
+      });
+    }
     document.getElementById('btnLlmMark').addEventListener('click', async () => {
       try {
         await runLlmMark();
@@ -2998,6 +3168,8 @@ const html = `<!doctype html>
     async function initPage() {
       closePanels();
       setWaveZoom(1);
+      applyBoundarySettings(DEFAULT_BOUNDARY);
+      renderQualityWarnings();
       render();
       syncUndoButton();
       renderPublishSuggestions({ titles: [], descriptions: [], keywords: [] });

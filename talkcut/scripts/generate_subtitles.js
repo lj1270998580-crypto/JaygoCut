@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const fs = require('fs');
+const { analyzeTranscriptQuality } = require('./transcript_quality');
 
 const resultFile = process.argv[2] || 'volcengine_result.json';
 const deleteFile = process.argv[3];
@@ -139,6 +140,15 @@ for (const w of words) {
 const gapCount = withGaps.filter((x) => x.isGap).length;
 console.log(`总元素数: ${withGaps.length}`);
 console.log(`空白段数: ${gapCount}`);
+
+const quality = analyzeTranscriptQuality(withGaps);
+fs.writeFileSync('transcript_quality.json', JSON.stringify(quality, null, 2), 'utf8');
+if (quality.warnings.length) {
+  console.warn(`转录质量提醒: ${quality.warnings.join('；')}`);
+  console.warn('已保存 transcript_quality.json，可在审核页查看风险提示。');
+} else {
+  console.log('转录质量检查: 未发现明显异常');
+}
 
 fs.writeFileSync('subtitles_words.json', JSON.stringify(withGaps, null, 2), 'utf8');
 console.log('✅ 已保存 subtitles_words.json');
