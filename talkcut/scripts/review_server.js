@@ -3,6 +3,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { spawn, execSync } = require('child_process');
 const { normalizeSelectedIndices } = require('./auto_selected_utils');
 
@@ -10,7 +11,7 @@ const PORT = Number(process.argv[2]) || 8899;
 const VIDEO_FILE = process.argv[3] || findVideoFile(process.cwd());
 const OUTPUT_ROOT_ARG = String(process.argv[4] || '').trim();
 const FFPROBE_BIN = process.env.FFPROBE_BIN || 'ffprobe';
-const LLM_MIN_CONFIDENCE = 0.56;
+const LLM_MIN_CONFIDENCE = 0.66;
 const LLM_PROVIDER_KEYS = new Set([
   'openai',
   'anthropic',
@@ -36,12 +37,19 @@ const MIME_TYPES = {
   '.js': 'application/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml; charset=utf-8',
   '.mp3': 'audio/mpeg',
   '.m4a': 'audio/mp4',
   '.wav': 'audio/wav',
   '.mp4': 'video/mp4',
 };
 const REVIEW_STATE_FILE = path.resolve(process.cwd(), 'review_state.json');
+const IMAGE_ASSET_DIR = path.resolve(process.cwd(), 'image_assets');
+const JIANYING_DRAFT_EXPORT_DIR_NAME = 'jianying_drafts';
 
 let currentCutJob = {
   jobId: null,
@@ -206,6 +214,89 @@ function getLlmConfig() {
     temperature,
     ready: missing.length === 0,
     missing,
+  };
+}
+
+function normalizeImageSize(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (/^\d{1,2}:\d{1,2}$/.test(raw)) return raw;
+  if (/^\d{3,4}x\d{3,4}$/.test(raw)) return raw;
+  if (['1024x1024', '1024x1792', '1792x1024', '1536x1024', '1024x1536'].includes(raw)) return raw;
+  return '1024x1024';
+}
+
+function buildImageEndpoint(baseUrl) {
+  const clean = normalizeLlmBaseUrl(baseUrl);
+  if (/minimaxi\.com/i.test(clean)) return 'https://api.minimaxi.com/v1/image_generation';
+  if (/\/image_generation$/i.test(clean)) return clean;
+  if (/\/images\/generations$/i.test(clean)) return clean;
+  return `${clean}/images/generations`;
+}
+
+function isMiniMaxImageEndpoint(endpoint) {
+  return /minimaxi\.com\/v1\/image_generation/i.test(String(endpoint || ''));
+}
+
+function imageSizeToMiniMaxAspectRatio(size) {
+  const raw = String(size || '').trim().toLowerCase();
+  if (/^\d{1,2}:\d{1,2}$/.test(raw)) return raw;
+  const match = raw.match(/^(\d{3,4})x(\d{3,4})$/);
+  if (!match) return '1:1';
+  const w = Number(match[1]);
+  const h = Number(match[2]);
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return '1:1';
+  const ratio = w / h;
+  if (ratio > 1.55) return '16:9';
+  if (ratio < 0.75) return '9:16';
+  if (ratio > 1.25) return '4:3';
+  if (ratio < 0.9) return '3:4';
+  return '1:1';
+}
+
+function imageSizeToOpenAiSize(size) {
+  const raw = String(size || '').trim().toLowerCase();
+  if (/^\d{3,4}x\d{3,4}$/.test(raw)) return raw;
+  if (raw === '16:9' || raw === '4:3') return '1536x1024';
+  if (raw === '9:16' || raw === '2:3' || raw === '3:4') return '1024x1536';
+  return '1024x1024';
+}
+
+function getImageConfig() {
+  const { env: fileEnv } = loadEnvFileConfig();
+  const llm = getLlmConfig();
+  const rawBaseUrl = normalizeLlmBaseUrl(
+    process.env.IMAGE_API_BASE_URL
+    || fileEnv.IMAGE_API_BASE_URL
+    || llm.baseUrl
+    || 'https://api.openai.com/v1',
+  );
+  const endpoint = buildImageEndpoint(rawBaseUrl);
+  const minimax = isMiniMaxImageEndpoint(endpoint);
+  const apiKey = String(
+    process.env.IMAGE_API_KEY
+    || fileEnv.IMAGE_API_KEY
+    || llm.apiKey
+    || '',
+  ).trim();
+  const model = String(
+    process.env.IMAGE_MODEL
+    || fileEnv.IMAGE_MODEL
+    || (minimax ? 'image-01' : 'gpt-image-1'),
+  ).trim();
+  const size = normalizeImageSize(process.env.IMAGE_SIZE || fileEnv.IMAGE_SIZE || '1024x1024');
+  const missing = [];
+  if (!rawBaseUrl) missing.push('IMAGE_API_BASE_URL');
+  if (!apiKey) missing.push('IMAGE_API_KEY');
+  if (!model) missing.push('IMAGE_MODEL');
+  return {
+    baseUrl: rawBaseUrl,
+    apiKey,
+    model,
+    size,
+    ready: missing.length === 0,
+    missing,
+    endpoint,
+    provider: minimax ? 'minimax' : 'openai_compatible',
   };
 }
 
@@ -418,14 +509,14 @@ function buildChatAdjustPrompt(units, selectedUnitIds, userMessage, history, ana
     ? history.slice(-10).map((it) => `${it.role || 'user'}: ${String(it.text || '').slice(0, 180)}`).join('\n')
     : '';
   return [
-    '你是“口播剪辑大师”的二次调标记助手。',
+    '你是口播短视频剪辑师，正在根据用户反馈二次调整删除标记。',
     `主题: ${String(analysis?.topic || '').trim() || '未知'}`,
     `梗概: ${String(analysis?.outline || '').trim() || '未知'}`,
     '',
-    '根据用户要求，返回“新增删除”和“取消删除”句段 id，不改原文。',
-    '硬约束：不得破坏主线、数字、因果、结论；不确定时宁可不删。',
-    '优先删除：语气词、重复句、口水话、离题闲聊、非主讲人插话。',
-    '如果用户意图是“请标记需要删除”，必须给出可执行 id（除非确实无可删内容）。',
+    '任务：只返回需要新增删除或取消删除的文本单元 id，不改原文。',
+    '硬规则：不删除事实、数字、人名/地名、因果关系、转折、结论、关键情绪点；不确定就不要动。',
+    '优先删除：孤立语气词、明显重说/改口、同一句重复表达、入题前闲聊、离题闲聊、非主讲人的干扰话。',
+    '如果用户要求“更狠一点”，也必须保留主线完整；如果用户要求“更保守”，优先取消低置信标记。',
     `当前已选 id: ${selectedText || '无'}`,
     `用户要求: ${String(userMessage || '').trim()}`,
     hist ? `最近对话:\n${hist}` : '最近对话: 无',
@@ -437,7 +528,6 @@ function buildChatAdjustPrompt(units, selectedUnitIds, userMessage, history, ana
     list,
   ].join('\n');
 }
-
 function buildLlmPrompt(chunkUnits, context = {}) {
   const list = chunkUnits
     .map((u) => `${u.id}|${u.start.toFixed(2)}-${u.end.toFixed(2)}|${u.text}`)
@@ -448,21 +538,27 @@ function buildLlmPrompt(chunkUnits, context = {}) {
   const mainSpeakerHint = String(context.mainSpeakerHint || '').trim();
 
   return [
-    '你是“口播剪辑大师”，专注中文自媒体口播剪辑。',
-    '目标：删冗余、提密度、保主线，输出必须可直接执行。',
+    '你是资深口播短视频剪辑师，目标是提升节奏和信息密度，但绝不能破坏观点完整性。',
+    '你必须先理解主题和结构，再决定是否标记删除。删除是高风险操作：宁可少删，也不要误删。',
     '',
-    '分步规则（严格按顺序）：',
-    '1) 主题抽取：给出 topic 与 outline（简洁）。',
-    '2) 结构识别：按 Hook(开场钩子)-Value(主体信息)-Proof(案例/证据)-Close(收束)判断句段角色。',
-    '3) 规则优先标记：先标语气词/口头禅、重复句、口水话。',
-    '4) 语义标记：再标离题闲聊、无信息增量句、非主讲人插话（若多人对话）。',
-    '5) 可读性优化：为每个语义句末输出标点；只在话题推进、观点切换、案例切换、结论收束处设置段落断点。',
+    '分步执行：',
+    '1) 理解主题：识别本段在全片中的作用，是开场钩子、观点、论据、案例、转折、总结，还是闲聊。',
+    '2) 保护主线：凡是承载观点、事实、数字、因果、转折、对象、结论、关键情绪或叙事推进的内容，一律保留。',
+    '硬规则：不删除事实、数字、人名地名、因果链、转折句、观点句和结论句。',
+    '3) 规则删除优先级：只标记可独立移除且移除后前后仍自然的内容。',
+    '   - filler：孤立或连续的嗯、呃、啊、这个、那个、就是、然后等口头禅；如果它连接逻辑或承载语气，不删。',
+    '   - repeat：同一意思重复表达、重说、改口、卡壳；保留更完整、更清楚、离后文更顺的一版。',
+    '   - opening_offtopic：真正入题前的测试、寒暄、设备/衣服/环境闲聊。',
+    '   - off_topic：与主题无关且不作为案例/铺垫/反差钩子的闲聊。',
+    '   - other_speaker：多人对话中非主讲人的干扰内容；若推动提问、反问或补充信息则保留。',
+    '   - ending_offtopic：结论后继续发散、感谢闲聊、无关收尾。',
+    '4) 不要“见词就删”：少量自然停顿、语气词、重复强调可能是人物风格或情绪节奏，保留。',
+    '5) 标点与分段：根据语义补标点；只在话题推进、观点切换、案例切换、结论收束处 paragraph_after=true；不要按固定字数分段。',
+    '6) 置信度：语义删除 confidence 必须 >=0.72；纯语气词/明显重复可 >=0.66；低于阈值不要输出。',
+    '7) 数量控制：除非文本大面积跑题，否则 mark_delete 不要超过本批文本单元的 12%。',
     '',
-    '必须保留：事实、数字、因果、步骤、观点结论、关键专有名词。',
-    '删除置信度规则：≥0.78 才可高置信删除；0.62~0.77 仅当属于语气词/重复句；<0.62 不输出。',
-    '标点规则：短停顿或未完句用“，”；完整陈述用“。”；明显疑问用“？”；强情绪/强调用“！”；并列解释或转折可用“；”或“：”。',
-    '分段规则：不要按固定字数分段；每段表达一个小主题，通常 2-5 个语义句；口播开头、关键论点、案例、结论优先分段。',
-    '不确定时宁可不删（高精度优先）。',
+    '必须保留示例：否定词、转折词、因果词、数字、人名地名、核心名词、观点句、结论句、包袱/反差点。',
+    '可以删除示例：单独的“嗯/啊/就是”、马上被完整重说的一半句、连续两遍同义句里的弱版本、入题前“测试一下能不能听到”。',
     '',
     `全局主题参考: ${topic || '未知'}`,
     `全局梗概参考: ${outline || '未知'}`,
@@ -471,14 +567,13 @@ function buildLlmPrompt(chunkUnits, context = {}) {
     '',
     '输出 JSON（只返回 JSON，不要 markdown）：',
     '{"analysis":{"topic":"","outline":"","multiSpeaker":false,"mainSpeakerHint":""},',
-    '"mark_delete":[{"id":12,"reason_type":"filler|repeat|off_topic|other_speaker|opening_offtopic|ending_offtopic|nonsense","reason":"中文简述","confidence":0.82}],',
+    '"mark_delete":[{"id":12,"reason_type":"filler|repeat|off_topic|other_speaker|opening_offtopic|ending_offtopic|nonsense","reason":"中文简短说明","confidence":0.82}],',
     '"punctuation_plan":[{"id":12,"punct":"，|。|？|！|；|：|","paragraph_after":false}]}',
     '',
     '文本单元（id|start-end|text）：',
     list,
   ].join('\n');
 }
-
 function collectTextFragments(raw, out = []) {
   if (raw === null || raw === undefined) return out;
   if (typeof raw === 'string') {
@@ -1098,6 +1193,712 @@ async function runLlmPublishSuggestions(words, config, style, inputAnalysis) {
   };
 }
 
+function pickWordsForVisualPlan(words, selectedIndices = []) {
+  const selectedSet = new Set(
+    Array.isArray(selectedIndices)
+      ? selectedIndices.map((v) => Number(v)).filter((v) => Number.isInteger(v))
+      : [],
+  );
+  return (Array.isArray(words) ? words : []).filter((w, i) => {
+    if (!w || w.isGap) return false;
+    if (selectedSet.has(i)) return false;
+    return String(w.text || '').trim();
+  });
+}
+
+function buildImagePlanPrompt(units, analysis, style, count) {
+  const list = units
+    .slice(0, 260)
+    .map((u) => `${u.id}|${u.start.toFixed(2)}-${u.end.toFixed(2)}|${u.text}`)
+    .join('\n');
+  const targetCount = Math.max(4, Math.min(12, Number(count) || 8));
+  const visualStyle = String(style || '').trim() || '彩铅故事插画，温暖纸张纹理，统一人物设定';
+  return [
+    '你是短视频口播内容的导演、分镜师和 AI 图片提示词专家。',
+    '任务：把口播文本翻译成一组能插入视频的配图分镜。你不是摘抄字幕的人，而是把抽象观点导演成具体画面的人。',
+    '必须按这个思考流程执行，但最终只输出 JSON：',
+    'A. 先读完整文本，判断主题、情绪、文化地域、是否有人物故事。',
+    'B. 选择真正适合配图的节点：开头钩子、观点冲突、人物行动、案例画面、情绪转折、结尾记忆点；不要机械平均取句。',
+    'C. 给每个节点做导演转译：把原文含义转成可拍/可画的场景，不要直接把原句写进提示词。',
+    'D. 最后自检：每个 prompt 必须包含人物/主体、地点、动作、道具或环境、情绪、镜头构图、光线/色彩、统一画风。',
+    '硬性要求：',
+    `1. 生成 ${targetCount} 个配图点，配图点要服务视频理解和节奏，不要只因为某句话出现就配图。`,
+    '2. 每个配图点必须对应文本中的时间范围，不能脱离原文编造事实。',
+    '3. 先判断故事发生的文化语境：中国人物/中国社会/中文生活场景用中国人物与中国空间；海外案例/欧美历史匹配对应地域的人物、建筑、服饰和光线。',
+    '4. 如果文本有具体人物，建立统一主角设定；如果没有，建立统一的叙事代表，例如同一位创作者、职场人、学习者或观察者。',
+    '5. 画风必须严格统一，用户选择的画风优先级最高；每张图只能换镜头、动作、空间细节，不能混风格。',
+    '6. 严禁把 textBasis 或原文句子直接塞进 prompt；prompt 必须是画面故事描述。',
+    '7. sceneStory 必须回答：谁/什么主体，在什么地点，正在做什么，画面里有哪些道具或背景，情绪是什么。',
+    '8. camera 必须回答：远景/中景/近景/特写、俯拍/平视/侧逆光、主体位置、留白。',
+    '9. prompt 用中文为主，可夹带必要英文风格词；不要出现字幕、文字排版、水印、logo。',
+    '10. negativePrompt 用于排除：低清、变形、文字乱码、多余手指、水印、logo、畸形脸、人物服饰不一致、角色身份漂移、风格不统一。',
+    `视觉风格：${visualStyle}`,
+    `主题参考：${String(analysis?.topic || '').trim() || '未知'}`,
+    `梗概参考：${String(analysis?.outline || '').trim() || '未知'}`,
+    '输出 JSON（只返回 JSON，不要 markdown）：',
+    '{"topic":"...","style":"用户选择画风，必须贯穿所有图","visualBible":{"culturalContext":"中国/欧美/日本/其他/抽象","mainCharacter":"统一主角设定，年龄、发型、脸型、气质","outfit":"统一服饰和道具","sceneWorld":"统一时代、地点、空间基调","colorAndStyle":"统一色彩、笔触、构图风格，必须包含用户选择画风"},"items":[{"id":"img_01","timeRange":"00:10-00:25","start":10.0,"end":25.0,"title":"这一张图解决什么表达问题","purpose":"封面/观点说明/B-roll/转场/结尾","textBasis":"对应原文依据，不超过40字","directorIntent":"导演意图：为什么这里需要配图","sceneStory":"具体画面故事：人物、地点、动作、情绪、道具、前景背景","camera":"景别/角度/构图","visual":"画面描述，不超过120字","prompt":"完整图片生成提示词：画面场景 + 统一风格 + 镜头，不得复述原文","negativePrompt":"负面提示词","keywords":["..."]}]}',
+    '文本单元（id|start-end|text）：',
+    list,
+  ].join('\n');
+}
+
+function formatSecondsRange(start, end) {
+  const fmt = (sec) => {
+    const n = Math.max(0, Number(sec) || 0);
+    const m = Math.floor(n / 60);
+    const s = Math.floor(n % 60);
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
+  return `${fmt(start)}-${fmt(end)}`;
+}
+
+function buildVisualBibleText(parsed, analysis, fallbackStyle) {
+  const bible = parsed?.visualBible || parsed?.styleBible || parsed?.visual_bible || {};
+  const parts = [];
+  const push = (label, value) => {
+    const text = trimByChars(String(value || '').replace(/\s+/g, ' ').trim(), 120);
+    if (text) parts.push(`${label}：${text}`);
+  };
+  push('文化语境', bible.culturalContext || bible.culture || parsed?.culturalContext);
+  push('统一主角', bible.mainCharacter || bible.character || bible.protagonist);
+  push('统一服饰道具', bible.outfit || bible.clothing || bible.props);
+  push('统一场景世界', bible.sceneWorld || bible.setting || bible.environment);
+  push('统一色彩画风', bible.colorAndStyle || bible.style || fallbackStyle);
+  if (!parts.length) {
+    push('主题', analysis?.topic || '口播内容');
+    push('统一色彩画风', fallbackStyle || '自媒体视频配图，统一人物和画风');
+  }
+  return trimByChars(parts.join('；'), 520);
+}
+
+const DIRECTOR_VISUAL_TERMS = [
+  '人物', '主角', '地点', '场景', '房间', '办公室', '街道', '城市', '家庭', '桌面', '窗边',
+  '前景', '背景', '道具', '动作', '表情', '情绪', '镜头', '构图', '光线', '阴影', '色彩',
+  '远景', '中景', '近景', '特写', '平视', '俯拍', '侧光', '逆光', '画面', '空间',
+];
+
+function compactForVisualCompare(text) {
+  return String(text || '')
+    .replace(/[\s\u3000，。！？、；：“”"'‘’（）()【】\[\]{}<>《》.,!?;:\-_/\\|]+/g, '')
+    .trim();
+}
+
+function hasDirectTranscriptCopy(candidate, basis) {
+  const text = compactForVisualCompare(candidate);
+  const source = compactForVisualCompare(basis);
+  if (source.length < 8 || text.length < 8) return false;
+  if (text === source || text.includes(source)) return true;
+  const chunkLen = Math.min(12, Math.max(8, Math.floor(source.length / 3)));
+  let hits = 0;
+  for (let i = 0; i + chunkLen <= source.length; i += Math.max(4, Math.floor(chunkLen / 2))) {
+    if (text.includes(source.slice(i, i + chunkLen))) hits += 1;
+    if (hits >= 2) return true;
+  }
+  return false;
+}
+
+function hasDirectorVisualLanguage(text) {
+  const value = String(text || '');
+  if (compactForVisualCompare(value).length < 28) return false;
+  let hits = 0;
+  for (const term of DIRECTOR_VISUAL_TERMS) {
+    if (value.includes(term)) hits += 1;
+    if (hits >= 3) return true;
+  }
+  return false;
+}
+
+function buildDirectorFallbackScene(textBasis, title, purpose, index) {
+  const cue = trimByChars(String(title || purpose || '口播观点'), 28);
+  const normalizedPurpose = String(purpose || '');
+  const opening = index === 0 || /封面|开头|钩子/.test(normalizedPurpose);
+  const ending = /结尾|总结/.test(normalizedPurpose);
+  const conflict = /冲突|转折|问题|观点|案例/.test(normalizedPurpose);
+  const scene = opening
+    ? '一位统一设定的叙事主角站在整洁但有生活痕迹的室内空间，桌面摆着与主题相关的物件'
+    : ending
+      ? '同一位主角走到窗边或开阔空间，回望前面出现过的关键道具，形成收束感'
+      : conflict
+        ? '同一位主角面对两个形成对比的环境或道具，一侧代表旧状态，一侧代表新选择'
+        : '同一位主角在统一场景中用动作和道具表达这个观点';
+  return {
+    sceneStory: `${scene}，用具体动作和环境隐喻表达这一段的核心含义：${cue}，画面不出现任何文字，情绪清晰，人物服饰与前后分镜一致`,
+    camera: opening
+      ? '中近景，平视镜头，主体略偏左，背景留出空间展示环境和道具'
+      : ending
+        ? '中景到大全景，柔和侧逆光，主体在画面三分线位置，留出呼吸感'
+        : '中景，平视或轻微俯拍，主体动作清楚，前景道具引导视线，背景简洁',
+  };
+}
+
+function sanitizeImagePlanItems(parsed, units, count, analysis, fallbackStyle) {
+  const targetCount = Math.max(4, Math.min(12, Number(count) || 8));
+  const visualBible = buildVisualBibleText(parsed, analysis, fallbackStyle);
+  const styleAnchor = trimByChars(String(fallbackStyle || parsed?.style || '').replace(/\s+/g, ' '), 180);
+  const rawItems = Array.isArray(parsed?.items)
+    ? parsed.items
+    : Array.isArray(parsed?.imagePoints)
+      ? parsed.imagePoints
+      : Array.isArray(parsed?.points)
+        ? parsed.points
+        : [];
+  const out = [];
+  for (let i = 0; i < rawItems.length; i += 1) {
+    const item = rawItems[i] || {};
+    const fallbackUnit = units[Math.min(units.length - 1, Math.floor((i / Math.max(1, targetCount - 1)) * Math.max(0, units.length - 1)))] || {};
+    const start = Number.isFinite(Number(item.start)) ? Number(item.start) : Number(fallbackUnit.start || 0);
+    const end = Number.isFinite(Number(item.end)) ? Number(item.end) : Number(fallbackUnit.end || start + 8);
+    const id = String(item.id || `img_${String(out.length + 1).padStart(2, '0')}`).replace(/[^\w-]/g, '_').slice(0, 32);
+    const title = trimByChars(String(item.title || item.name || `配图 ${out.length + 1}`).replace(/\s+/g, ' '), 40);
+    const textBasis = trimByChars(String(item.textBasis || item.basis || fallbackUnit.text || '').replace(/\s+/g, ' '), 80);
+    let sceneStory = trimByChars(String(item.sceneStory || item.scene_story || item.story || '').replace(/\s+/g, ' '), 180);
+    let camera = trimByChars(String(item.camera || item.shot || item.composition || '').replace(/\s+/g, ' '), 80);
+    let visual = trimByChars(String(item.visual || item.description || sceneStory || '').replace(/\s+/g, ' '), 160);
+    const rawPrompt = trimByChars(String(item.prompt || '').replace(/\s+/g, ' '), 900);
+    const fallbackScene = buildDirectorFallbackScene(textBasis, title, item.purpose, out.length);
+    if (!sceneStory || hasDirectTranscriptCopy(sceneStory, textBasis) || !hasDirectorVisualLanguage(sceneStory)) {
+      sceneStory = fallbackScene.sceneStory;
+    }
+    if (!camera || hasDirectTranscriptCopy(camera, textBasis)) {
+      camera = fallbackScene.camera;
+    }
+    if (!visual || hasDirectTranscriptCopy(visual, textBasis) || !hasDirectorVisualLanguage(visual)) {
+      visual = trimByChars(sceneStory, 160);
+    }
+    const basePrompt = trimByChars([
+      sceneStory ? `画面故事：${sceneStory}` : '',
+      visual ? `画面描述：${visual}` : '',
+      camera ? `镜头构图：${camera}` : '',
+      rawPrompt && rawPrompt !== textBasis && !hasDirectTranscriptCopy(rawPrompt, textBasis) && hasDirectorVisualLanguage(rawPrompt)
+        ? `生成提示：${rawPrompt}`
+        : '',
+    ].filter(Boolean).join('；') || `把该配图点转写为一个具体故事画面：同一主角在统一场景中用动作和道具表达内容，不出现文字。`, 1000);
+    const prompt = trimByChars([
+      visualBible ? `全片统一视觉设定：${visualBible}` : '',
+      styleAnchor ? `用户选择画风：${styleAnchor}，所有图片必须严格保持这一种画风，不要混入其他风格` : '',
+      `当前配图点：${basePrompt}`,
+      '这是视频分镜插图，不是文字海报；必须画出人物、地点、动作、情绪、前景背景和镜头构图。',
+      '保持同一主角身份、脸型发型、服饰道具、时代地域、色彩系统和绘画笔触；只改变当前镜头的动作、构图和场景细节；画面无文字、无字幕、无水印、无 logo。',
+    ].filter(Boolean).join('。'), 1300);
+    if (!prompt) continue;
+    out.push({
+      id,
+      timeRange: String(item.timeRange || item.range || formatSecondsRange(start, end)).slice(0, 32),
+      start: Math.max(0, start),
+      end: Math.max(start, end),
+      title,
+      directorIntent: trimByChars(String(item.directorIntent || item.intent || item.reason || '').replace(/\s+/g, ' '), 80),
+      purpose: trimByChars(String(item.purpose || '视频配图').replace(/\s+/g, ' '), 30),
+      textBasis,
+      sceneStory,
+      camera,
+      visual,
+      prompt,
+      negativePrompt: trimByChars(String(item.negativePrompt || item.negative_prompt || '低清，模糊，文字，水印，logo，畸形，变形，多余手指，人物服饰不一致，角色年龄变化，地域文化错位').replace(/\s+/g, ' '), 320),
+      keywords: sanitizeKeywords(Array.isArray(item.keywords) ? item.keywords : []),
+    });
+    if (out.length >= targetCount) break;
+  }
+  return out;
+}
+
+function buildFallbackImagePlan(units, analysis, count, style = '') {
+  const targetCount = Math.max(4, Math.min(12, Number(count) || 8));
+  const items = [];
+  if (!units.length) return items;
+  const topic = String(analysis?.topic || '口播内容').trim() || '口播内容';
+  const styleAnchor = String(style || '彩铅故事插画，纸张纹理，温暖克制色彩').trim();
+  const visualBible = `文化语境按原文判断，统一使用同一位自媒体叙事主角；人物发型、脸型、服饰、道具保持一致；画风统一为${styleAnchor}`;
+  for (let i = 0; i < targetCount; i += 1) {
+    const unit = units[Math.min(units.length - 1, Math.floor((i / Math.max(1, targetCount - 1)) * Math.max(0, units.length - 1)))];
+    const title = `配图 ${i + 1}：${trimByChars(unit.text, 18)}`;
+    const sceneStory = `同一位叙事主角在统一场景中，通过动作、表情和环境道具表现“${trimByChars(unit.text, 42)}”这一内容，不出现任何文字`;
+    const camera = i === 0
+      ? '中近景，主体居中，开场建立人物和环境'
+      : (i === targetCount - 1 ? '中景偏大全景，留出结尾总结的空间感' : '中景或特写，突出动作和情绪转折');
+    const prompt = [
+      `全片统一视觉设定：${visualBible}`,
+      `用户选择画风：${styleAnchor}，所有图片必须严格保持这一种画风`,
+      `围绕“${topic}”的中文自媒体口播视频配图`,
+      `画面故事：${sceneStory}`,
+      `镜头构图：${camera}`,
+      '主体明确，适合作为视频 B-roll，不要把原文当作文字写进画面，无文字，无字幕，无水印，无 logo，人物和服饰保持上下文一致',
+    ].join('，');
+    items.push({
+      id: `img_${String(i + 1).padStart(2, '0')}`,
+      timeRange: formatSecondsRange(unit.start, unit.end),
+      start: unit.start,
+      end: unit.end,
+      title,
+      purpose: i === 0 ? '开头铺垫' : (i === targetCount - 1 ? '结尾总结' : '观点说明'),
+      textBasis: trimByChars(unit.text, 80),
+      sceneStory,
+      camera,
+      visual: trimByChars(sceneStory, 120),
+      prompt,
+      negativePrompt: '低清，模糊，文字，水印，logo，畸形，变形，多余手指，人物服饰不一致，角色年龄变化，地域文化错位',
+      keywords: sanitizeKeywords([topic]),
+    });
+  }
+  return items;
+}
+
+async function runLlmImagePlan(words, config, payload = {}) {
+  const sourceWords = pickWordsForVisualPlan(words, payload.selectedIndices);
+  const units = buildTranscriptUnits(sourceWords);
+  if (!units.length) {
+    throw new Error('可用于配图分析的文本为空');
+  }
+  const analysis = await resolveAnalysis(units, config, payload.analysis);
+  const count = Math.max(4, Math.min(12, Number(payload.count) || 8));
+  const style = String(payload.style || '').trim();
+  let items = [];
+  let raw = '';
+  try {
+    raw = await callLlmProvider(config, buildImagePlanPrompt(units, analysis, style, count));
+    const parsed = extractJsonObject(raw) || {};
+    items = sanitizeImagePlanItems(parsed, units, count, analysis, style);
+    if (parsed.topic && !analysis.topic) analysis.topic = trimByChars(String(parsed.topic), 80);
+    if (parsed.outline && !analysis.outline) analysis.outline = trimByChars(String(parsed.outline), 120);
+  } catch (err) {
+    appendCutLog(`Image plan LLM fallback: ${err.message || String(err)}`);
+  }
+  if (!items.length) {
+    items = buildFallbackImagePlan(units, analysis, count, style);
+  }
+  return {
+    topic: analysis.topic,
+    outline: analysis.outline,
+    style: style || '彩铅故事插画，统一人物和场景',
+    items,
+    raw: raw.slice(0, 1000),
+  };
+}
+function sanitizeAssetName(input) {
+  const value = String(input || '')
+    .replace(/[^\w\u4e00-\u9fa5-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 48);
+  return value || 'image';
+}
+
+async function saveImageBuffer(buffer, id, ext = '.png') {
+  fs.mkdirSync(IMAGE_ASSET_DIR, { recursive: true });
+  const safeId = sanitizeAssetName(id);
+  const suffix = ['.png', '.jpg', '.jpeg', '.webp', '.svg'].includes(ext.toLowerCase()) ? ext.toLowerCase() : '.png';
+  const fileName = `${Date.now()}_${safeId}${suffix}`;
+  const filePath = path.join(IMAGE_ASSET_DIR, fileName);
+  fs.writeFileSync(filePath, buffer);
+  return {
+    fileName,
+    filePath,
+    url: `/image_assets/${encodeURIComponent(fileName)}`,
+  };
+}
+
+function imageExtFromContentType(contentType) {
+  const type = String(contentType || '').toLowerCase();
+  if (type.includes('jpeg') || type.includes('jpg')) return '.jpg';
+  if (type.includes('webp')) return '.webp';
+  if (type.includes('svg')) return '.svg';
+  return '.png';
+}
+
+async function rewriteImagePromptWithLlm(config, item, userNote = '') {
+  if (!config.ready) return String(item?.prompt || '').trim();
+  const prompt = [
+    '你是 AI 图片提示词优化师。用户点击了重试，说明上一张不满意。',
+    '请在不改变事实、主题、人物身份、服饰、地域文化和画风的前提下，换一个更清晰、更有画面感的图片生成提示词。',
+    '必须继承原提示词里的“全片统一视觉设定”。只允许调整当前镜头的构图、动作、景别、光线和细节，不允许把中国故事改成外国场景，也不允许更换主角外貌和衣服。',
+    '只返回 JSON：{"prompt":"...","negativePrompt":"..."}',
+    `标题：${String(item?.title || '')}`,
+    `原始提示词：${String(item?.prompt || '')}`,
+    `用户补充：${String(userNote || '') || '无'}`,
+  ].join('\n');
+  const raw = await callLlmProvider(config, prompt);
+  const parsed = extractJsonObject(raw) || {};
+  return {
+    prompt: trimByChars(String(parsed.prompt || item?.prompt || '').replace(/\s+/g, ' '), 1300),
+    negativePrompt: trimByChars(String(parsed.negativePrompt || parsed.negative_prompt || item?.negativePrompt || '').replace(/\s+/g, ' '), 320),
+  };
+}
+
+async function callImageGenerationApi(config, item) {
+  if (!config.ready) {
+    throw new Error(`图片生成配置不完整：缺少 ${config.missing.join(', ')}`);
+  }
+  const prompt = String(item?.prompt || '').trim();
+  if (!prompt) throw new Error('图片提示词为空');
+
+  if (config.provider === 'minimax') {
+    const requestBody = {
+      model: config.model || 'image-01',
+      prompt,
+      aspect_ratio: imageSizeToMiniMaxAspectRatio(config.size),
+      response_format: 'base64',
+      n: 1,
+      prompt_optimizer: true,
+    };
+    const res = await fetch(config.endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify(requestBody),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      throw new Error(`MiniMax 图片生成失败：HTTP ${res.status} ${text.slice(0, 300)}`);
+    }
+    let json = {};
+    try {
+      json = JSON.parse(text);
+    } catch {
+      throw new Error(`MiniMax 图片生成返回格式不是 JSON：${text.slice(0, 120)}`);
+    }
+    const base64List = Array.isArray(json?.data?.image_base64)
+      ? json.data.image_base64
+      : Array.isArray(json?.image_base64)
+        ? json.image_base64
+        : [];
+    const firstBase64 = String(base64List[0] || json?.data?.b64_json || json?.b64_json || '').trim();
+    if (!firstBase64) {
+      const message = json?.base_resp?.status_msg || json?.message || '未返回 base64 图片';
+      throw new Error(`MiniMax 图片生成失败：${message}`);
+    }
+    const data = firstBase64.replace(/^data:image\/\w+;base64,/, '');
+    return saveImageBuffer(Buffer.from(data, 'base64'), item.id || 'image', '.jpg');
+  }
+
+  const res = await fetch(config.endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: config.model,
+      prompt,
+      size: imageSizeToOpenAiSize(config.size),
+      n: 1,
+    }),
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`图片生成失败：HTTP ${res.status} ${text.slice(0, 300)}`);
+  }
+  let json = {};
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new Error(`图片生成返回格式不是 JSON：${text.slice(0, 120)}`);
+  }
+  const first = Array.isArray(json?.data) ? json.data[0] : (json?.image || json?.result || json);
+  const b64 = first?.b64_json || first?.base64 || first?.image_base64;
+  if (b64) {
+    const data = String(b64).replace(/^data:image\/\w+;base64,/, '');
+    return saveImageBuffer(Buffer.from(data, 'base64'), item.id || 'image', '.png');
+  }
+  const imageUrl = first?.url || first?.image_url || first?.output_url;
+  if (imageUrl) {
+    const imageRes = await fetch(imageUrl);
+    if (!imageRes.ok) throw new Error(`图片下载失败：HTTP ${imageRes.status}`);
+    const buffer = Buffer.from(await imageRes.arrayBuffer());
+    return saveImageBuffer(buffer, item.id || 'image', imageExtFromContentType(imageRes.headers.get('content-type')));
+  }
+  throw new Error('图片生成接口未返回 url 或 base64 图片');
+}
+
+function randomDraftId(prefix = 'jaygo') {
+  return `${prefix}_${crypto.randomBytes(8).toString('hex')}`;
+}
+
+function toDraftUs(seconds) {
+  return Math.max(0, Math.round((Number(seconds) || 0) * 1000000));
+}
+
+function sanitizeDraftName(input) {
+  const value = String(input || '')
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80);
+  return value || `JaygoCut_${new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14)}`;
+}
+
+function parseJsonFileNoBom(filePath) {
+  return JSON.parse(fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, ''));
+}
+
+function deepClone(value) {
+  return JSON.parse(JSON.stringify(value || {}));
+}
+
+function resolveJianyingTemplatePath(input) {
+  const raw = String(input || '').trim().replace(/^"|"$/g, '');
+  if (!raw) return '';
+  const resolved = path.resolve(raw);
+  if (!fs.existsSync(resolved)) return '';
+  const stat = fs.statSync(resolved);
+  if (stat.isDirectory()) {
+    const candidates = [
+      path.join(resolved, 'draft_content.json'),
+      path.join(resolved, 'draft_content.json.bak'),
+    ];
+    return candidates.find((p) => fs.existsSync(p)) || '';
+  }
+  if (stat.isFile() && path.basename(resolved).toLowerCase() === 'draft_content.json') return resolved;
+  return '';
+}
+
+function loadJianyingTemplate(templatePath) {
+  const contentPath = resolveJianyingTemplatePath(templatePath);
+  if (!contentPath) return null;
+  const content = parseJsonFileNoBom(contentPath);
+  const materials = content.materials && typeof content.materials === 'object' ? content.materials : {};
+  const textMaterial = Array.isArray(materials.texts) && materials.texts.length
+    ? deepClone(materials.texts[0])
+    : null;
+  const textTrack = Array.isArray(content.tracks)
+    ? content.tracks.find((track) => track && track.type === 'text' && Array.isArray(track.segments) && track.segments.length)
+    : null;
+  const textSegment = textTrack ? deepClone(textTrack.segments[0]) : null;
+  return {
+    content,
+    contentPath,
+    rootDir: path.dirname(contentPath),
+    textMaterial,
+    textSegment,
+  };
+}
+
+function htmlEscapeText(text) {
+  return String(text || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function replaceTextContent(templateContent, text) {
+  const plain = String(text || '').trim();
+  const escaped = htmlEscapeText(plain);
+  const raw = String(templateContent || '');
+  if (!raw || !/[<>]/.test(raw)) return plain;
+  if (raw.includes('</text>')) {
+    return raw.replace(/(<text[^>]*>)([\s\S]*?)(<\/text>)/i, `$1${escaped}$3`);
+  }
+  if (raw.includes('&lt;/text&gt;')) {
+    return raw.replace(/(&lt;text[^&]*&gt;)([\s\S]*?)(&lt;\/text&gt;)/i, `$1${escaped}$3`);
+  }
+  const replaced = raw.replace(/(>)([^<>]*)(<\/[^>]+>\s*)$/s, `$1${escaped}$3`);
+  return replaced === raw ? plain : replaced;
+}
+
+function presetTextMaterial(preset, text) {
+  const key = String(preset || 'clean').trim();
+  const presets = {
+    clean: {
+      content: text,
+      font_size: 8,
+      text_color: '#FFFFFF',
+      border_color: '#111827',
+      border_width: 0.08,
+      background_alpha: 0,
+    },
+    blackgold: {
+      content: text,
+      font_size: 9,
+      text_color: '#F8E7B0',
+      border_color: '#0B0F17',
+      border_width: 0.12,
+      background_alpha: 0.18,
+      background_color: '#111111',
+    },
+    variety: {
+      content: text,
+      font_size: 10,
+      text_color: '#FFFFFF',
+      border_color: '#FF7A00',
+      border_width: 0.14,
+      background_alpha: 0,
+    },
+    soft: {
+      content: text,
+      font_size: 8,
+      text_color: '#FFF7ED',
+      border_color: '#7C2D12',
+      border_width: 0.08,
+      background_alpha: 0.08,
+      background_color: '#F97316',
+    },
+  };
+  return presets[key] || presets.clean;
+}
+
+function buildDefaultTextMaterial(text, preset) {
+  const style = presetTextMaterial(preset, text);
+  return {
+    id: randomDraftId('text'),
+    type: 'text',
+    name: 'Jaygo Cut Subtitle',
+    content: String(text || ''),
+    content_rich_text: [],
+    font_path: '',
+    font_resource_id: '',
+    font_size: style.font_size,
+    text_color: style.text_color,
+    border_color: style.border_color,
+    border_width: style.border_width,
+    background_alpha: style.background_alpha || 0,
+    background_color: style.background_color || '',
+    alignment: 1,
+    line_spacing: 0,
+    letter_spacing: 0,
+  };
+}
+
+function buildDefaultTextSegment(materialId, cue) {
+  const start = toDraftUs(cue.start);
+  const duration = Math.max(300000, toDraftUs(Math.max(0.3, Number(cue.end) - Number(cue.start))));
+  return {
+    id: randomDraftId('segment'),
+    material_id: materialId,
+    target_timerange: { start, duration },
+    source_timerange: { start: 0, duration },
+    render_index: 0,
+    visible: true,
+    volume: 1,
+    extra_material_refs: [],
+    clip: {
+      alpha: 1,
+      flip: { horizontal: false, vertical: false },
+      rotation: 0,
+      scale: { x: 1, y: 1 },
+      transform: { x: 0, y: -0.72 },
+    },
+  };
+}
+
+function createBaseDraftContent(template, draftId, durationUs) {
+  const base = template?.content ? deepClone(template.content) : {};
+  base.id = draftId;
+  base.duration = durationUs;
+  base.version = base.version || 360000;
+  base.fps = base.fps || 30;
+  base.canvas_config = base.canvas_config || { width: 1920, height: 1080, ratio: 'original' };
+  base.materials = base.materials && typeof base.materials === 'object' ? base.materials : {};
+  base.materials.texts = [];
+  base.tracks = Array.isArray(base.tracks)
+    ? base.tracks.filter((track) => track && track.type !== 'text')
+    : [];
+  base.tracks.push({
+    id: randomDraftId('track_text'),
+    type: 'text',
+    attribute: 0,
+    flag: 0,
+    is_default_name: true,
+    name: 'Jaygo Cut Subtitles',
+    segments: [],
+  });
+  return base;
+}
+
+function makeTextMaterialFromTemplate(templateMaterial, text, preset) {
+  if (!templateMaterial) return buildDefaultTextMaterial(text, preset);
+  const material = deepClone(templateMaterial);
+  material.id = randomDraftId('text');
+  material.name = material.name || 'Jaygo Cut Subtitle';
+  material.content = replaceTextContent(material.content, text);
+  if ('text' in material) material.text = String(text || '');
+  if ('content_rich_text' in material && Array.isArray(material.content_rich_text)) {
+    material.content_rich_text = [];
+  }
+  return material;
+}
+
+function makeTextSegmentFromTemplate(templateSegment, materialId, cue) {
+  if (!templateSegment) return buildDefaultTextSegment(materialId, cue);
+  const segment = deepClone(templateSegment);
+  segment.id = randomDraftId('segment');
+  segment.material_id = materialId;
+  const start = toDraftUs(cue.start);
+  const duration = Math.max(300000, toDraftUs(Math.max(0.3, Number(cue.end) - Number(cue.start))));
+  segment.target_timerange = { ...(segment.target_timerange || {}), start, duration };
+  segment.source_timerange = { ...(segment.source_timerange || {}), start: 0, duration };
+  segment.visible = segment.visible !== false;
+  return segment;
+}
+
+function normalizeCueList(cues) {
+  if (!Array.isArray(cues)) return [];
+  return cues
+    .map((cue) => ({
+      start: Math.max(0, Number(cue?.start) || 0),
+      end: Math.max(0, Number(cue?.end) || 0),
+      text: String(cue?.text || '').trim(),
+    }))
+    .filter((cue) => cue.text && cue.end > cue.start)
+    .sort((a, b) => a.start - b.start);
+}
+
+function writeJianyingDraft(payload = {}) {
+  const cues = normalizeCueList(payload.cues);
+  if (!cues.length) throw new Error('没有可导出的字幕，请检查是否全部内容都被删除。');
+  const template = loadJianyingTemplate(payload.templatePath);
+  const draftName = sanitizeDraftName(payload.draftName || `JaygoCut_${new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14)}`);
+  const draftId = randomDraftId('draft');
+  const durationUs = Math.max(...cues.map((cue) => toDraftUs(cue.end)), 1000000);
+  const draftDir = path.join(path.resolve(process.cwd(), JIANYING_DRAFT_EXPORT_DIR_NAME), draftName);
+  fs.rmSync(draftDir, { recursive: true, force: true });
+  fs.mkdirSync(draftDir, { recursive: true });
+
+  const content = createBaseDraftContent(template, draftId, durationUs);
+  const textTrack = content.tracks.find((track) => track.type === 'text');
+  for (const cue of cues) {
+    const material = makeTextMaterialFromTemplate(template?.textMaterial, cue.text, payload.preset);
+    content.materials.texts.push(material);
+    textTrack.segments.push(makeTextSegmentFromTemplate(template?.textSegment, material.id, cue));
+  }
+
+  fs.writeFileSync(path.join(draftDir, 'draft_content.json'), `${JSON.stringify(content, null, 2)}\n`, 'utf8');
+  const meta = {
+    draft_id: draftId,
+    draft_name: draftName,
+    draft_fold_path: draftDir,
+    draft_root_path: draftDir,
+    draft_type: 'draft',
+    tm_draft_create: Date.now(),
+    tm_draft_modified: Date.now(),
+    draft_duration: durationUs,
+    draft_removable_storage_device: '',
+    draft_cloud_purchase_info: '',
+    draft_cover: '',
+    version: '5.9.0',
+  };
+  fs.writeFileSync(path.join(draftDir, 'draft_meta_info.json'), `${JSON.stringify(meta, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(path.join(draftDir, 'draft_virtual_store.json'), '{}\n', 'utf8');
+  fs.writeFileSync(path.join(draftDir, 'README_JaygoCut.txt'), [
+    'Jaygo Cut 剪映草稿导出说明',
+    '',
+    '1. 将整个文件夹复制到剪映草稿目录后，在剪映中打开。',
+    '2. 如果使用剪映 6.x 或更新版本，草稿 JSON 可能被加密；若无法识别，请使用 SRT 导入方案。',
+    '3. 自定义字幕模板来自：' + (template?.rootDir || '内置样式'),
+  ].join('\r\n'), 'utf8');
+  return {
+    draftDir,
+    draftName,
+    cues: cues.length,
+    templateUsed: Boolean(template),
+    templatePath: template?.rootDir || '',
+    compatibilityNote: '剪映 5.9 及以下通常可直接识别；剪映 6.x+ 可能加密草稿，请保留 SRT 兜底。',
+  };
+}
+
 function parseChatAdjustIntent(message) {
   const text = String(message || '');
   return {
@@ -1459,9 +2260,9 @@ async function runLlmMarking(words, config) {
     .filter((item) => item.confidence >= LLM_MIN_CONFIDENCE);
   let confidenceFilteredCount = Math.max(0, rawCandidates.length - selectedItems.length);
 
-  const maxAllowed = Math.min(180, Math.max(6, Math.floor(units.length * 0.3)));
+  const maxAllowed = Math.min(140, Math.max(4, Math.floor(units.length * 0.16)));
   if (!selectedItems.length && rawCandidates.length) {
-    const fallbackCount = Math.min(maxAllowed, Math.max(3, Math.ceil(rawCandidates.length * 0.35)));
+    const fallbackCount = Math.min(maxAllowed, Math.max(2, Math.ceil(rawCandidates.length * 0.18)));
     selectedItems = rawCandidates.slice(0, fallbackCount);
     confidenceFilteredCount = Math.max(0, rawCandidates.length - selectedItems.length);
   }
@@ -1995,6 +2796,73 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'POST' && pathname === '/api/llm-image-plan') {
+      const config = getLlmConfig();
+      if (!config.ready) {
+        throw new Error(`LLM 配置不完整：缺少 ${config.missing.join(', ')}`);
+      }
+
+      const body = await readBody(req);
+      const payload = JSON.parse(body || '{}');
+      const words = Array.isArray(payload.words) ? payload.words : [];
+      if (!words.length) {
+        throw new Error('words 为空，无法生成视频配图方案');
+      }
+      if (words.length > 50000) {
+        throw new Error('转录数据过大，请先裁剪后再生成视频配图');
+      }
+      appendCutLog(`视频配图方案生成开始：provider=${config.provider}, model=${config.model}, words=${words.length}`);
+      const result = await runLlmImagePlan(words, config, payload);
+      appendCutLog(`视频配图方案生成完成：${result.items.length} 个配图点`);
+      writeJson(res, 200, { success: true, ...result });
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/generate-image') {
+      const llmConfig = getLlmConfig();
+      const imageConfig = getImageConfig();
+      const body = await readBody(req);
+      const payload = JSON.parse(body || '{}');
+      const item = payload.item && typeof payload.item === 'object' ? payload.item : {};
+      const retry = !!payload.retry;
+      if (payload.imageSize || payload.aspectRatio) {
+        imageConfig.size = normalizeImageSize(payload.imageSize || payload.aspectRatio);
+      }
+      let nextItem = { ...item };
+      if (retry && llmConfig.ready) {
+        const rewritten = await rewriteImagePromptWithLlm(llmConfig, item, payload.note);
+        if (rewritten && typeof rewritten === 'object') {
+          nextItem = {
+            ...nextItem,
+            prompt: rewritten.prompt || nextItem.prompt,
+            negativePrompt: rewritten.negativePrompt || nextItem.negativePrompt,
+          };
+        }
+      }
+      appendCutLog(`图片生成开始：${String(nextItem.title || nextItem.id || 'image')}`);
+      const saved = await callImageGenerationApi(imageConfig, nextItem);
+      appendCutLog(`图片生成完成：${saved.fileName}`);
+      writeJson(res, 200, {
+        success: true,
+        item: nextItem,
+        image: {
+          ...saved,
+          model: imageConfig.model,
+          size: imageConfig.size,
+        },
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/export-jianying-draft') {
+      const body = await readBody(req);
+      const payload = JSON.parse(body || '{}');
+      const result = writeJianyingDraft(payload);
+      appendCutLog(`剪映草稿已导出：${result.draftDir}`);
+      writeJson(res, 200, { success: true, ...result });
+      return;
+    }
+
     if (req.method === 'POST' && pathname === '/api/cut') {
       if (currentCutJob.state === 'running') {
         writeJson(res, 202, {
@@ -2079,17 +2947,32 @@ process.on('unhandledRejection', (reason) => {
   console.error('unhandledRejection:', reason);
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-  const runtimeInfo = getRuntimeInfo();
-  console.log('');
-  console.log('Review server started');
-  console.log(`URL: http://localhost:${PORT}`);
-  console.log(`Video: ${VIDEO_FILE}`);
-  console.log(`Output directory: ${runtimeInfo.cutOutputDir}`);
-  console.log(`Output source: ${runtimeInfo.outputSourceText}`);
-  if (OUTPUT_ROOT_ARG) {
-    console.log(`Output argument: ${path.resolve(OUTPUT_ROOT_ARG)}`);
-  }
-  console.log('');
-});
-
+if (process.env.JAYGO_CUT_TEST_EXPORTS === '1') {
+  module.exports = {
+    buildImagePlanPrompt,
+    sanitizeImagePlanItems,
+    buildFallbackImagePlan,
+    hasDirectTranscriptCopy,
+    hasDirectorVisualLanguage,
+    imageSizeToMiniMaxAspectRatio,
+    imageSizeToOpenAiSize,
+    buildLlmPrompt,
+    buildChatAdjustPrompt,
+    writeJianyingDraft,
+    replaceTextContent,
+  };
+} else {
+  server.listen(PORT, '127.0.0.1', () => {
+    const runtimeInfo = getRuntimeInfo();
+    console.log('');
+    console.log('Review server started');
+    console.log(`URL: http://localhost:${PORT}`);
+    console.log(`Video: ${VIDEO_FILE}`);
+    console.log(`Output directory: ${runtimeInfo.cutOutputDir}`);
+    console.log(`Output source: ${runtimeInfo.outputSourceText}`);
+    if (OUTPUT_ROOT_ARG) {
+      console.log(`Output argument: ${path.resolve(OUTPUT_ROOT_ARG)}`);
+    }
+    console.log('');
+  });
+}

@@ -10,6 +10,9 @@ const els = {
   llmApiKey: $('llmApiKey'),
   llmModel: $('llmModel'),
   llmTemperature: $('llmTemperature'),
+  imageApiBaseUrl: $('imageApiBaseUrl'),
+  imageApiKey: $('imageApiKey'),
+  imageModel: $('imageModel'),
   testLlm: $('testLlm'),
   llmConnState: $('llmConnState'),
   testAsr: $('testAsr'),
@@ -37,6 +40,8 @@ const els = {
   updateLatestVersion: $('updateLatestVersion'),
   updateProgressBar: $('updateProgressBar'),
   updateMessage: $('updateMessage'),
+  updateNotesBox: $('updateNotesBox'),
+  updateReleaseNotes: $('updateReleaseNotes'),
   checkUpdate: $('checkUpdate'),
   downloadUpdate: $('downloadUpdate'),
   installUpdate: $('installUpdate'),
@@ -339,6 +344,9 @@ function getSettingsFromForm() {
     llmApiKey: els.llmApiKey.value.trim(),
     llmModel: els.llmModel.value.trim(),
     llmTemperature: Number(els.llmTemperature.value),
+    imageApiBaseUrl: els.imageApiBaseUrl ? els.imageApiBaseUrl.value.trim() : '',
+    imageApiKey: els.imageApiKey ? els.imageApiKey.value.trim() : '',
+    imageModel: els.imageModel ? els.imageModel.value.trim() : '',
     outputRoot: els.outputRoot.value.trim(),
     silenceThresholdSec: Number(els.silenceThresholdSec.value) || 0.2,
     exportQuality: els.exportQuality.value || 'ultra',
@@ -550,6 +558,9 @@ function applySettingsToForm(settings) {
   if (!els.llmApiBaseUrl.value.trim() || !els.llmModel.value.trim()) {
     applyLlmProviderPreset(els.llmProvider.value, false);
   }
+  if (els.imageApiBaseUrl) els.imageApiBaseUrl.value = settings.imageApiBaseUrl || '';
+  if (els.imageApiKey) els.imageApiKey.value = settings.imageApiKey || '';
+  if (els.imageModel) els.imageModel.value = settings.imageModel || '';
 
   els.outputRoot.value = settings.outputRoot || '';
   els.silenceThresholdSec.value = String(settings.silenceThresholdSec || 0.2);
@@ -630,6 +641,11 @@ function renderUpdateState(state = {}) {
   els.updateCurrentVersion.textContent = state.currentVersion || '-';
   els.updateLatestVersion.textContent = state.latestVersion || '-';
   els.updateMessage.textContent = state.message || '\u542f\u52a8\u540e\u4f1a\u81ea\u52a8\u68c0\u67e5\u66f4\u65b0\uff0c\u4e5f\u53ef\u4ee5\u624b\u52a8\u68c0\u67e5\u3002';
+  const releaseNotes = String(state.releaseNotes || '').trim();
+  if (els.updateNotesBox && els.updateReleaseNotes) {
+    els.updateNotesBox.hidden = !releaseNotes;
+    els.updateReleaseNotes.textContent = releaseNotes || '\u6682\u65e0\u66f4\u65b0\u8bf4\u660e\u3002';
+  }
   els.updateProgressBar.style.width = `${progress}%`;
   els.checkUpdate.disabled = status === 'checking' || status === 'downloading';
   els.downloadUpdate.disabled = !state.canDownload;

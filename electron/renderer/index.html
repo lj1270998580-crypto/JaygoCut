@@ -124,6 +124,21 @@
           </div>
 
           <label class="span-2">
+            图片生成接口地址（OpenAI 兼容）
+            <input id="imageApiBaseUrl" type="text" placeholder="可留空复用 LLM；MiniMax 会自动走 /v1/image_generation" />
+          </label>
+
+          <label>
+            图片生成 API Key
+            <input id="imageApiKey" type="password" placeholder="不填则尝试复用 LLM API Key" />
+          </label>
+
+          <label>
+            图片生成模型
+            <input id="imageModel" type="text" placeholder="MiniMax 可留空，默认 image-01" />
+          </label>
+
+          <label class="span-2">
             输出目录
             <div class="inline-input">
               <input id="outputRoot" type="text" placeholder="请选择输出目录" />
@@ -170,6 +185,10 @@
         <div id="updateProgressBar" class="update-progress-bar"></div>
       </div>
       <p id="updateMessage" class="hint update-message">&#21551;&#21160;&#21518;&#20250;&#33258;&#21160;&#26816;&#26597;&#26356;&#26032;&#65292;&#20063;&#21487;&#20197;&#25163;&#21160;&#26816;&#26597;&#12290;</p>
+      <div id="updateNotesBox" class="update-notes" hidden>
+        <div class="update-notes-title">本次更新内容</div>
+        <pre id="updateReleaseNotes">暂无更新说明。</pre>
+      </div>
       <div class="update-actions">
         <button id="checkUpdate" type="button" class="secondary">&#26816;&#26597;&#26356;&#26032;</button>
         <button id="downloadUpdate" type="button" class="secondary" disabled>&#19979;&#36733;&#26356;&#26032;</button>

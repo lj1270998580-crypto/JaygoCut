@@ -1,6 +1,6 @@
 {
   "name": "jaygo-cut",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "private": true,
   "description": "Jaygo Cut desktop app",
   "author": "Jaygo Team",
@@ -8,7 +8,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
-    "check": "node --check electron/main.js && node --check electron/preload.js && node --check electron/renderer/renderer.js && node --check talkcut/scripts/generate_review.js && node --check talkcut/scripts/generate_subtitles.js && node --check talkcut/scripts/cut_video.js",
+    "check": "node --check electron/main.js && node --check electron/preload.js && node --check electron/renderer/renderer.js && node --check talkcut/scripts/review_server.js && node --check talkcut/scripts/generate_review.js && node --check talkcut/scripts/generate_subtitles.js && node --check talkcut/scripts/cut_video.js",
     "test": "node tests/review_regression.test.js",
     "pack:win": "electron-builder --win --dir",
     "pack:win:local": "electron-builder --win --dir --config.electronDist=node_modules/electron/dist --config.electronVersion=31.7.7",
@@ -39,7 +39,6 @@
       ".env",
       "README.md",
       "SKILL.md",
-      "DESKTOP_APP.md",
       "package.json"
     ],
     "win": {

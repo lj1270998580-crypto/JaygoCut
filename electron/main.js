@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = require('fs/promises');
@@ -102,6 +102,10 @@ const DEFAULT_SETTINGS = {
   llmApiKey: '',
   llmModel: '',
   llmTemperature: 0.2,
+  imageApiBaseUrl: '',
+  imageApiKey: '',
+  imageModel: '',
+  closeBehavior: '',
   remoteUploadEndpoint: 'https://ailabing.cn/api/jaygo/upload-audio',
   remoteUploadToken: '6b5ec35b8e28d2e1fb24c899fa19e74f03355a5b62105df90c2086a76d14812a',
 };
@@ -128,6 +132,9 @@ const TEMP_UPLOAD_RETRY_BACKOFF_MS = 1_500;
 
 let mainWindow = null;
 let reviewWindow = null;
+let tray = null;
+let isQuitting = false;
+let isHandlingMainWindowClose = false;
 let activeTask = null;
 let standaloneReviewServer = null;
 let updaterConfigured = false;
@@ -136,6 +143,7 @@ let updateState = {
   currentVersion: app.getVersion(),
   latestVersion: '',
   message: '未检查更新',
+  releaseNotes: '',
   progress: 0,
   canDownload: false,
   canInstall: false,
@@ -494,6 +502,9 @@ function buildRuntimeEnv(settings) {
     LLM_MODEL: String(settings.llmModel || '').trim(),
     LLM_TEMPERATURE: String(Number.isFinite(Number(settings.llmTemperature)) ? Number(settings.llmTemperature) : 0.2),
     LLM_PROVIDER: normalizeLlmProviderKey(settings.llmProvider),
+    IMAGE_API_BASE_URL: String(settings.imageApiBaseUrl || '').trim(),
+    IMAGE_API_KEY: String(settings.imageApiKey || settings.llmApiKey || '').trim(),
+    IMAGE_MODEL: String(settings.imageModel || '').trim(),
   };
 }
 
@@ -602,6 +613,69 @@ function setUpdateState(patch) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('update:state', updateSnapshot());
   }
+}
+
+function normalizeReleaseNotes(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === 'string') return item.trim();
+        if (item && typeof item === 'object') {
+          const version = String(item.version || item.releaseName || '').trim();
+          const note = normalizeReleaseNotes(item.note || item.notes || item.body || item.releaseNotes || item.changes);
+          return [version, note].filter(Boolean).join('\n');
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n\n');
+  }
+  if (value && typeof value === 'object') {
+    return normalizeReleaseNotes(value.note || value.notes || value.body || value.releaseNotes || value.changes);
+  }
+  return String(value || '').trim();
+}
+
+function releaseNotesFromUpdateInfo(info) {
+  return normalizeReleaseNotes(info?.releaseNotes || info?.releaseName || '');
+}
+
+async function fetchReleaseNotes(version) {
+  if (typeof fetch !== 'function') return '';
+  const url = new URL('release-notes.json', UPDATE_FEED_URL);
+  url.searchParams.set('v', String(version || app.getVersion()));
+  url.searchParams.set('t', String(Date.now()));
+  const response = await fetch(url.toString(), {
+    headers: { accept: 'application/json,text/plain;q=0.9,*/*;q=0.8' },
+  });
+  if (!response.ok) return '';
+  const text = await response.text();
+  if (!text.trim()) return '';
+  try {
+    const data = JSON.parse(text);
+    if (Array.isArray(data)) {
+      const found = data.find((item) => String(item?.version || '') === String(version || ''));
+      return normalizeReleaseNotes(found || data[0]);
+    }
+    if (data && typeof data === 'object') {
+      if (data.versions && version && data.versions[version]) return normalizeReleaseNotes(data.versions[version]);
+      if (data[version]) return normalizeReleaseNotes(data[version]);
+      return normalizeReleaseNotes(data);
+    }
+  } catch {
+    return text.trim();
+  }
+  return '';
+}
+
+function refreshReleaseNotes(version, fallback = '') {
+  const initial = normalizeReleaseNotes(fallback);
+  if (initial) setUpdateState({ releaseNotes: initial });
+  fetchReleaseNotes(version)
+    .then((notes) => {
+      if (notes) setUpdateState({ releaseNotes: notes });
+    })
+    .catch(() => {});
 }
 
 function modelInstallSnapshot() {
@@ -820,6 +894,7 @@ function configureAutoUpdater() {
     setUpdateState({
       status: 'checking',
       message: '正在检查更新...',
+      releaseNotes: '',
       progress: 0,
       canDownload: false,
       canInstall: false,
@@ -828,14 +903,17 @@ function configureAutoUpdater() {
   });
 
   autoUpdater.on('update-available', (info) => {
+    const latestVersion = info?.version || '';
     setUpdateState({
       status: 'available',
-      latestVersion: info?.version || '',
-      message: `发现新版本 ${info?.version || ''}`.trim(),
+      latestVersion,
+      message: `发现新版本 ${latestVersion}`.trim(),
+      releaseNotes: releaseNotesFromUpdateInfo(info),
       progress: 0,
       canDownload: true,
       canInstall: false,
     });
+    refreshReleaseNotes(latestVersion, info?.releaseNotes);
   });
 
   autoUpdater.on('update-not-available', (info) => {
@@ -843,6 +921,7 @@ function configureAutoUpdater() {
       status: 'not-available',
       latestVersion: info?.version || app.getVersion(),
       message: '当前已是最新版本',
+      releaseNotes: '',
       progress: 0,
       canDownload: false,
       canInstall: false,
@@ -860,14 +939,17 @@ function configureAutoUpdater() {
   });
 
   autoUpdater.on('update-downloaded', (info) => {
+    const latestVersion = info?.version || updateState.latestVersion;
     setUpdateState({
       status: 'downloaded',
-      latestVersion: info?.version || updateState.latestVersion,
-      message: '更新已下载，重启后install',
+      latestVersion,
+      message: '更新已下载，重启后安装',
+      releaseNotes: updateState.releaseNotes || releaseNotesFromUpdateInfo(info),
       progress: 100,
       canDownload: false,
       canInstall: true,
     });
+    refreshReleaseNotes(latestVersion, info?.releaseNotes);
   });
 
   autoUpdater.on('error', (err) => {
@@ -947,6 +1029,9 @@ async function loadSettings() {
       if (env.LLM_MODEL) merged.llmModel = env.LLM_MODEL;
       if (env.LLM_TEMPERATURE) merged.llmTemperature = Number(env.LLM_TEMPERATURE);
       if (env.LLM_PROVIDER) merged.llmProvider = normalizeLlmProviderKey(env.LLM_PROVIDER);
+      if (env.IMAGE_API_BASE_URL) merged.imageApiBaseUrl = env.IMAGE_API_BASE_URL;
+      if (env.IMAGE_API_KEY) merged.imageApiKey = env.IMAGE_API_KEY;
+      if (env.IMAGE_MODEL) merged.imageModel = env.IMAGE_MODEL;
     } catch {
       // ignore malformed .env
     }
@@ -966,7 +1051,6 @@ async function loadSettings() {
   merged.llmProvider = normalizeLlmProviderKey(merged.llmProvider);
   if (!merged.llmApiBaseUrl) merged.llmApiBaseUrl = DEFAULT_SETTINGS.llmApiBaseUrl;
   if (!Number.isFinite(Number(merged.llmTemperature))) merged.llmTemperature = DEFAULT_SETTINGS.llmTemperature;
-
   return merged;
 }
 
@@ -1003,6 +1087,9 @@ async function syncSkillEnv(settings) {
     current.LLM_TEMPERATURE = String(
       Number.isFinite(Number(settings.llmTemperature)) ? Number(settings.llmTemperature) : DEFAULT_SETTINGS.llmTemperature,
     );
+    current.IMAGE_API_BASE_URL = String(settings.imageApiBaseUrl || '');
+    current.IMAGE_API_KEY = String(settings.imageApiKey || settings.llmApiKey || '');
+    current.IMAGE_MODEL = String(settings.imageModel || '');
 
     const ordered = [
       'VOLCENGINE_API_KEY',
@@ -1017,6 +1104,9 @@ async function syncSkillEnv(settings) {
       'LLM_API_KEY',
       'LLM_MODEL',
       'LLM_TEMPERATURE',
+      'IMAGE_API_BASE_URL',
+      'IMAGE_API_KEY',
+      'IMAGE_MODEL',
       'DEFAULT_OUTPUT_DIR',
       'CUT_MIN_DELETE_MS',
       'CUT_EXPORT_QUALITY',
@@ -1033,32 +1123,46 @@ async function syncSkillEnv(settings) {
   }
 }
 
-async function saveSettings(nextSettings) {
+async function saveSettings(nextSettings = {}) {
+  let current = {};
+  try {
+    if (fs.existsSync(getSettingsFilePath())) {
+      current = JSON.parse(await fsp.readFile(getSettingsFilePath(), 'utf8'));
+    }
+  } catch {
+    current = {};
+  }
+  const source = { ...DEFAULT_SETTINGS, ...current, ...nextSettings };
   const normalized = {
     ...DEFAULT_SETTINGS,
+    ...current,
     ...nextSettings,
-    asrEngine: ['volcengine', 'aliyun_qwen', 'local'].includes(nextSettings.asrEngine)
-      ? nextSettings.asrEngine
+    asrEngine: ['volcengine', 'aliyun_qwen', 'local'].includes(source.asrEngine)
+      ? source.asrEngine
       : DEFAULT_SETTINGS.asrEngine,
-    volcengineApiKey: String(nextSettings.volcengineApiKey || '').trim(),
-    dashscopeApiKey: String(nextSettings.dashscopeApiKey || '').trim(),
-    silenceThresholdSec: Number(nextSettings.silenceThresholdSec) >= 0.2
-      ? Number(nextSettings.silenceThresholdSec)
+    volcengineApiKey: String(source.volcengineApiKey || '').trim(),
+    dashscopeApiKey: String(source.dashscopeApiKey || '').trim(),
+    silenceThresholdSec: Number(source.silenceThresholdSec) >= 0.2
+      ? Number(source.silenceThresholdSec)
       : 0.2,
-    exportQuality: normalizeExportQuality(nextSettings.exportQuality),
+    exportQuality: normalizeExportQuality(source.exportQuality),
     exportQualityMigratedToUltra: true,
-    localWhisperModel: normalizeWhisperModelKey(nextSettings.localWhisperModel),
-    localWhisperModelPath: String(nextSettings.localWhisperModelPath || '').trim(),
-    themeMode: normalizeThemeMode(nextSettings.themeMode),
-    llmProvider: normalizeLlmProviderKey(nextSettings.llmProvider),
-    llmApiBaseUrl: String(nextSettings.llmApiBaseUrl || DEFAULT_SETTINGS.llmApiBaseUrl).trim() || DEFAULT_SETTINGS.llmApiBaseUrl,
-    llmApiKey: String(nextSettings.llmApiKey || '').trim(),
-    llmModel: String(nextSettings.llmModel || '').trim(),
-    llmTemperature: Number.isFinite(Number(nextSettings.llmTemperature))
-      ? Math.max(0, Math.min(1.5, Number(nextSettings.llmTemperature)))
+    localWhisperModel: normalizeWhisperModelKey(source.localWhisperModel),
+    localWhisperModelPath: String(source.localWhisperModelPath || '').trim(),
+    themeMode: normalizeThemeMode(source.themeMode),
+    llmProvider: normalizeLlmProviderKey(source.llmProvider),
+    llmApiBaseUrl: String(source.llmApiBaseUrl || DEFAULT_SETTINGS.llmApiBaseUrl).trim() || DEFAULT_SETTINGS.llmApiBaseUrl,
+    llmApiKey: String(source.llmApiKey || '').trim(),
+    llmModel: String(source.llmModel || '').trim(),
+    llmTemperature: Number.isFinite(Number(source.llmTemperature))
+      ? Math.max(0, Math.min(1.5, Number(source.llmTemperature)))
       : DEFAULT_SETTINGS.llmTemperature,
-    remoteUploadEndpoint: String(nextSettings.remoteUploadEndpoint || DEFAULT_SETTINGS.remoteUploadEndpoint).trim(),
-    remoteUploadToken: String(nextSettings.remoteUploadToken || DEFAULT_SETTINGS.remoteUploadToken).trim(),
+    imageApiBaseUrl: String(source.imageApiBaseUrl || '').trim(),
+    imageApiKey: String(source.imageApiKey || '').trim(),
+    imageModel: String(source.imageModel || '').trim(),
+    closeBehavior: ['tray', 'exit'].includes(source.closeBehavior) ? source.closeBehavior : DEFAULT_SETTINGS.closeBehavior,
+    remoteUploadEndpoint: String(source.remoteUploadEndpoint || DEFAULT_SETTINGS.remoteUploadEndpoint).trim(),
+    remoteUploadToken: String(source.remoteUploadToken || DEFAULT_SETTINGS.remoteUploadToken).trim(),
   };
 
   await ensureDir(path.dirname(getSettingsFilePath()));
@@ -2145,6 +2249,111 @@ async function runWorkflow(input) {
   });
 }
 
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createMainWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function createTray() {
+  if (tray && !tray.isDestroyed?.()) return true;
+  try {
+    tray = new Tray(getAppIconPath());
+    tray.setToolTip(APP_NAME);
+    tray.setContextMenu(Menu.buildFromTemplate([
+      {
+        label: '打开 Jaygo Cut',
+        click: () => showMainWindow(),
+      },
+      { type: 'separator' },
+      {
+        label: '退出',
+        click: () => {
+          isQuitting = true;
+          app.quit();
+        },
+      },
+    ]));
+    tray.on('double-click', () => showMainWindow());
+    tray.on('click', () => showMainWindow());
+    return true;
+  } catch (err) {
+    console.warn('Failed to create tray:', err.message);
+    tray = null;
+    return false;
+  }
+}
+
+async function rememberCloseBehavior(closeBehavior) {
+  const settings = await loadSettings();
+  await saveSettings({ ...settings, closeBehavior });
+}
+
+async function handleMainWindowClose(event) {
+  if (isQuitting) return;
+  event.preventDefault();
+  if (isHandlingMainWindowClose) return;
+  isHandlingMainWindowClose = true;
+  try {
+    const settings = await loadSettings();
+    if (settings.closeBehavior === 'exit') {
+      isQuitting = true;
+      app.quit();
+      return;
+    }
+    if (settings.closeBehavior === 'tray') {
+      if (createTray()) {
+        mainWindow.hide();
+      } else {
+        isQuitting = true;
+        app.quit();
+      }
+      return;
+    }
+
+    const result = await dialog.showMessageBox(mainWindow, {
+      type: 'question',
+      title: APP_NAME,
+      message: '关闭窗口后要如何处理？',
+      detail: '你的选择会被永久记住。以后可以从系统托盘菜单退出应用。',
+      buttons: ['在托盘继续运行', '直接退出', '取消'],
+      defaultId: 0,
+      cancelId: 2,
+      noLink: true,
+    });
+
+    if (result.response === 2) return;
+    if (result.response === 0) {
+      await rememberCloseBehavior('tray');
+      if (createTray()) {
+        mainWindow.hide();
+      } else {
+        await dialog.showMessageBox(mainWindow, {
+          type: 'warning',
+          title: APP_NAME,
+          message: '托盘初始化失败，本次将直接退出应用。',
+          buttons: ['确定'],
+          noLink: true,
+        });
+        await rememberCloseBehavior('exit');
+        isQuitting = true;
+        app.quit();
+      }
+      return;
+    }
+
+    await rememberCloseBehavior('exit');
+    isQuitting = true;
+    app.quit();
+  } finally {
+    isHandlingMainWindowClose = false;
+  }
+}
+
 function createMainWindow() {
   const iconPath = getAppIconPath();
   mainWindow = new BrowserWindow({
@@ -2165,6 +2374,13 @@ function createMainWindow() {
     mainWindow.setIcon(iconPath);
   } catch {}
   mainWindow.removeMenu();
+  mainWindow.on('close', (event) => {
+    handleMainWindowClose(event).catch((err) => {
+      console.error('Failed to handle main window close:', err);
+      isQuitting = true;
+      app.quit();
+    });
+  });
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 }
 
@@ -2445,9 +2661,14 @@ app.whenReady().then(async () => {
 });
 
 app.on('before-quit', () => {
+  isQuitting = true;
   cleanupReviewServer();
 });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('activate', () => {
+  showMainWindow();
 });

@@ -243,9 +243,9 @@ const html = `<!doctype html>
     }
     .floating-side {
       position: fixed;
-      top: 118px;
-      width: clamp(220px, 15vw, 280px);
-      max-height: calc(100vh - 138px);
+      top: 96px;
+      width: clamp(300px, 19vw, 380px);
+      max-height: calc(100vh - 116px);
       z-index: 1200;
       display: flex;
       opacity: 0;
@@ -254,11 +254,14 @@ const html = `<!doctype html>
       isolation: isolate;
     }
     .floating-side.left {
-      left: max(8px, calc((100vw - 1240px) / 2 - 294px));
+      left: max(8px, calc((100vw - 1240px) / 2 - 410px));
       transform: translateX(-8px);
     }
+    .floating-side.image-side {
+      width: clamp(340px, 24vw, 460px);
+    }
     .floating-side.right {
-      right: max(8px, calc((100vw - 1240px) / 2 - 294px));
+      right: max(8px, calc((100vw - 1240px) / 2 - 410px));
       transform: translateX(8px);
     }
     .floating-side.open {
@@ -268,7 +271,8 @@ const html = `<!doctype html>
     }
     .floating-toggle {
       position: fixed;
-      top: 150px;
+      --floating-toggle-top: 150px;
+      top: var(--floating-toggle-top);
       z-index: 1201;
       border-radius: 999px;
       padding: 7px 12px;
@@ -276,14 +280,20 @@ const html = `<!doctype html>
       border: 1px solid var(--border);
       background: color-mix(in oklab, var(--card-bg) 86%, var(--token-gap-bg) 14%);
       color: var(--text-main);
+      min-width: 92px;
+      text-align: center;
+      white-space: nowrap;
       box-shadow: 0 8px 18px rgba(15, 23, 42, 0.22);
       backdrop-filter: blur(4px);
     }
     .floating-toggle.left {
-      left: max(8px, calc((100vw - 1240px) / 2 - 294px));
+      left: max(8px, calc((100vw - 1240px) / 2 - 410px));
+    }
+    .floating-toggle.left.image-toggle {
+      top: calc(var(--floating-toggle-top) + 62px);
     }
     .floating-toggle.right {
-      right: max(8px, calc((100vw - 1240px) / 2 - 294px));
+      right: max(8px, calc((100vw - 1240px) / 2 - 410px));
     }
     .floating-toggle.active {
       background: var(--btn-primary-bg);
@@ -370,6 +380,70 @@ const html = `<!doctype html>
       overflow-y: auto;
       max-height: 88px;
     }
+    #imageCardList {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow-y: auto;
+      min-height: 260px;
+      padding-right: 2px;
+    }
+    .image-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px;
+      background: color-mix(in oklab, var(--card-bg) 88%, var(--token-gap-bg) 12%);
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+    .image-preview {
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      border-radius: 8px;
+      border: 1px dashed var(--border);
+      background: var(--log-bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      color: var(--text-muted);
+      font-size: 12px;
+      text-align: center;
+      padding: 8px;
+    }
+    .image-preview img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .image-card-title {
+      font-weight: 700;
+      font-size: 13px;
+      line-height: 1.35;
+      color: var(--text-main);
+    }
+    .image-card-prompt {
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--text-muted);
+      max-height: 72px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .image-card-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .image-card-actions button,
+    .image-card-actions a {
+      padding: 5px 8px;
+      font-size: 12px;
+      border-radius: 8px;
+    }
     .keyword-chip {
       border: 1px solid var(--border);
       border-radius: 999px;
@@ -451,6 +525,103 @@ const html = `<!doctype html>
     }
     .tool-actions {
       margin-bottom: 8px;
+    }
+    .export-actions select,
+    .export-actions input {
+      height: 34px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--input-bg);
+      color: var(--text-main);
+      padding: 5px 8px;
+      font-size: 13px;
+    }
+    .export-actions #jianyingTemplatePath {
+      flex: 1 1 260px;
+      min-width: 220px;
+    }
+    .replace-actions {
+      align-items: stretch;
+    }
+    .replace-actions input {
+      height: 34px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--input-bg);
+      color: var(--text-main);
+      padding: 5px 8px;
+      font-size: 13px;
+    }
+    .replace-actions #replaceFindText,
+    .replace-actions #replaceWithText {
+      flex: 1 1 180px;
+      min-width: 140px;
+    }
+    .replace-status {
+      min-width: 160px;
+      align-self: center;
+    }
+    .shortcut-help {
+      position: fixed;
+      inset: 0;
+      z-index: 40;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: rgba(2, 6, 23, 0.45);
+    }
+    .shortcut-help[hidden] {
+      display: none;
+    }
+    .shortcut-card {
+      width: min(620px, 96vw);
+      max-height: 86vh;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: var(--card-bg);
+      color: var(--text-main);
+      box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28);
+      padding: 18px;
+    }
+    .shortcut-card h3 {
+      margin: 0 0 12px;
+      font-size: 18px;
+    }
+    .shortcut-list {
+      display: grid;
+      gap: 8px;
+      margin: 0 0 14px;
+    }
+    .shortcut-item {
+      display: grid;
+      grid-template-columns: 160px 1fr;
+      gap: 12px;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .shortcut-item kbd {
+      justify-self: start;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 3px 8px;
+      background: var(--token-gap-bg);
+      color: var(--text-main);
+      font-weight: 700;
+      font-size: 12px;
+    }
+    .token.search-hit {
+      outline: 2px solid rgba(59, 130, 246, 0.72);
+      outline-offset: 1px;
+    }
+    .token.search-active {
+      outline: 3px solid rgba(245, 158, 11, 0.92);
+      outline-offset: 2px;
+    }
+    .token.text-empty {
+      opacity: 0.35;
     }
     .primary-actions {
       margin-top: 10px;
@@ -720,10 +891,16 @@ const html = `<!doctype html>
     }
     @media (max-width: 1600px) {
       .floating-side {
-        width: 240px;
+        width: 300px;
+      }
+      .floating-side.image-side {
+        width: 340px;
       }
       .floating-toggle.left {
         left: 10px;
+      }
+      .floating-toggle.left.image-toggle {
+        top: calc(var(--floating-toggle-top) + 62px);
       }
       .floating-toggle.right {
         right: 10px;
@@ -734,10 +911,13 @@ const html = `<!doctype html>
         height: clamp(480px, 72vh, 900px);
       }
       .floating-side {
-        width: min(46vw, 300px);
+        width: min(56vw, 380px);
         max-height: 46vh;
         top: auto;
         bottom: 10px;
+      }
+      .floating-side.image-side {
+        width: min(62vw, 430px);
       }
       .floating-side.left {
         left: 10px;
@@ -746,7 +926,11 @@ const html = `<!doctype html>
         right: 10px;
       }
       .floating-toggle {
-        top: 110px;
+        --floating-toggle-top: 110px;
+        top: var(--floating-toggle-top);
+      }
+      .floating-toggle.left.image-toggle {
+        top: calc(var(--floating-toggle-top) + 62px);
       }
       .floating-toggle.left {
         left: 10px;
@@ -774,6 +958,7 @@ const html = `<!doctype html>
         <button id="btnPlay" class="primary">播放/暂停</button>
         <button id="btnClear">清空选择</button>
         <button id="btnCut" class="warn">执行裁剪</button>
+        <button id="btnShortcutHelp" type="button">快捷键指南</button>
         <span id="status" class="status">就绪</span>
         <span class="meta" id="selectionStats"></span>
       </div>
@@ -786,6 +971,30 @@ const html = `<!doctype html>
           <button id="btnLlmMark">LLM标记</button>
           <button id="btnApplyLlm">应用LLM建议</button>
           <button id="btnClearLlm">清除LLM标记</button>
+        </div>
+        <div class="row tool-actions export-actions">
+          <span class="meta">导出字幕</span>
+          <button id="btnExportSrt" type="button">导出 SRT（剪映）</button>
+          <button id="btnExportTxt" type="button">导出 TXT 文案</button>
+          <select id="jianyingSubtitlePreset" title="剪映草稿内置字幕样式">
+            <option value="clean" selected>清爽白字</option>
+            <option value="blackgold">黑金大字</option>
+            <option value="variety">综艺描边</option>
+            <option value="soft">柔和橙底</option>
+          </select>
+          <input id="jianyingTemplatePath" type="text" placeholder="自己的字幕模板草稿目录（可选）" title="填写一个剪映草稿文件夹路径，Jaygo Cut 会读取其中第一条字幕样式" />
+          <button id="btnExportJianyingDraft" type="button">导出剪映草稿</button>
+          <span id="exportStatus" class="meta"></span>
+        </div>
+        <div class="row tool-actions replace-actions">
+          <span class="meta">文本纠错</span>
+          <input id="replaceFindText" type="text" placeholder="搜索错词/人称，如 他" autocomplete="off" />
+          <input id="replaceWithText" type="text" placeholder="替换为，如 她" autocomplete="off" />
+          <button id="btnFindPrev" type="button">上一个</button>
+          <button id="btnFindNext" type="button">下一个</button>
+          <button id="btnReplaceOne" type="button">替换当前</button>
+          <button id="btnReplaceAll" type="button">全部替换</button>
+          <span id="replaceStatus" class="meta replace-status"></span>
         </div>
         <div class="row compact-row boundary-row">
           <span class="meta">边界精修</span>
@@ -817,6 +1026,27 @@ const html = `<!doctype html>
       </details>
     </div>
 
+    <div id="shortcutHelp" class="shortcut-help" hidden>
+      <div class="shortcut-card" role="dialog" aria-modal="true" aria-labelledby="shortcutHelpTitle">
+        <h3 id="shortcutHelpTitle">快捷键指南</h3>
+        <div class="shortcut-list">
+          <div class="shortcut-item"><kbd>Space</kbd><span>播放 / 暂停</span></div>
+          <div class="shortcut-item"><kbd>双击文字</kbd><span>标记删除 / 取消删除</span></div>
+          <div class="shortcut-item"><kbd>拖动文字</kbd><span>连续标记或连续取消，适合处理整句</span></div>
+          <div class="shortcut-item"><kbd>Ctrl + Z</kbd><span>撤回上一步，可连续撤回多步</span></div>
+          <div class="shortcut-item"><kbd>Ctrl + Y</kbd><span>重做刚撤回的操作</span></div>
+          <div class="shortcut-item"><kbd>Ctrl + Shift + Z</kbd><span>重做刚撤回的操作</span></div>
+          <div class="shortcut-item"><kbd>Ctrl + F</kbd><span>聚焦文本纠错搜索框</span></div>
+          <div class="shortcut-item"><kbd>Enter</kbd><span>在搜索框内跳到下一个匹配</span></div>
+          <div class="shortcut-item"><kbd>Shift + Enter</kbd><span>在搜索框内跳到上一个匹配</span></div>
+          <div class="shortcut-item"><kbd>Ctrl + S</kbd><span>立即保存审核草稿</span></div>
+          <div class="shortcut-item"><kbd>Esc</kbd><span>关闭浮窗或快捷键指南</span></div>
+          <div class="shortcut-item"><kbd>鼠标滚轮</kbd><span>在波形上滚动可缩放波形</span></div>
+        </div>
+        <button id="btnCloseShortcutHelp" type="button">我知道了</button>
+      </div>
+    </div>
+
     <div class="card content-card">
       <div id="contentViewport">
         <div id="content"></div>
@@ -830,6 +1060,7 @@ const html = `<!doctype html>
   </div>
 
   <button id="btnToggleLeftPanel" class="floating-toggle left" type="button">发布建议</button>
+  <button id="btnToggleImagePanel" class="floating-toggle left image-toggle" type="button">视频配图</button>
   <button id="btnToggleRightPanel" class="floating-toggle right" type="button">LLM对话</button>
 
   <aside class="side-panel floating-side left">
@@ -861,6 +1092,76 @@ const html = `<!doctype html>
       <div class="panel-title">关键词</div>
       <div id="publishKeywords"></div>
     </div>
+  </aside>
+
+  <aside class="side-panel floating-side left image-side">
+    <div class="panel-header">
+      <span>视频配图</span>
+      <div class="panel-actions">
+        <button id="btnGenerateImages">生成配图</button>
+        <button id="btnDownloadImages" disabled>批量下载</button>
+        <button id="btnCloseImagePanel" class="panel-close" type="button">收起</button>
+      </div>
+    </div>
+    <div class="row compact-row">
+      <span class="meta">数量</span>
+      <select id="imageCount">
+        <option value="6">6 张</option>
+        <option value="8" selected>8 张</option>
+        <option value="10">10 张</option>
+        <option value="12">12 张</option>
+      </select>
+    </div>
+    <div class="row compact-row">
+      <span class="meta">比例</span>
+      <select id="imageAspect">
+        <option value="1:1" selected>1:1 正方形，头像</option>
+        <option value="2:3">2:3 社交媒体，自拍</option>
+        <option value="3:4">3:4 经典比例，拍照</option>
+        <option value="4:3">4:3 文章配图，插画</option>
+        <option value="9:16">9:16 手机壁纸，人像</option>
+        <option value="16:9">16:9 桌面壁纸，风景</option>
+      </select>
+    </div>
+    <div class="row compact-row">
+      <span class="meta">风格</span>
+      <select id="imageStyle">
+        <option value="人像摄影，真实镜头，高级布光，统一人物服饰和场景质感">人像摄影</option>
+        <option value="电影写真，电影级光影，浅景深，统一角色造型和环境氛围">电影写真</option>
+        <option value="中国风，东方审美，国风色彩，统一人物服饰与中式场景">中国风</option>
+        <option value="动漫，清晰线稿，赛璐璐上色，统一角色设定和分镜节奏">动漫</option>
+        <option value="3D渲染，柔和材质，精致角色模型，统一场景和光线">3D渲染</option>
+        <option value="赛博朋克，霓虹光影，未来城市，统一高对比色彩系统">赛博朋克</option>
+        <option value="CG 动画，电影动画质感，统一角色设计，清晰动作表演">CG 动画</option>
+        <option value="水墨画，留白构图，墨色层次，东方场景和人物气韵">水墨画</option>
+        <option value="油画，厚涂笔触，古典光影，统一色调和人物服饰">油画</option>
+        <option value="古典，古典肖像与场景，柔和光线，复古服饰和空间">古典</option>
+        <option value="水彩画，透明水彩，轻盈纸张肌理，统一柔和色彩">水彩画</option>
+        <option value="卡通，明快造型，统一可爱角色，干净背景">卡通</option>
+        <option value="平面插画，简洁几何，统一色板，适合知识视频">平面插画</option>
+        <option value="风景，环境叙事，统一自然光线和场景气氛">风景</option>
+        <option value="港风动漫，复古港片色彩，漫画线条，统一人物造型">港风动漫</option>
+        <option value="像素风格，复古像素艺术，统一色板和人物轮廓">像素风格</option>
+        <option value="荧光绘画，霓虹色彩，发光边缘，统一暗背景">荧光绘画</option>
+        <option value="彩铅画，纸张纹理，温暖克制色彩，统一人物和服饰" selected>彩铅画</option>
+        <option value="手办，精致玩具质感，微缩场景，统一角色模型">手办</option>
+        <option value="儿童绘画，童趣线条，柔和色彩，统一简单场景">儿童绘画</option>
+        <option value="抽象，形状与色块表达主题，统一视觉符号">抽象</option>
+        <option value="锐笔插画，锋利线条，高级构图，统一角色与场景">锐笔插画</option>
+        <option value="二次元，日系角色，细腻线条，统一发型服饰">二次元</option>
+        <option value="油墨印刷，粗颗粒印刷肌理，复古色彩，统一版画感">油墨印刷</option>
+        <option value="版画，木刻线条，高对比黑白或套色，统一纹理">版画</option>
+        <option value="莫奈，印象派光影，柔和笔触，统一色彩空气感">莫奈</option>
+        <option value="毕加索，立体主义构成，统一几何人物和空间">毕加索</option>
+        <option value="伦勃朗，古典明暗对照，深色背景，统一肖像光线">伦勃朗</option>
+        <option value="马蒂斯，鲜明色块，装饰性构图，统一平面色彩">马蒂斯</option>
+        <option value="巴洛克，戏剧化光影，华丽服饰，统一古典空间">巴洛克</option>
+        <option value="复古动漫，胶片颗粒，老动画色彩，统一角色造型">复古动漫</option>
+        <option value="绘本，温暖故事插画，纸张肌理，统一人物和场景">绘本</option>
+      </select>
+    </div>
+    <div id="imageStatus" class="meta">点击“生成配图”后，会先规划配图点，再逐张调用图片 API 生成预览。</div>
+    <div id="imageCardList"></div>
   </aside>
 
   <aside class="side-panel floating-side right">
@@ -910,18 +1211,44 @@ const html = `<!doctype html>
     const btnApplyLlm = document.getElementById('btnApplyLlm');
     const btnClearLlm = document.getElementById('btnClearLlm');
     const btnCut = document.getElementById('btnCut');
+    const btnExportSrt = document.getElementById('btnExportSrt');
+    const btnExportTxt = document.getElementById('btnExportTxt');
+    const btnExportJianyingDraft = document.getElementById('btnExportJianyingDraft');
+    const jianyingSubtitlePresetEl = document.getElementById('jianyingSubtitlePreset');
+    const jianyingTemplatePathEl = document.getElementById('jianyingTemplatePath');
+    const exportStatusEl = document.getElementById('exportStatus');
+    const replaceFindTextEl = document.getElementById('replaceFindText');
+    const replaceWithTextEl = document.getElementById('replaceWithText');
+    const btnFindPrev = document.getElementById('btnFindPrev');
+    const btnFindNext = document.getElementById('btnFindNext');
+    const btnReplaceOne = document.getElementById('btnReplaceOne');
+    const btnReplaceAll = document.getElementById('btnReplaceAll');
+    const replaceStatusEl = document.getElementById('replaceStatus');
+    const btnShortcutHelp = document.getElementById('btnShortcutHelp');
+    const shortcutHelpEl = document.getElementById('shortcutHelp');
+    const btnCloseShortcutHelp = document.getElementById('btnCloseShortcutHelp');
     const leftPanelEl = document.querySelector('.floating-side.left');
     const rightPanelEl = document.querySelector('.floating-side.right');
+    const imagePanelEl = document.querySelector('.floating-side.image-side');
     const btnToggleLeftPanel = document.getElementById('btnToggleLeftPanel');
+    const btnToggleImagePanel = document.getElementById('btnToggleImagePanel');
     const btnToggleRightPanel = document.getElementById('btnToggleRightPanel');
     const btnCloseLeftPanel = document.getElementById('btnCloseLeftPanel');
+    const btnCloseImagePanel = document.getElementById('btnCloseImagePanel');
     const btnCloseRightPanel = document.getElementById('btnCloseRightPanel');
     const btnGeneratePublish = document.getElementById('btnGeneratePublish');
+    const btnGenerateImages = document.getElementById('btnGenerateImages');
+    const btnDownloadImages = document.getElementById('btnDownloadImages');
     const publishStyleEl = document.getElementById('publishStyle');
     const publishStatusEl = document.getElementById('publishStatus');
     const publishTitlesListEl = document.getElementById('publishTitlesList');
     const publishDescriptionEl = document.getElementById('publishDescription');
     const publishKeywordsEl = document.getElementById('publishKeywords');
+    const imageCountEl = document.getElementById('imageCount');
+    const imageAspectEl = document.getElementById('imageAspect');
+    const imageStyleEl = document.getElementById('imageStyle');
+    const imageStatusEl = document.getElementById('imageStatus');
+    const imageCardListEl = document.getElementById('imageCardList');
     const llmChatHistoryEl = document.getElementById('llmChatHistory');
     const llmChatInputEl = document.getElementById('llmChatInput');
     const btnLlmChatSend = document.getElementById('btnLlmChatSend');
@@ -930,6 +1257,12 @@ const html = `<!doctype html>
 
     const selected = new Set(AUTO);
     const autoSet = new Set(AUTO);
+    const originalTexts = WORDS.map((w) => String((w && !w.isGap ? w.text : '') || ''));
+    const textOverrides = new Map();
+    let searchMatches = [];
+    let activeSearchMatch = -1;
+    let searchHitIndices = new Set();
+    let searchActiveIndices = new Set();
     const DEFAULT_BOUNDARY = {
       speechLeadMs: 45,
       speechTailMs: 90,
@@ -1084,13 +1417,17 @@ const html = `<!doctype html>
     let waveStaticKey = '';
     let publishLoading = false;
     let llmChatSubmitting = false;
+    let imageGenerating = false;
+    let imageItems = [];
     let isProgrammaticScroll = false;
     let programmaticScrollTimer = null;
     let lastUserScrollAt = 0;
     let suppressAutoFollowUntil = 0;
     const chatMessages = [];
     const selectionUndoStack = [];
+    const selectionRedoStack = [];
     let leftPanelOpen = false;
+    let imagePanelOpen = false;
     let rightPanelOpen = false;
 
     function setStatus(msg) {
@@ -1116,51 +1453,54 @@ const html = `<!doctype html>
       qualityWarningsEl.textContent = '转录质量提醒：' + warnings.join('；');
     }
 
+    function syncFloatingToggles() {
+      const anyLeftPanelOpen = leftPanelOpen || imagePanelOpen;
+      if (btnToggleLeftPanel) {
+        btnToggleLeftPanel.classList.toggle('active', leftPanelOpen);
+        btnToggleLeftPanel.classList.toggle('hidden', anyLeftPanelOpen);
+        btnToggleLeftPanel.textContent = '发布建议';
+      }
+      if (btnToggleImagePanel) {
+        btnToggleImagePanel.classList.toggle('active', imagePanelOpen);
+        btnToggleImagePanel.classList.toggle('hidden', anyLeftPanelOpen);
+        btnToggleImagePanel.textContent = '视频配图';
+      }
+      if (btnToggleRightPanel) {
+        btnToggleRightPanel.classList.toggle('active', rightPanelOpen);
+        btnToggleRightPanel.classList.toggle('hidden', rightPanelOpen);
+        btnToggleRightPanel.textContent = 'LLM对话';
+      }
+    }
+
     function setPanelOpen(side, open) {
-      const isLeft = side === 'left';
-      if (isLeft) {
-        leftPanelOpen = !!open;
-        if (leftPanelEl) leftPanelEl.classList.toggle('open', leftPanelOpen);
-        if (btnToggleLeftPanel) {
-          btnToggleLeftPanel.classList.toggle('active', leftPanelOpen);
-          btnToggleLeftPanel.classList.toggle('hidden', leftPanelOpen);
-          btnToggleLeftPanel.textContent = '发布建议';
-        }
-        if (leftPanelOpen) {
+      if (side === 'image') {
+        imagePanelOpen = !!open;
+        if (imagePanelOpen) {
+          leftPanelOpen = false;
           rightPanelOpen = false;
-          if (rightPanelEl) rightPanelEl.classList.remove('open');
-          if (btnToggleRightPanel) {
-            btnToggleRightPanel.classList.remove('active');
-            btnToggleRightPanel.classList.remove('hidden');
-            btnToggleRightPanel.textContent = 'LLM对话';
-          }
-        } else if (btnToggleLeftPanel) {
-          btnToggleLeftPanel.classList.remove('hidden');
+        }
+      } else if (side === 'left') {
+        leftPanelOpen = !!open;
+        if (leftPanelOpen) {
+          imagePanelOpen = false;
+          rightPanelOpen = false;
         }
       } else {
         rightPanelOpen = !!open;
-        if (rightPanelEl) rightPanelEl.classList.toggle('open', rightPanelOpen);
-        if (btnToggleRightPanel) {
-          btnToggleRightPanel.classList.toggle('active', rightPanelOpen);
-          btnToggleRightPanel.classList.toggle('hidden', rightPanelOpen);
-          btnToggleRightPanel.textContent = 'LLM对话';
-        }
         if (rightPanelOpen) {
           leftPanelOpen = false;
-          if (leftPanelEl) leftPanelEl.classList.remove('open');
-          if (btnToggleLeftPanel) {
-            btnToggleLeftPanel.classList.remove('active');
-            btnToggleLeftPanel.classList.remove('hidden');
-            btnToggleLeftPanel.textContent = '发布建议';
-          }
-        } else if (btnToggleRightPanel) {
-          btnToggleRightPanel.classList.remove('hidden');
+          imagePanelOpen = false;
         }
       }
+      if (leftPanelEl) leftPanelEl.classList.toggle('open', leftPanelOpen);
+      if (imagePanelEl) imagePanelEl.classList.toggle('open', imagePanelOpen);
+      if (rightPanelEl) rightPanelEl.classList.toggle('open', rightPanelOpen);
+      syncFloatingToggles();
     }
 
     function closePanels() {
       setPanelOpen('left', false);
+      setPanelOpen('image', false);
       setPanelOpen('right', false);
     }
 
@@ -1210,6 +1550,25 @@ const html = `<!doctype html>
       if (publishStyleEl) publishStyleEl.disabled = publishLoading;
     }
 
+    function setImageStatus(text) {
+      if (!imageStatusEl) return;
+      imageStatusEl.textContent = String(text || '');
+    }
+
+    function setImageGenerating(next) {
+      imageGenerating = !!next;
+      if (btnGenerateImages) {
+        btnGenerateImages.disabled = imageGenerating;
+        btnGenerateImages.textContent = imageGenerating ? '生成中...' : '生成配图';
+      }
+      if (btnDownloadImages) {
+        btnDownloadImages.disabled = imageGenerating || !imageItems.some((item) => item?.image?.url);
+      }
+      if (imageCountEl) imageCountEl.disabled = imageGenerating;
+      if (imageAspectEl) imageAspectEl.disabled = imageGenerating;
+      if (imageStyleEl) imageStyleEl.disabled = imageGenerating;
+    }
+
     function setLlmChatSubmitting(next) {
       llmChatSubmitting = !!next;
       if (btnLlmChatSend) {
@@ -1217,6 +1576,39 @@ const html = `<!doctype html>
         btnLlmChatSend.textContent = llmChatSubmitting ? '处理中...' : '发送并调整';
       }
       if (llmChatInputEl) llmChatInputEl.disabled = llmChatSubmitting;
+    }
+
+    function getWordText(index) {
+      const idx = Number(index);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= WORDS.length) return '';
+      if (textOverrides.has(idx)) return textOverrides.get(idx);
+      const w = WORDS[idx] || {};
+      return w.isGap ? '' : String(w.text || '');
+    }
+
+    function setWordText(index, nextText) {
+      const idx = Number(index);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= WORDS.length) return false;
+      const w = WORDS[idx];
+      if (!w || w.isGap) return false;
+      const value = String(nextText || '').slice(0, 80);
+      w.text = value;
+      if (value === originalTexts[idx]) textOverrides.delete(idx);
+      else textOverrides.set(idx, value);
+      return true;
+    }
+
+    function replaceTextOverrideEntries(entries) {
+      textOverrides.clear();
+      for (let i = 0; i < WORDS.length; i += 1) {
+        if (WORDS[i] && !WORDS[i].isGap) WORDS[i].text = originalTexts[i] || '';
+      }
+      for (const pair of entries || []) {
+        if (!Array.isArray(pair) || pair.length < 2) continue;
+        const idx = Number(pair[0]);
+        if (!Number.isInteger(idx) || idx < 0 || idx >= WORDS.length) continue;
+        setWordText(idx, pair[1]);
+      }
     }
 
     function syncUndoButton() {
@@ -1231,6 +1623,7 @@ const html = `<!doctype html>
         llmReasonEntries: Array.from(llmReasonByIndex.entries()),
         llmPunctEntries: Array.from(llmPunctByIndex.entries()),
         llmParagraphAfter: Array.from(llmParagraphAfterIndex),
+        textOverrideEntries: Array.from(textOverrides.entries()),
         llmTopic,
         llmOutline,
         llmMultiSpeaker,
@@ -1239,7 +1632,8 @@ const html = `<!doctype html>
 
     function pushSelectionUndo() {
       selectionUndoStack.push(snapshotSelectionState());
-      while (selectionUndoStack.length > 20) selectionUndoStack.shift();
+      while (selectionUndoStack.length > 80) selectionUndoStack.shift();
+      selectionRedoStack.length = 0;
       syncUndoButton();
     }
 
@@ -1253,6 +1647,7 @@ const html = `<!doctype html>
       llmTopic = '';
       llmOutline = '';
       llmMultiSpeaker = false;
+      replaceTextOverrideEntries(snapshot.textOverrideEntries || []);
       for (const i of snapshot.selected) {
         const idx = Number(i);
         if (Number.isInteger(idx) && idx >= 0 && idx < WORDS.length) selected.add(idx);
@@ -1294,6 +1689,8 @@ const html = `<!doctype html>
     function undoLastSelectionChange(source) {
       if (!selectionUndoStack.length) return false;
       const snapshot = selectionUndoStack.pop();
+      selectionRedoStack.push(snapshotSelectionState());
+      while (selectionRedoStack.length > 80) selectionRedoStack.shift();
       restoreSelectionState(snapshot);
       syncUndoButton();
       if (source === 'chat') {
@@ -1303,6 +1700,18 @@ const html = `<!doctype html>
         setStatus('已撤回上一步标记');
         setTimeout(refreshIdleStatus, 1000);
       }
+      return true;
+    }
+
+    function redoLastSelectionChange() {
+      if (!selectionRedoStack.length) return false;
+      const snapshot = selectionRedoStack.pop();
+      selectionUndoStack.push(snapshotSelectionState());
+      while (selectionUndoStack.length > 80) selectionUndoStack.shift();
+      restoreSelectionState(snapshot);
+      syncUndoButton();
+      setStatus('已重做上一步操作');
+      setTimeout(refreshIdleStatus, 1000);
       return true;
     }
 
@@ -1378,6 +1787,416 @@ const html = `<!doctype html>
       }
     }
 
+    function renderImageCards() {
+      if (!imageCardListEl) return;
+      imageCardListEl.innerHTML = '';
+      const previewRatio = String(imageAspectEl?.value || '1:1').replace(':', ' / ');
+      if (!imageItems.length) {
+        const empty = document.createElement('div');
+        empty.className = 'meta';
+        empty.textContent = '暂无配图点。点击“生成配图”后会显示图片预览。';
+        imageCardListEl.appendChild(empty);
+      } else {
+        imageItems.forEach((item, index) => {
+          const card = document.createElement('div');
+          card.className = 'image-card';
+          const preview = document.createElement('div');
+          preview.className = 'image-preview';
+          preview.style.aspectRatio = previewRatio;
+          if (item.image && item.image.url) {
+            const img = document.createElement('img');
+            img.src = item.image.url;
+            img.alt = item.title || '视频配图';
+            preview.appendChild(img);
+          } else {
+            preview.textContent = item.status === 'error'
+              ? ('生成失败：' + (item.error || '未知错误'))
+              : (item.status === 'generating' ? '正在生成图片...' : '等待生成');
+          }
+
+          const title = document.createElement('div');
+          title.className = 'image-card-title';
+          title.textContent = (index + 1) + '. [' + (item.timeRange || '-') + '] ' + (item.title || '视频配图');
+
+          const purpose = document.createElement('div');
+          purpose.className = 'meta';
+          purpose.textContent = (item.purpose || '视频配图') + (item.textBasis ? (' | 依据：' + item.textBasis) : '');
+
+          const scene = document.createElement('div');
+          scene.className = 'image-card-prompt';
+          scene.textContent = [
+            item.directorIntent ? ('导演意图：' + item.directorIntent) : '',
+            item.sceneStory ? ('画面故事：' + item.sceneStory) : '',
+            item.camera ? ('镜头构图：' + item.camera) : '',
+          ].filter(Boolean).join('\\n');
+
+          const prompt = document.createElement('div');
+          prompt.className = 'image-card-prompt';
+          prompt.textContent = item.prompt || '';
+
+          const actions = document.createElement('div');
+          actions.className = 'image-card-actions';
+          const retryBtn = document.createElement('button');
+          retryBtn.type = 'button';
+          retryBtn.textContent = item.status === 'generating' ? '生成中...' : '重试';
+          retryBtn.disabled = item.status === 'generating' || imageGenerating;
+          retryBtn.dataset.imageRetry = String(index);
+          actions.appendChild(retryBtn);
+
+          const copyBtn = document.createElement('button');
+          copyBtn.type = 'button';
+          copyBtn.textContent = '复制提示词';
+          copyBtn.dataset.imageCopy = String(index);
+          actions.appendChild(copyBtn);
+
+          if (item.image && item.image.url) {
+            const link = document.createElement('a');
+            link.href = item.image.url;
+            link.download = ((item.title || item.id || 'image') + '.png').replace(/[\\/:*?"<>|]+/g, '_');
+            link.textContent = '下载';
+            actions.appendChild(link);
+          }
+
+          card.appendChild(preview);
+          card.appendChild(title);
+          card.appendChild(purpose);
+          if (scene.textContent) card.appendChild(scene);
+          card.appendChild(prompt);
+          card.appendChild(actions);
+          imageCardListEl.appendChild(card);
+        });
+      }
+      setImageGenerating(imageGenerating);
+    }
+
+    function downloadGeneratedImages() {
+      const files = imageItems.filter((item) => item?.image?.url);
+      if (!files.length) {
+        setImageStatus('暂无可下载图片');
+        return;
+      }
+      files.forEach((item, index) => {
+        setTimeout(() => {
+          const a = document.createElement('a');
+          a.href = item.image.url;
+          a.download = ((item.title || item.id || ('image_' + (index + 1))) + '.png').replace(/[\\/:*?"<>|]+/g, '_');
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+        }, index * 180);
+      });
+      setImageStatus('已触发批量下载：' + files.length + ' 张');
+    }
+
+    function setExportStatus(text) {
+      if (!exportStatusEl) return;
+      exportStatusEl.textContent = String(text || '');
+    }
+
+    function formatSrtTime(seconds) {
+      const msTotal = Math.max(0, Math.round((Number(seconds) || 0) * 1000));
+      const ms = msTotal % 1000;
+      const totalSeconds = Math.floor(msTotal / 1000);
+      const s = totalSeconds % 60;
+      const totalMinutes = Math.floor(totalSeconds / 60);
+      const m = totalMinutes % 60;
+      const h = Math.floor(totalMinutes / 60);
+      return String(h).padStart(2, '0') + ':'
+        + String(m).padStart(2, '0') + ':'
+        + String(s).padStart(2, '0') + ','
+        + String(ms).padStart(3, '0');
+    }
+
+    function safeExportFileName(ext) {
+      const now = new Date();
+      const stamp = now.getFullYear()
+        + String(now.getMonth() + 1).padStart(2, '0')
+        + String(now.getDate()).padStart(2, '0') + '_'
+        + String(now.getHours()).padStart(2, '0')
+        + String(now.getMinutes()).padStart(2, '0');
+      return 'jaygo_cut_subtitles_' + stamp + '.' + ext;
+    }
+
+    function downloadTextFile(filename, text) {
+      const blob = new Blob(['\uFEFF' + String(text || '')], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+    }
+
+    function appendSubtitleToken(base, token) {
+      const current = String(base || '');
+      const text = String(token || '').trim();
+      if (!text) return current;
+      const prev = current.slice(-1);
+      const first = text[0];
+      if (/^[A-Za-z0-9]$/.test(prev) && /^[A-Za-z0-9]$/.test(first)) {
+        return current + ' ' + text;
+      }
+      return current + text;
+    }
+
+    function buildTimeMapper(deleteSegments) {
+      const segments = Array.isArray(deleteSegments)
+        ? deleteSegments
+          .map((seg) => ({
+            start: Number(seg.start),
+            end: Number(seg.end),
+          }))
+          .filter((seg) => Number.isFinite(seg.start) && Number.isFinite(seg.end) && seg.end > seg.start)
+          .sort((a, b) => a.start - b.start)
+        : [];
+      return function mapTime(t) {
+        const time = Math.max(0, Number(t) || 0);
+        let removed = 0;
+        for (const seg of segments) {
+          if (seg.end <= time) {
+            removed += seg.end - seg.start;
+          } else if (seg.start < time) {
+            removed += Math.max(0, time - seg.start);
+            break;
+          } else {
+            break;
+          }
+        }
+        return Math.max(0, time - removed);
+      };
+    }
+
+    function shouldBreakSubtitleCue(lastIndex, currentText, cueStart, cueEnd, nextWord) {
+      const len = compactTextLength(currentText);
+      const duration = Math.max(0, cueEnd - cueStart);
+      if (shouldParagraphBreakAfter(lastIndex)) return true;
+      if (len >= 22) return true;
+      if (duration >= 4.8 && len >= 10) return true;
+      if (hasSentencePunctuation(currentText) && len >= 10) return true;
+      if (nextWord) {
+        const gap = Number(nextWord.start) - Number(WORDS[lastIndex]?.end);
+        if (Number.isFinite(gap) && gap >= 0.9 && len >= 6) return true;
+      }
+      return false;
+    }
+
+    function compactTextLength(text) {
+      return String(text || '').replace(/\s+/g, '').length;
+    }
+
+    function buildExportCues() {
+      const deleteSegments = mergedSegmentsFromSelection();
+      const mapTime = buildTimeMapper(deleteSegments);
+      const kept = [];
+      WORDS.forEach((w, i) => {
+        if (!w || w.isGap || selected.has(i)) return;
+        const start = Number(w.start);
+        const end = Number(w.end);
+        const text = getWordText(i).trim();
+        if (!text || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+        kept.push({
+          index: i,
+          start,
+          end,
+          outStart: mapTime(start),
+          outEnd: mapTime(end),
+          text: text + (inferPunctuation(i) || ''),
+        });
+      });
+
+      const cues = [];
+      let current = null;
+      for (let i = 0; i < kept.length; i += 1) {
+        const item = kept[i];
+        const next = kept[i + 1];
+        if (!current) {
+          current = {
+            start: item.outStart,
+            end: item.outEnd,
+            text: '',
+            lastIndex: item.index,
+          };
+        }
+        current.text = appendSubtitleToken(current.text, item.text);
+        current.end = Math.max(current.end, item.outEnd);
+        current.lastIndex = item.index;
+        if (shouldBreakSubtitleCue(item.index, current.text, current.start, current.end, next)) {
+          if (current.text.trim()) {
+            if (current.end <= current.start) current.end = current.start + 0.35;
+            cues.push(current);
+          }
+          current = null;
+        }
+      }
+      if (current && current.text.trim()) {
+        if (current.end <= current.start) current.end = current.start + 0.35;
+        cues.push(current);
+      }
+      return cues;
+    }
+
+    function buildSrtText(cues) {
+      return cues.map((cue, index) => [
+        String(index + 1),
+        formatSrtTime(cue.start) + ' --> ' + formatSrtTime(Math.max(cue.end, cue.start + 0.35)),
+        String(cue.text || '').trim(),
+        '',
+      ].join('\\n')).join('\\n');
+    }
+
+    function buildPlainText(cues) {
+      const lines = [];
+      for (const cue of cues) {
+        const text = String(cue.text || '').trim();
+        if (!text) continue;
+        lines.push(text);
+      }
+      return lines.join('\\n');
+    }
+
+    function exportSubtitles(kind) {
+      const cues = buildExportCues();
+      if (!cues.length) {
+        setExportStatus('没有可导出的字幕，请检查是否全部内容都被标记删除。');
+        return;
+      }
+      if (kind === 'srt') {
+        downloadTextFile(safeExportFileName('srt'), buildSrtText(cues));
+        setExportStatus('已导出 SRT：' + cues.length + ' 条，可直接导入剪映。');
+        return;
+      }
+      if (kind === 'txt') {
+        downloadTextFile(safeExportFileName('txt'), buildPlainText(cues));
+        setExportStatus('已导出 TXT 文案：' + cues.length + ' 段。');
+      }
+    }
+
+    async function exportJianyingDraft() {
+      const cues = buildExportCues();
+      if (!cues.length) {
+        setExportStatus('没有可导出的字幕，请检查是否全部内容都被标记删除。');
+        return;
+      }
+      const templatePath = jianyingTemplatePathEl ? jianyingTemplatePathEl.value.trim() : '';
+      const preset = jianyingSubtitlePresetEl ? jianyingSubtitlePresetEl.value : 'clean';
+      setExportStatus('正在生成剪映草稿...');
+      if (btnExportJianyingDraft) btnExportJianyingDraft.disabled = true;
+      try {
+        const response = await fetch('/api/export-jianying-draft', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            cues: cues.map((cue) => ({
+              start: cue.start,
+              end: Math.max(cue.end, cue.start + 0.35),
+              text: String(cue.text || '').trim(),
+            })),
+            preset,
+            templatePath,
+            draftName: 'JaygoCut_' + new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14),
+          }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || ('HTTP ' + response.status));
+        }
+        const message = '已导出剪映草稿：' + data.draftDir + '（字幕 ' + data.cues + ' 条' + (data.templateUsed ? '，已套用自定义模板' : '，内置样式') + '）';
+        setExportStatus(message);
+        alert(message + '\\n\\n提示：剪映 5.9 及以下通常可识别 JSON 草稿；剪映 6.x+ 可能因草稿加密无法直接打开。若无法打开，请使用 SRT 导入兜底。');
+      } catch (err) {
+        setExportStatus('剪映草稿导出失败：' + (err.message || String(err)));
+        alert('剪映草稿导出失败：' + (err.message || String(err)));
+      } finally {
+        if (btnExportJianyingDraft) btnExportJianyingDraft.disabled = false;
+      }
+    }
+
+    async function generateOneImage(index, retry = false) {
+      const item = imageItems[index];
+      if (!item) return;
+      item.status = 'generating';
+      item.error = '';
+      renderImageCards();
+      const response = await fetch('/api/generate-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          item,
+          retry,
+          imageSize: imageAspectEl ? imageAspectEl.value : '',
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || ('HTTP ' + response.status));
+      }
+      imageItems[index] = {
+        ...item,
+        ...(data.item || {}),
+        image: data.image,
+        status: 'done',
+        error: '',
+      };
+      renderImageCards();
+    }
+
+    async function generateVideoImages() {
+      if (imageGenerating) return;
+      setImageGenerating(true);
+      try {
+        setImageStatus('正在让 LLM 分析文本并规划配图点...');
+        imageItems = [];
+        renderImageCards();
+        const response = await fetch('/api/llm-image-plan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            words: WORDS,
+            selectedIndices: Array.from(selected),
+            count: Number(imageCountEl ? imageCountEl.value : 8) || 8,
+            style: imageStyleEl ? imageStyleEl.value : '',
+            analysis: {
+              topic: llmTopic,
+              outline: llmOutline,
+              multiSpeaker: llmMultiSpeaker,
+            },
+          }),
+        });
+        const plan = await response.json().catch(() => ({}));
+        if (!response.ok || !plan.success) {
+          throw new Error(plan.error || ('HTTP ' + response.status));
+        }
+        if (plan.topic && !llmTopic) llmTopic = String(plan.topic).slice(0, 80);
+        if (plan.outline && !llmOutline) llmOutline = String(plan.outline).slice(0, 120);
+        imageItems = (Array.isArray(plan.items) ? plan.items : []).map((item) => ({
+          ...item,
+          status: 'queued',
+          image: null,
+          error: '',
+        }));
+        renderImageCards();
+        setImageStatus('已规划 ' + imageItems.length + ' 个配图点，开始逐张生成...');
+
+        let ok = 0;
+        for (let i = 0; i < imageItems.length; i += 1) {
+          try {
+            setImageStatus('正在生成第 ' + (i + 1) + '/' + imageItems.length + ' 张...');
+            await generateOneImage(i, false);
+            ok += 1;
+          } catch (err) {
+            imageItems[i].status = 'error';
+            imageItems[i].error = err.message || String(err);
+            renderImageCards();
+          }
+        }
+        setImageStatus('配图生成完成：成功 ' + ok + ' 张，失败 ' + (imageItems.length - ok) + ' 张。失败项可单张重试。');
+      } finally {
+        setImageGenerating(false);
+      }
+    }
+
     function formatClock(ts) {
       const d = ts ? new Date(ts) : new Date();
       const hh = String(d.getHours()).padStart(2, '0');
@@ -1402,11 +2221,12 @@ const html = `<!doctype html>
       });
 
       return {
-        version: 3,
+        version: 4,
         selectedIndices: Array.from(selected).sort((a, b) => a - b),
         llmSuggestedIndices: Array.from(llmSuggested).sort((a, b) => a - b),
         llmReasons,
         llmPunctuation,
+        textOverrides: Object.fromEntries(Array.from(textOverrides.entries()).map(([idx, text]) => [String(idx), text])),
         llmParagraphAfterIndices: Array.from(llmParagraphAfterIndex)
           .filter((idx) => Number.isInteger(idx) && idx >= 0 && idx < WORDS.length)
           .sort((a, b) => a - b),
@@ -1476,6 +2296,7 @@ const html = `<!doctype html>
         llmTopic = '';
         llmOutline = '';
         llmMultiSpeaker = false;
+        replaceTextOverrideEntries([]);
 
         const stateVersion = Number(state.version) || 1;
         const isExplicitSelectionState = stateVersion >= 2;
@@ -1522,6 +2343,9 @@ const html = `<!doctype html>
               llmPunctByIndex.set(idx, punct[0]);
             }
           }
+        }
+        if (state.textOverrides && typeof state.textOverrides === 'object') {
+          replaceTextOverrideEntries(Object.entries(state.textOverrides));
         }
         const paragraphAfter = Array.isArray(state.llmParagraphAfterIndices)
           ? state.llmParagraphAfterIndices
@@ -1956,7 +2780,7 @@ const html = `<!doctype html>
     function inferPunctuation(i) {
       const w = WORDS[i];
       if (!w || w.isGap) return '';
-      const text = String(w.text || '').trim();
+      const text = getWordText(i).trim();
       if (!text || hasSentencePunctuation(text)) return '';
       if (llmPunctByIndex.has(i)) {
         return llmPunctByIndex.get(i) || '';
@@ -1985,7 +2809,7 @@ const html = `<!doctype html>
         return;
       }
       const word = document.createElement('span');
-      word.textContent = String(w.text || '');
+      word.textContent = getWordText(i);
       el.appendChild(word);
       const punct = inferPunctuation(i);
       if (!punct) return;
@@ -2026,6 +2850,9 @@ const html = `<!doctype html>
         + tokenAutoClass(i)
         + tokenMarkerClass(i)
         + (llmSuggested.has(i) ? ' llm' : '')
+        + (searchHitIndices.has(i) ? ' search-hit' : '')
+        + (searchActiveIndices.has(i) ? ' search-active' : '')
+        + (!w.isGap && !getWordText(i) ? ' text-empty' : '')
         + (currentIndex === i ? ' current' : '');
     }
 
@@ -2046,6 +2873,8 @@ const html = `<!doctype html>
       if (!el) return;
       el.className = tokenClass(i);
       el.title = tokenTitle(i);
+      el.textContent = '';
+      setTokenDisplay(el, i);
     }
 
     function refreshIdleStatus() {
@@ -2155,6 +2984,144 @@ const html = `<!doctype html>
       const lo = Math.max(0, Math.min(start, end));
       const hi = Math.min(WORDS.length - 1, Math.max(start, end));
       for (let i = lo; i <= hi; i += 1) refreshToken(i);
+    }
+
+    function setReplaceStatus(text) {
+      if (!replaceStatusEl) return;
+      replaceStatusEl.textContent = String(text || '');
+    }
+
+    function buildSearchMatches(query) {
+      const needle = String(query || '').trim();
+      if (!needle) return [];
+      let haystack = '';
+      const charToIndex = [];
+      for (let i = 0; i < WORDS.length; i += 1) {
+        const w = WORDS[i];
+        if (!w || w.isGap) continue;
+        const text = getWordText(i);
+        if (!text) continue;
+        for (const ch of text) {
+          haystack += ch;
+          charToIndex.push(i);
+        }
+      }
+      const matches = [];
+      let pos = haystack.indexOf(needle);
+      while (pos >= 0) {
+        const startIdx = charToIndex[pos];
+        const endIdx = charToIndex[pos + needle.length - 1];
+        if (Number.isInteger(startIdx) && Number.isInteger(endIdx)) {
+          matches.push({ start: Math.min(startIdx, endIdx), end: Math.max(startIdx, endIdx) });
+        }
+        pos = haystack.indexOf(needle, pos + Math.max(1, needle.length));
+      }
+      return matches;
+    }
+
+    function applySearchHighlights() {
+      searchHitIndices = new Set();
+      searchActiveIndices = new Set();
+      searchMatches.forEach((match, matchIndex) => {
+        const target = matchIndex === activeSearchMatch ? searchActiveIndices : searchHitIndices;
+        for (let i = match.start; i <= match.end; i += 1) target.add(i);
+      });
+      render();
+    }
+
+    function refreshSearchMatches(keepActive) {
+      const query = replaceFindTextEl ? replaceFindTextEl.value : '';
+      const previousStart = searchMatches[activeSearchMatch]?.start;
+      searchMatches = buildSearchMatches(query);
+      if (!searchMatches.length) {
+        activeSearchMatch = -1;
+        applySearchHighlights();
+        setReplaceStatus(query ? '未找到匹配项' : '');
+        return;
+      }
+      if (keepActive && Number.isInteger(previousStart)) {
+        const found = searchMatches.findIndex((match) => match.start >= previousStart);
+        activeSearchMatch = found >= 0 ? found : 0;
+      } else if (activeSearchMatch < 0 || activeSearchMatch >= searchMatches.length) {
+        activeSearchMatch = 0;
+      }
+      applySearchHighlights();
+      setReplaceStatus('找到 ' + searchMatches.length + ' 处，当前第 ' + (activeSearchMatch + 1) + ' 处');
+    }
+
+    function scrollActiveSearchMatch() {
+      const match = searchMatches[activeSearchMatch];
+      if (!match || !tokenEls[match.start]) return;
+      tokenEls[match.start].scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
+    }
+
+    function jumpSearchMatch(delta) {
+      refreshSearchMatches(true);
+      if (!searchMatches.length) return false;
+      const count = searchMatches.length;
+      activeSearchMatch = (activeSearchMatch + delta + count) % count;
+      applySearchHighlights();
+      setReplaceStatus('找到 ' + count + ' 处，当前第 ' + (activeSearchMatch + 1) + ' 处');
+      scrollActiveSearchMatch();
+      return true;
+    }
+
+    function replacementCharacters(match, replacement) {
+      const value = String(replacement || '');
+      const chars = Array.from(value);
+      const indices = [];
+      for (let i = match.start; i <= match.end; i += 1) {
+        if (WORDS[i] && !WORDS[i].isGap) indices.push(i);
+      }
+      return { chars, indices };
+    }
+
+    function applyReplacementToMatch(match, replacement) {
+      if (!match) return 0;
+      const { chars, indices } = replacementCharacters(match, replacement);
+      if (!indices.length) return 0;
+      if (chars.length <= indices.length) {
+        indices.forEach((idx, offset) => setWordText(idx, chars[offset] || ''));
+      } else {
+        setWordText(indices[0], chars.join(''));
+        for (let i = 1; i < indices.length; i += 1) setWordText(indices[i], '');
+      }
+      return 1;
+    }
+
+    function replaceActiveMatch() {
+      refreshSearchMatches(true);
+      const match = searchMatches[activeSearchMatch];
+      if (!match) return false;
+      pushSelectionUndo();
+      const count = applyReplacementToMatch(match, replaceWithTextEl ? replaceWithTextEl.value : '');
+      refreshSearchMatches(false);
+      setReplaceStatus(count ? '已替换当前匹配项' : '没有可替换内容');
+      scheduleReviewStateSave(150);
+      return !!count;
+    }
+
+    function replaceAllMatches() {
+      refreshSearchMatches(false);
+      if (!searchMatches.length) return false;
+      pushSelectionUndo();
+      const replacement = replaceWithTextEl ? replaceWithTextEl.value : '';
+      let count = 0;
+      for (let i = searchMatches.length - 1; i >= 0; i -= 1) {
+        count += applyReplacementToMatch(searchMatches[i], replacement);
+      }
+      refreshSearchMatches(false);
+      setReplaceStatus('已替换 ' + count + ' 处');
+      scheduleReviewStateSave(150);
+      return count > 0;
+    }
+
+    function openShortcutHelp() {
+      if (shortcutHelpEl) shortcutHelpEl.hidden = false;
+    }
+
+    function closeShortcutHelp() {
+      if (shortcutHelpEl) shortcutHelpEl.hidden = true;
     }
 
     function restoreDragBaseSelection() {
@@ -2887,6 +3854,27 @@ const html = `<!doctype html>
     }
 
     document.addEventListener('keydown', (e) => {
+      const key = String(e.key || '').toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && key === 'f') {
+        if (replaceFindTextEl) {
+          e.preventDefault();
+          replaceFindTextEl.focus();
+          replaceFindTextEl.select();
+        }
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && key === 's') {
+        e.preventDefault();
+        saveReviewState('force').catch(() => {});
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (key === 'y' || (e.shiftKey && key === 'z'))) {
+        if (!shouldHandleGlobalHotkey(e)) return;
+        if (redoLastSelectionChange()) {
+          e.preventDefault();
+        }
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && String(e.key || '').toLowerCase() === 'z') {
         if (!shouldHandleGlobalHotkey(e)) return;
         if (undoLastSelectionChange('hotkey')) {
@@ -2895,7 +3883,12 @@ const html = `<!doctype html>
         return;
       }
       if (e.key === 'Escape') {
-        if (leftPanelOpen || rightPanelOpen) {
+        if (shortcutHelpEl && !shortcutHelpEl.hidden) {
+          closeShortcutHelp();
+          e.preventDefault();
+          return;
+        }
+        if (leftPanelOpen || imagePanelOpen || rightPanelOpen) {
           closePanels();
           e.preventDefault();
         }
@@ -2954,6 +3947,11 @@ const html = `<!doctype html>
         setPanelOpen('left', !leftPanelOpen);
       });
     }
+    if (btnToggleImagePanel) {
+      btnToggleImagePanel.addEventListener('click', () => {
+        setPanelOpen('image', !imagePanelOpen);
+      });
+    }
     if (btnToggleRightPanel) {
       btnToggleRightPanel.addEventListener('click', () => {
         setPanelOpen('right', !rightPanelOpen);
@@ -2962,6 +3960,11 @@ const html = `<!doctype html>
     if (btnCloseLeftPanel) {
       btnCloseLeftPanel.addEventListener('click', () => {
         setPanelOpen('left', false);
+      });
+    }
+    if (btnCloseImagePanel) {
+      btnCloseImagePanel.addEventListener('click', () => {
+        setPanelOpen('image', false);
       });
     }
     if (btnCloseRightPanel) {
@@ -2976,6 +3979,91 @@ const html = `<!doctype html>
         } catch (e) {
           setPublishStatus('发布建议生成失败: ' + e.message);
           alert('发布建议生成失败: ' + e.message);
+        }
+      });
+    }
+    if (btnGenerateImages) {
+      btnGenerateImages.addEventListener('click', async () => {
+        try {
+          await generateVideoImages();
+        } catch (e) {
+          setImageStatus('视频配图生成失败: ' + e.message);
+          alert('视频配图生成失败: ' + e.message);
+        }
+      });
+    }
+    if (btnDownloadImages) {
+      btnDownloadImages.addEventListener('click', downloadGeneratedImages);
+    }
+    if (btnExportSrt) {
+      btnExportSrt.addEventListener('click', () => exportSubtitles('srt'));
+    }
+    if (btnExportTxt) {
+      btnExportTxt.addEventListener('click', () => exportSubtitles('txt'));
+    }
+    if (btnExportJianyingDraft) {
+      btnExportJianyingDraft.addEventListener('click', exportJianyingDraft);
+    }
+    if (replaceFindTextEl) {
+      replaceFindTextEl.addEventListener('input', () => refreshSearchMatches(false));
+      replaceFindTextEl.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        jumpSearchMatch(e.shiftKey ? -1 : 1);
+      });
+    }
+    if (replaceWithTextEl) {
+      replaceWithTextEl.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        if (e.ctrlKey || e.metaKey) replaceAllMatches();
+        else replaceActiveMatch();
+      });
+    }
+    if (btnFindPrev) btnFindPrev.addEventListener('click', () => jumpSearchMatch(-1));
+    if (btnFindNext) btnFindNext.addEventListener('click', () => jumpSearchMatch(1));
+    if (btnReplaceOne) btnReplaceOne.addEventListener('click', replaceActiveMatch);
+    if (btnReplaceAll) btnReplaceAll.addEventListener('click', replaceAllMatches);
+    if (btnShortcutHelp) btnShortcutHelp.addEventListener('click', openShortcutHelp);
+    if (btnCloseShortcutHelp) btnCloseShortcutHelp.addEventListener('click', closeShortcutHelp);
+    if (shortcutHelpEl) {
+      shortcutHelpEl.addEventListener('mousedown', (e) => {
+        if (e.target === shortcutHelpEl) closeShortcutHelp();
+      });
+    }
+    if (imageAspectEl) {
+      imageAspectEl.addEventListener('change', renderImageCards);
+    }
+    if (imageCardListEl) {
+      imageCardListEl.addEventListener('click', async (e) => {
+        const retryBtn = e.target.closest('[data-image-retry]');
+        const copyBtn = e.target.closest('[data-image-copy]');
+        if (retryBtn) {
+          const index = Number(retryBtn.dataset.imageRetry);
+          if (!Number.isInteger(index)) return;
+          try {
+            setImageStatus('正在重试第 ' + (index + 1) + ' 张，LLM 会先换一个提示词...');
+            await generateOneImage(index, true);
+            setImageStatus('第 ' + (index + 1) + ' 张已重试完成');
+          } catch (err) {
+            if (imageItems[index]) {
+              imageItems[index].status = 'error';
+              imageItems[index].error = err.message || String(err);
+              renderImageCards();
+            }
+            setImageStatus('重试失败: ' + (err.message || String(err)));
+          }
+          return;
+        }
+        if (copyBtn) {
+          const index = Number(copyBtn.dataset.imageCopy);
+          const text = imageItems[index]?.prompt || '';
+          if (!text) return;
+          navigator.clipboard?.writeText(text).then(() => {
+            setImageStatus('已复制第 ' + (index + 1) + ' 张提示词');
+          }).catch(() => {
+            setImageStatus('复制失败，请手动选择提示词');
+          });
         }
       });
     }
@@ -3007,13 +4095,15 @@ const html = `<!doctype html>
       });
     }
     document.addEventListener('mousedown', (e) => {
-      if (!leftPanelOpen && !rightPanelOpen) return;
+      if (!leftPanelOpen && !imagePanelOpen && !rightPanelOpen) return;
       const target = e.target;
       const insideLeft = !!(leftPanelEl && leftPanelEl.contains(target));
+      const insideImage = !!(imagePanelEl && imagePanelEl.contains(target));
       const insideRight = !!(rightPanelEl && rightPanelEl.contains(target));
       const onLeftToggle = !!(btnToggleLeftPanel && btnToggleLeftPanel.contains(target));
+      const onImageToggle = !!(btnToggleImagePanel && btnToggleImagePanel.contains(target));
       const onRightToggle = !!(btnToggleRightPanel && btnToggleRightPanel.contains(target));
-      if (insideLeft || insideRight || onLeftToggle || onRightToggle) return;
+      if (insideLeft || insideImage || insideRight || onLeftToggle || onImageToggle || onRightToggle) return;
       closePanels();
     });
     document.getElementById('btnCut').addEventListener('click', async () => {
@@ -3173,6 +4263,7 @@ const html = `<!doctype html>
       render();
       syncUndoButton();
       renderPublishSuggestions({ titles: [], descriptions: [], keywords: [] });
+      renderImageCards();
       await restoreReviewState();
       syncCurrentToken();
       updateSelectionStats();
