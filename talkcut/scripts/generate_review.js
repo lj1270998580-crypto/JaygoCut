@@ -8,6 +8,12 @@ const { analyzeTranscriptQuality } = require('./transcript_quality');
 let subtitlesFile = process.argv[2] || 'subtitles_words.json';
 const autoSelectedFile = process.argv[3] || 'auto_selected.json';
 const inputAudio = process.argv[4] || 'audio.wav';
+let packageVersion = 'unknown';
+try {
+  packageVersion = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', '..', 'package.json'), 'utf8')).version || 'unknown';
+} catch {
+  packageVersion = 'unknown';
+}
 
 if (!fs.existsSync(subtitlesFile)) {
   const fallback = subtitlesFile.endsWith('subtitles_words.json')
@@ -831,6 +837,41 @@ const html = `<!doctype html>
       color: var(--token-current-text);
       box-shadow: inset 0 0 0 1px var(--token-current-border);
     }
+    .token.preview-delete {
+      outline: 3px solid rgba(245, 158, 11, 0.92);
+      outline-offset: 2px;
+      box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.16);
+    }
+    .delete-preview-info,
+    .delete-diagnostics {
+      width: 100%;
+      margin-top: 8px;
+      padding: 10px 12px;
+      border: 1px dashed var(--border);
+      border-radius: 12px;
+      background: color-mix(in oklab, var(--card-bg) 92%, var(--accent));
+      color: var(--text-muted);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+    .delete-diagnostics[hidden],
+    .delete-preview-info[hidden] {
+      display: none;
+    }
+    .diagnostic-risk {
+      display: inline-flex;
+      align-items: center;
+      margin: 4px 6px 0 0;
+      padding: 4px 8px;
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      border-radius: 999px;
+      background: rgba(245, 158, 11, 0.12);
+      color: var(--text-main);
+      cursor: pointer;
+    }
+    .diagnostic-risk:hover {
+      border-color: rgba(245, 158, 11, 0.75);
+    }
     .token .punct {
       color: var(--text-muted);
       opacity: 0.9;
@@ -957,11 +998,21 @@ const html = `<!doctype html>
       <div class="row primary-actions">
         <button id="btnPlay" class="primary">播放/暂停</button>
         <button id="btnClear">清空选择</button>
+        <button id="btnPreviewDelete" type="button">预听当前删除点</button>
         <button id="btnCut" class="warn">执行裁剪</button>
+        <select id="cutPrecisionMode" title="只影响最终裁剪边界，不改变审核文本时间戳">
+          <option value="conservative">保守</option>
+          <option value="standard" selected>标准</option>
+          <option value="clean">干净</option>
+        </select>
+        <button id="btnShowDeleteDiagnostics" type="button">删除诊断</button>
+        <button id="btnCopyDiagnostics" type="button">复制诊断信息</button>
         <button id="btnShortcutHelp" type="button">快捷键指南</button>
         <span id="status" class="status">就绪</span>
         <span class="meta" id="selectionStats"></span>
       </div>
+      <div id="deletePreviewInfo" class="delete-preview-info" hidden></div>
+      <div id="deleteDiagnosticsPanel" class="delete-diagnostics" hidden></div>
       <details class="fold-panel tool-fold">
         <summary>审核工具与状态（点击展开）</summary>
         <div class="row tool-actions">
@@ -1036,6 +1087,7 @@ const html = `<!doctype html>
           <div class="shortcut-item"><kbd>Ctrl + Z</kbd><span>撤回上一步，可连续撤回多步</span></div>
           <div class="shortcut-item"><kbd>Ctrl + Y</kbd><span>重做刚撤回的操作</span></div>
           <div class="shortcut-item"><kbd>Ctrl + Shift + Z</kbd><span>重做刚撤回的操作</span></div>
+          <div class="shortcut-item"><kbd>S</kbd><span>预听当前或最近的删除点</span></div>
           <div class="shortcut-item"><kbd>Ctrl + F</kbd><span>聚焦文本纠错搜索框</span></div>
           <div class="shortcut-item"><kbd>Enter</kbd><span>在搜索框内跳到下一个匹配</span></div>
           <div class="shortcut-item"><kbd>Shift + Enter</kbd><span>在搜索框内跳到上一个匹配</span></div>
@@ -1210,6 +1262,12 @@ const html = `<!doctype html>
     const btnLlmMark = document.getElementById('btnLlmMark');
     const btnApplyLlm = document.getElementById('btnApplyLlm');
     const btnClearLlm = document.getElementById('btnClearLlm');
+    const btnPreviewDelete = document.getElementById('btnPreviewDelete');
+    const btnShowDeleteDiagnostics = document.getElementById('btnShowDeleteDiagnostics');
+    const btnCopyDiagnostics = document.getElementById('btnCopyDiagnostics');
+    const cutPrecisionModeEl = document.getElementById('cutPrecisionMode');
+    const deletePreviewInfoEl = document.getElementById('deletePreviewInfo');
+    const deleteDiagnosticsPanelEl = document.getElementById('deleteDiagnosticsPanel');
     const btnCut = document.getElementById('btnCut');
     const btnExportSrt = document.getElementById('btnExportSrt');
     const btnExportTxt = document.getElementById('btnExportTxt');
@@ -1415,6 +1473,10 @@ const html = `<!doctype html>
     let waveViewCenterSec = 0;
     let waveStaticCanvas = null;
     let waveStaticKey = '';
+    let previewSegment = null;
+    let previewStopTime = null;
+    let latestCutLogTail = [];
+    let runtimeInfoCache = null;
     let publishLoading = false;
     let llmChatSubmitting = false;
     let imageGenerating = false;
@@ -2235,6 +2297,7 @@ const html = `<!doctype html>
         llmMultiSpeaker,
         threshold: Math.max(0.2, Number(thresholdEl.value) || 0.2),
         boundarySettings: readBoundarySettings(),
+        cutPrecisionMode: cutPrecisionModeEl ? String(cutPrecisionModeEl.value || 'standard') : 'standard',
         currentTimeSec: Math.max(0, Number(audio.currentTime) || 0),
       };
     }
@@ -2367,6 +2430,9 @@ const html = `<!doctype html>
         if (state.boundarySettings && typeof state.boundarySettings === 'object') {
           applyBoundarySettings(state.boundarySettings);
         }
+        if (cutPrecisionModeEl && ['conservative', 'standard', 'clean'].includes(String(state.cutPrecisionMode || ''))) {
+          cutPrecisionModeEl.value = String(state.cutPrecisionMode);
+        }
 
         const resumeTime = Number(state.currentTimeSec);
         if (Number.isFinite(resumeTime) && resumeTime > 0) {
@@ -2416,6 +2482,7 @@ const html = `<!doctype html>
     }
 
     function setLogs(lines) {
+      latestCutLogTail = Array.isArray(lines) ? lines.slice(-40) : [];
       logsEl.textContent = (lines || []).join('\\n');
       logsEl.scrollTop = logsEl.scrollHeight;
     }
@@ -2424,6 +2491,20 @@ const html = `<!doctype html>
       if (Number.isFinite(audio.duration) && audio.duration > 0) return audio.duration;
       if (ends.length) return Math.max(...ends);
       return 0;
+    }
+
+    function formatSec(sec) {
+      const n = Math.max(0, Number(sec) || 0);
+      return n.toFixed(2) + 's';
+    }
+
+    function tokenOverlapsSegment(index, seg) {
+      if (!seg) return false;
+      const w = WORDS[index];
+      if (!w) return false;
+      const start = Number(w.start);
+      const end = Number(w.end);
+      return Number.isFinite(start) && Number.isFinite(end) && end > seg.start && start < seg.end;
     }
 
     function setWaveHint(text) {
@@ -2692,6 +2773,17 @@ const html = `<!doctype html>
       ctx.clearRect(0, 0, w, h);
       ctx.drawImage(waveStaticCanvas, 0, 0);
 
+      if (view.duration > 0 && previewSegment) {
+        const left = Math.max(previewSegment.start, view.start);
+        const right = Math.min(previewSegment.end, view.end);
+        if (right > left) {
+          const x0 = Math.max(0, Math.min(w, ((left - view.start) / (view.end - view.start)) * w));
+          const x1 = Math.max(0, Math.min(w, ((right - view.start) / (view.end - view.start)) * w));
+          ctx.fillStyle = 'rgba(245, 158, 11, 0.28)';
+          ctx.fillRect(x0, 0, Math.max(2, x1 - x0), h);
+        }
+      }
+
       if (view.duration > 0) {
         const t = Math.max(view.start, Math.min(view.end, Number(audio.currentTime) || 0));
         const x = ((t - view.start) / Math.max(0.001, view.end - view.start)) * w;
@@ -2847,6 +2939,7 @@ const html = `<!doctype html>
       return 'token'
         + (w.isGap ? ' gap' : '')
         + (selected.has(i) ? ' sel' : '')
+        + (tokenOverlapsSegment(i, previewSegment) ? ' preview-delete' : '')
         + tokenAutoClass(i)
         + tokenMarkerClass(i)
         + (llmSuggested.has(i) ? ' llm' : '')
@@ -2915,7 +3008,8 @@ const html = `<!doctype html>
 
     function setCutSubmitting(next) {
       cutSubmitting = !!next;
-      btnCut.disabled = cutSubmitting;
+      const videoMissing = runtimeInfoCache && runtimeInfoCache.videoExists === false;
+      btnCut.disabled = cutSubmitting || videoMissing;
       btnCut.textContent = cutSubmitting ? '裁剪中...' : '执行裁剪';
     }
 
@@ -3317,6 +3411,7 @@ const html = `<!doctype html>
 
     function maybeSkipSelectedSegment() {
       if (audio.paused) return;
+      if (previewStopTime !== null) return;
       if (!mergedSelected.length) return;
 
       const t = Number(audio.currentTime) || 0;
@@ -3764,6 +3859,297 @@ const html = `<!doctype html>
       return adjusted;
     }
 
+    function normalizeDeleteSegments(segments) {
+      const duration = getAudioTotalDuration();
+      const maxDuration = duration > 0 ? duration : Number.POSITIVE_INFINITY;
+      return (Array.isArray(segments) ? segments : [])
+        .map((seg) => ({
+          start: Math.max(0, Number(seg.start)),
+          end: Math.min(maxDuration, Number(seg.end)),
+        }))
+        .filter((seg) => Number.isFinite(seg.start) && Number.isFinite(seg.end) && seg.end > seg.start)
+        .sort((a, b) => a.start - b.start || a.end - b.end);
+    }
+
+    function mergeDeleteSegments(segments) {
+      const merged = [];
+      for (const seg of segments) {
+        if (!merged.length || seg.start > merged[merged.length - 1].end) {
+          merged.push({ ...seg });
+          continue;
+        }
+        merged[merged.length - 1].end = Math.max(merged[merged.length - 1].end, seg.end);
+      }
+      return merged.map((seg) => ({
+        start: Number(seg.start.toFixed(3)),
+        end: Number(seg.end.toFixed(3)),
+      }));
+    }
+
+    function applyCutPrecisionModeToSegments(segments) {
+      const mode = cutPrecisionModeEl ? String(cutPrecisionModeEl.value || 'standard') : 'standard';
+      const normalized = normalizeDeleteSegments(segments);
+      if (mode === 'standard') return mergeDeleteSegments(normalized);
+      const duration = getAudioTotalDuration();
+      const maxDuration = duration > 0 ? duration : Number.POSITIVE_INFINITY;
+      const adjusted = normalized.map((seg) => {
+        const len = seg.end - seg.start;
+        if (mode === 'clean') {
+          const lead = len < 0.16 ? 0.025 : 0.04;
+          const tail = len < 0.16 ? 0.035 : 0.06;
+          return { start: Math.max(0, seg.start - lead), end: Math.min(maxDuration, seg.end + tail) };
+        }
+        const trim = Math.min(0.025, Math.max(0, (len - 0.06) / 2));
+        return { start: seg.start + trim, end: seg.end - trim };
+      }).filter((seg) => seg.end - seg.start >= 0.03);
+      return mergeDeleteSegments(adjusted);
+    }
+
+    function currentOrNearestDeleteSegment() {
+      const segs = normalizeDeleteSegments(mergedSegmentsFromSelection());
+      if (!segs.length) return null;
+      const currentTime = Number(audio.currentTime) || 0;
+      const currentWord = WORDS[currentIndex] || null;
+      const cursorTime = currentWord && Number.isFinite(Number(currentWord.start))
+        ? ((Number(currentWord.start) + Number(currentWord.end)) / 2)
+        : currentTime;
+      const inside = segs.find((seg) => cursorTime >= seg.start && cursorTime <= seg.end)
+        || segs.find((seg) => currentTime >= seg.start && currentTime <= seg.end);
+      if (inside) return inside;
+      let best = segs[0];
+      let bestDistance = Number.POSITIVE_INFINITY;
+      for (const seg of segs) {
+        const distance = cursorTime < seg.start ? seg.start - cursorTime : Math.max(0, cursorTime - seg.end);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          best = seg;
+        }
+      }
+      return best;
+    }
+
+    function setPreviewSegment(seg) {
+      const previous = previewSegment;
+      previewSegment = seg ? { ...seg } : null;
+      if (previous) {
+        WORDS.forEach((_w, i) => {
+          if (tokenOverlapsSegment(i, previous)) refreshToken(i);
+        });
+      }
+      if (previewSegment) {
+        WORDS.forEach((_w, i) => {
+          if (tokenOverlapsSegment(i, previewSegment)) refreshToken(i);
+        });
+      }
+      drawWaveform();
+    }
+
+    function previewCurrentDeletePoint() {
+      updateSelectionStats();
+      const seg = currentOrNearestDeleteSegment();
+      if (!seg) {
+        setStatus('没有可预听的删除片段');
+        if (deletePreviewInfoEl) deletePreviewInfoEl.hidden = true;
+        return;
+      }
+      const total = getAudioTotalDuration();
+      const start = Math.max(0, seg.start - 2);
+      const end = Math.min(total > 0 ? total : seg.end + 2, seg.end + 2);
+      previewStopTime = end;
+      setPreviewSegment(seg);
+      if (deletePreviewInfoEl) {
+        deletePreviewInfoEl.hidden = false;
+        deletePreviewInfoEl.textContent =
+          '预听范围：删除前 ' + formatSec(start) + '-' + formatSec(seg.start)
+          + ' | 删除段 ' + formatSec(seg.start) + '-' + formatSec(seg.end)
+          + ' | 删除后 ' + formatSec(seg.end) + '-' + formatSec(end);
+      }
+      audio.currentTime = start;
+      audio.play().catch(() => {});
+      setStatus('正在预听删除点');
+    }
+
+    function nearestWordIndex(timeSec, direction) {
+      let bestIdx = -1;
+      let bestDistance = Number.POSITIVE_INFINITY;
+      WORDS.forEach((word, idx) => {
+        if (!word || word.isGap) return;
+        const start = Number(word.start);
+        const end = Number(word.end);
+        if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+        if (direction === 'prev' && end > timeSec) return;
+        if (direction === 'next' && start < timeSec) return;
+        const point = direction === 'prev' ? end : start;
+        const distance = Math.abs(point - timeSec);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestIdx = idx;
+        }
+      });
+      return bestIdx;
+    }
+
+    function diagnoseDeleteSegmentsForPage(segments) {
+      const normalized = normalizeDeleteSegments(segments);
+      const risks = [];
+      let denseCount = 0;
+      const details = normalized.map((seg, index) => {
+        const durationSec = seg.end - seg.start;
+        const detail = {
+          index,
+          start: Number(seg.start.toFixed(3)),
+          end: Number(seg.end.toFixed(3)),
+          durationSec: Number(durationSec.toFixed(3)),
+          prevWordIndex: nearestWordIndex(seg.start, 'prev'),
+          nextWordIndex: nearestWordIndex(seg.end, 'next'),
+          risks: [],
+        };
+        function pushRisk(type, message) {
+          detail.risks.push(type);
+          risks.push({ ...detail, type, message });
+        }
+        if (durationSec < 0.16) pushRisk('short', '过短，可能残留碎音');
+        if (durationSec > 8) pushRisk('long', '较长，确认没有误删有效内容');
+        const prevWord = WORDS[detail.prevWordIndex];
+        const nextWord = WORDS[detail.nextWordIndex];
+        const prevGap = prevWord ? seg.start - Number(prevWord.end) : Number.POSITIVE_INFINITY;
+        const nextGap = nextWord ? Number(nextWord.start) - seg.end : Number.POSITIVE_INFINITY;
+        if ((Number.isFinite(prevGap) && prevGap >= 0 && prevGap < 0.045)
+          || (Number.isFinite(nextGap) && nextGap >= 0 && nextGap < 0.045)) {
+          pushRisk('tight', '紧贴保留词，可能吞字或尾音');
+        }
+        const nextSeg = normalized[index + 1];
+        if (nextSeg && nextSeg.start - seg.end >= 0 && nextSeg.start - seg.end < 0.25) {
+          denseCount += 1;
+          pushRisk('dense', '附近删除过密，建议预听');
+        }
+        return detail;
+      });
+      const totalDurationSec = normalized.reduce((sum, seg) => sum + (seg.end - seg.start), 0);
+      const sorted = [...details].sort((a, b) => a.durationSec - b.durationSec);
+      return {
+        count: normalized.length,
+        totalDurationSec,
+        shortest: sorted[0] || null,
+        longest: sorted[sorted.length - 1] || null,
+        denseCount,
+        risks,
+      };
+    }
+
+    function jumpToRiskSegment(risk) {
+      const targetIdx = Number.isInteger(risk.prevWordIndex) && risk.prevWordIndex >= 0
+        ? risk.prevWordIndex
+        : risk.nextWordIndex;
+      const targetTime = Math.max(0, Number(risk.start) - 0.35);
+      audio.currentTime = targetTime;
+      if (Number.isInteger(targetIdx) && tokenEls[targetIdx]) {
+        setCurrentIndex(targetIdx);
+        tokenEls[targetIdx].scrollIntoView({ block: 'center', inline: 'nearest' });
+      }
+      setPreviewSegment({ start: Number(risk.start), end: Number(risk.end) });
+      drawWaveform();
+    }
+
+    function renderDeleteDiagnostics() {
+      updateSelectionStats();
+      if (!deleteDiagnosticsPanelEl) return;
+      const diag = diagnoseDeleteSegmentsForPage(mergedSelected);
+      const parts = [
+        '删除片段：' + diag.count + ' 段',
+        '总删除时长：' + formatSec(diag.totalDurationSec),
+        '最长：' + (diag.longest ? formatSec(diag.longest.durationSec) : '-'),
+        '最短：' + (diag.shortest ? formatSec(diag.shortest.durationSec) : '-'),
+        '连续密集：' + diag.denseCount + ' 处',
+      ];
+      deleteDiagnosticsPanelEl.innerHTML = '<div>' + parts.join(' | ') + '</div>';
+      if (diag.risks.length) {
+        const riskWrap = document.createElement('div');
+        diag.risks.slice(0, 40).forEach((risk) => {
+          const item = document.createElement('button');
+          item.type = 'button';
+          item.className = 'diagnostic-risk';
+          item.textContent = '#' + (risk.index + 1) + ' ' + risk.message + ' (' + formatSec(risk.start) + '-' + formatSec(risk.end) + ')';
+          item.addEventListener('click', () => jumpToRiskSegment(risk));
+          riskWrap.appendChild(item);
+        });
+        deleteDiagnosticsPanelEl.appendChild(riskWrap);
+      } else {
+        const ok = document.createElement('div');
+        ok.textContent = '未发现明显风险片段。';
+        deleteDiagnosticsPanelEl.appendChild(ok);
+      }
+      deleteDiagnosticsPanelEl.hidden = false;
+    }
+
+    function humanizeCutError(error) {
+      const text = String(error && error.message ? error.message : error || '');
+      if (/ENAMETOOLONG/i.test(text)) return '剪辑命令过长，系统已改用分批剪辑策略后仍失败，请查看日志。';
+      if (/EACCES|EPERM|拒绝访问/i.test(text)) return '没有权限写入输出目录，请换一个输出文件夹或关闭占用文件的视频播放器。';
+      if (/fetch failed|Failed to fetch/i.test(text)) return '本地审核服务暂时无响应，请重新打开审核窗口后再试。';
+      if (/ffmpeg|exited with code 1|code 1/i.test(text)) return 'FFmpeg 执行失败，可能是源视频被占用、路径异常或磁盘空间不足。';
+      return text || '未知错误，请复制诊断信息查看日志。';
+    }
+
+    function buildCutDiagnosticsText() {
+      updateSelectionStats();
+      const deletedSec = mergedSelected.reduce((sum, seg) => sum + Math.max(0, seg.end - seg.start), 0);
+      const lines = [
+        'Jaygo Cut 裁剪诊断信息',
+        '视频路径: ' + (decodeURIComponent(new URL(audio.currentSrc || audio.src, window.location.href).pathname || '') || '-'),
+        '删除片段数量: ' + mergedSelected.length,
+        '删除总时长: ' + deletedSec.toFixed(2) + ' 秒',
+        '剪辑模式: ' + (cutPrecisionModeEl ? cutPrecisionModeEl.value : 'standard'),
+        '应用版本: ${packageVersion}',
+        '最近裁剪日志:',
+        ...(latestCutLogTail.length ? latestCutLogTail : ['-']),
+      ];
+      lines[1] = '视频路径: ' + (runtimeInfoCache && runtimeInfoCache.videoFile ? runtimeInfoCache.videoFile : '-');
+      return lines.join('\\n');
+    }
+
+    async function copyCutDiagnostics() {
+      const text = buildCutDiagnosticsText();
+      try {
+        await navigator.clipboard.writeText(text);
+        setStatus('已复制诊断信息');
+      } catch {
+        setStatus('复制失败，请从裁剪日志中查看详细信息');
+      }
+    }
+
+    async function forceBackupReviewState() {
+      const core = buildReviewStateCore();
+      const r = await fetch('/api/review-state/backup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(core),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.success) {
+        throw new Error(d.error || ('HTTP ' + r.status));
+      }
+      setDraftState('草稿状态：裁剪前已备份（' + formatClock(d.state && d.state.savedAt) + '）');
+      return d.state;
+    }
+
+    async function runCutPreflight(segments) {
+      const r = await fetch('/api/cut-preflight', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ segments }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.success) {
+        throw new Error(d.error || ('HTTP ' + r.status));
+      }
+      if (!d.ok) {
+        const text = (d.issues || []).map((issue) => issue.message || issue.code).filter(Boolean).join('\\n');
+        throw new Error(text || '裁剪前检查未通过');
+      }
+      return d;
+    }
+
     async function waitCut(jobId) {
       while (true) {
         const r = await fetch('/api/cut-status?jobId=' + encodeURIComponent(jobId));
@@ -3783,7 +4169,12 @@ const html = `<!doctype html>
 
     async function executeCut() {
       if (cutSubmitting) return;
-      const segs = mergedSegmentsFromSelection();
+      if (runtimeInfoCache && runtimeInfoCache.videoExists === false) {
+        alert(runtimeInfoCache.videoMissingMessage || '原视频文件不存在，无法执行裁剪。');
+        return;
+      }
+      const rawSegs = mergedSegmentsFromSelection();
+      const segs = applyCutPrecisionModeToSegments(rawSegs);
       if (!segs.length) {
         alert('请先选择要删除的片段');
         return;
@@ -3795,6 +4186,8 @@ const html = `<!doctype html>
 
       try {
         await saveReviewState('force');
+        await forceBackupReviewState();
+        await runCutPreflight(segs);
         setStatus('正在提交裁剪任务...');
         const r = await fetch('/api/cut', {
           method: 'POST',
@@ -3813,6 +4206,11 @@ const html = `<!doctype html>
         const result = finalData.result || {};
         setStatus('裁剪完成: ' + (result.output || ''));
         alert('裁剪完成\\n\\n输出: ' + (result.output || ''));
+      } catch (err) {
+        const friendly = humanizeCutError(err);
+        setStatus('裁剪失败: ' + friendly);
+        alert('裁剪失败: ' + friendly + '\\n\\n已保存 review-state.backup.json，可用于恢复审核草稿。');
+        throw err;
       } finally {
         isCutRunning = false;
         setCutSubmitting(false);
@@ -3825,7 +4223,18 @@ const html = `<!doctype html>
         const r = await fetch('/api/runtime-info');
         const d = await r.json();
         if (d && d.success) {
+          runtimeInfoCache = d;
           runtimeEl.textContent = '输出目录: ' + d.cutOutputDir;
+          if (d.videoExists === false) {
+            const message = d.videoMissingMessage || '原视频文件不存在，审核页可查看和调整草稿，但不能执行裁剪。';
+            runtimeEl.textContent += ' | ' + message;
+            btnCut.disabled = true;
+            btnCut.title = message;
+            setStatus('原视频缺失，仅可查看审核草稿');
+          } else if (!cutSubmitting) {
+            btnCut.disabled = false;
+            btnCut.title = '';
+          }
           applyTheme(d.themeMode || 'light');
           drawWaveform();
         } else {
@@ -3894,6 +4303,12 @@ const html = `<!doctype html>
         }
         return;
       }
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && key === 's') {
+        if (!shouldHandleGlobalHotkey(e)) return;
+        e.preventDefault();
+        previewCurrentDeletePoint();
+        return;
+      }
       if (e.code !== 'Space') return;
       if (!shouldHandleGlobalHotkey(e)) return;
       e.preventDefault();
@@ -3904,12 +4319,22 @@ const html = `<!doctype html>
     document.getElementById('btnClear').addEventListener('click', () => {
       if (selected.size) pushSelectionUndo();
       selected.clear();
+      setPreviewSegment(null);
       WORDS.forEach((_w, i) => refreshToken(i));
       refreshIdleStatus();
       scheduleReviewStateSave(250);
     });
 
     document.getElementById('btnSelectSilence').addEventListener('click', selectSilenceByThreshold);
+    if (btnPreviewDelete) btnPreviewDelete.addEventListener('click', previewCurrentDeletePoint);
+    if (btnShowDeleteDiagnostics) btnShowDeleteDiagnostics.addEventListener('click', renderDeleteDiagnostics);
+    if (btnCopyDiagnostics) btnCopyDiagnostics.addEventListener('click', copyCutDiagnostics);
+    if (cutPrecisionModeEl) {
+      cutPrecisionModeEl.addEventListener('change', () => {
+        updateSelectionStats();
+        scheduleReviewStateSave(250);
+      });
+    }
     thresholdEl.addEventListener('change', () => {
       selectSilenceByThreshold();
     });
@@ -4111,8 +4536,7 @@ const html = `<!doctype html>
         await executeCut();
       } catch (e) {
         isCutRunning = false;
-        setStatus('裁剪失败: ' + e.message);
-        alert('裁剪失败: ' + e.message);
+        setStatus('裁剪失败: ' + humanizeCutError(e));
       }
     });
 
@@ -4221,7 +4645,14 @@ const html = `<!doctype html>
       stopSyncTimer();
     });
 
-    audio.addEventListener('timeupdate', syncCurrentToken);
+    audio.addEventListener('timeupdate', () => {
+      syncCurrentToken();
+      if (previewStopTime !== null && Number(audio.currentTime) >= previewStopTime) {
+        audio.pause();
+        previewStopTime = null;
+        setStatus('预听完成');
+      }
+    });
     audio.addEventListener('loadedmetadata', () => {
       updateSelectionStats();
       drawWaveform();
@@ -4241,6 +4672,7 @@ const html = `<!doctype html>
     });
     audio.addEventListener('ended', () => {
       stopSyncTimer();
+      previewStopTime = null;
       drawWaveform();
     });
     window.addEventListener('beforeunload', () => {

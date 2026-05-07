@@ -5,9 +5,14 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const { analyzeTranscriptQuality } = require('../talkcut/scripts/transcript_quality');
-const { buildReviewDeleteSegments } = require('../talkcut/scripts/review_segment_utils');
+const {
+  buildReviewDeleteSegments,
+  applyCutPrecisionMode,
+  diagnoseDeleteSegments,
+} = require('../talkcut/scripts/review_segment_utils');
 process.env.JAYGO_CUT_TEST_EXPORTS = '1';
 const reviewServerTools = require('../talkcut/scripts/review_server');
+const historyUtils = require('../electron/history_utils');
 
 function runAutoSelectFixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jaygo-auto-select-'));
@@ -75,6 +80,52 @@ function testReviewBoundarySettings() {
   assert.ok(segs[0].start < 0.82, '删除第一个字前应有少量提前，避免字头残留');
   assert.ok(segs[0].start > 0.72, '提前量不能吞掉前一个保留词太多');
   assert.ok(segs[0].end <= 2.215, '尾部延后不能压进下一个保留词');
+}
+
+function testCutPrecisionModeAdjustsOnlySubmittedSegments() {
+  const segments = [
+    { start: 1.000, end: 1.400 },
+    { start: 2.000, end: 2.080 },
+  ];
+
+  assert.deepStrictEqual(
+    applyCutPrecisionMode(segments, 'standard', 5),
+    segments,
+    'standard mode should keep submitted delete boundaries unchanged',
+  );
+
+  const clean = applyCutPrecisionMode(segments, 'clean', 5);
+  assert.ok(clean[0].start < segments[0].start, 'clean mode should start slightly earlier');
+  assert.ok(clean[0].end > segments[0].end, 'clean mode should end slightly later');
+
+  const conservative = applyCutPrecisionMode(segments, 'conservative', 5);
+  assert.ok(conservative[0].start > segments[0].start, 'conservative mode should trim the leading edge');
+  assert.ok(conservative[0].end < segments[0].end, 'conservative mode should trim the trailing edge');
+}
+
+function testDeleteSegmentDiagnosticsFindsRisks() {
+  const words = [
+    { text: 'A', start: 0.00, end: 0.25, isGap: false },
+    { text: 'B', start: 0.25, end: 0.34, isGap: false },
+    { text: 'C', start: 0.34, end: 0.60, isGap: false },
+    { text: 'D', start: 0.70, end: 9.50, isGap: false },
+    { text: 'E', start: 9.53, end: 9.80, isGap: false },
+    { text: 'F', start: 9.95, end: 10.10, isGap: false },
+  ];
+  const diagnostics = diagnoseDeleteSegments([
+    { start: 0.25, end: 0.34 },
+    { start: 0.38, end: 0.54 },
+    { start: 0.70, end: 9.50 },
+  ], words);
+
+  assert.strictEqual(diagnostics.count, 3);
+  assert.ok(diagnostics.totalDurationSec > 9, 'diagnostics should total delete duration');
+  assert.ok(diagnostics.longest.durationSec > 8, 'diagnostics should expose longest segment');
+  assert.ok(diagnostics.shortest.durationSec < 0.12, 'diagnostics should expose shortest segment');
+  assert.ok(diagnostics.denseCount >= 1, 'diagnostics should count dense consecutive deletes');
+  assert.ok(diagnostics.risks.some((risk) => risk.type === 'short'), 'short delete risks should be flagged');
+  assert.ok(diagnostics.risks.some((risk) => risk.type === 'long'), 'long delete risks should be flagged');
+  assert.ok(diagnostics.risks.some((risk) => risk.type === 'tight'), 'tight-to-kept-word risks should be flagged');
 }
 
 function testImageDirectorPromptSanitizer() {
@@ -196,6 +247,12 @@ function testGeneratedReviewInlineScriptSyntax() {
 
   const html = fs.readFileSync(path.join(dir, 'review.html'), 'utf8');
   assert.ok(html.includes('id="btnShortcutHelp"'), 'review page should expose a shortcut guide button');
+  assert.ok(html.includes('id="btnPreviewDelete"'), 'review page should expose delete preview button');
+  assert.ok(html.includes('id="btnShowDeleteDiagnostics"'), 'review page should expose delete diagnostics button');
+  assert.ok(html.includes('id="cutPrecisionMode"'), 'review page should expose cut precision mode selector');
+  assert.ok(html.includes('id="btnCopyDiagnostics"'), 'review page should expose copy diagnostics button');
+  assert.ok(html.includes('/api/review-state/backup'), 'review page should force a backup before cut');
+  assert.ok(html.includes('/api/cut-preflight'), 'review page should run preflight before cut');
   assert.ok(html.includes('id="replaceFindText"'), 'review page should expose keyword search input');
   assert.ok(html.includes('id="btnReplaceAll"'), 'review page should expose batch keyword replacement');
   assert.ok(html.includes('textOverrides'), 'review state should persist transcript text corrections');
@@ -207,6 +264,87 @@ function testGeneratedReviewInlineScriptSyntax() {
     const check = spawnSync(process.execPath, ['--check', scriptPath], { encoding: 'utf8' });
     assert.strictEqual(check.status, 0, check.stderr || check.stdout);
   });
+}
+
+function testReviewStateBackupWriter() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jaygo-review-backup-'));
+  try {
+    const result = reviewServerTools.writeReviewStateBackup({
+      version: 4,
+      selectedIndices: [3, 1, 1],
+      threshold: 0.2,
+      currentTimeSec: 8.5,
+      cutPrecisionMode: 'clean',
+      textOverrides: { 3: 'fixed-name' },
+      llmPunctuation: { 3: '。' },
+      llmParagraphAfterIndices: [3],
+      boundarySettings: { speechLeadMs: 55, speechTailMs: 95, fillerBoostMs: 25, silenceGuardMs: 35 },
+    }, path.join(dir, 'review-state.backup.json'));
+    assert.strictEqual(result.selectedIndices.join(','), '1,3');
+    assert.strictEqual(result.cutPrecisionMode, 'clean');
+    assert.strictEqual(result.textOverrides['3'], 'fixed-name');
+    assert.strictEqual(result.llmPunctuation['3'], '。');
+    assert.deepStrictEqual(result.llmParagraphAfterIndices, [3]);
+    assert.strictEqual(result.boundarySettings.speechLeadMs, 55);
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, 'review-state.backup.json'), 'utf8'));
+    assert.deepStrictEqual(saved.selectedIndices, [1, 3]);
+    assert.strictEqual(saved.cutPrecisionMode, 'clean');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function testHistoryReviewCanOpenWhenOriginalVideoIsMissing() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jaygo-history-review-'));
+  try {
+    const reviewDir = path.join(dir, 'talkcut', '3_review');
+    fs.mkdirSync(reviewDir, { recursive: true });
+    const missingVideo = path.join(dir, 'missing.mp4');
+    const plan = historyUtils.buildHistoryReviewResumePlan({
+      reviewDir,
+      projectDir: dir,
+      videoPath: missingVideo,
+      outputRoot: path.join(dir, 'output'),
+    });
+
+    assert.strictEqual(plan.reviewDir, reviewDir);
+    assert.strictEqual(plan.videoPath, missingVideo);
+    assert.strictEqual(plan.videoExists, false);
+    assert.strictEqual(plan.canCut, false);
+    assert.ok(plan.warning.includes('原视频文件不存在'));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function testHistoryEntryHealthAndRelinkVideo() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jaygo-history-health-'));
+  try {
+    const reviewDir = path.join(dir, 'talkcut', '3_review');
+    fs.mkdirSync(reviewDir, { recursive: true });
+    fs.writeFileSync(path.join(reviewDir, 'review.html'), '<!doctype html>', 'utf8');
+    const originalVideo = path.join(dir, 'missing.mp4');
+    const newVideo = path.join(dir, 'new.mp4');
+    fs.writeFileSync(newVideo, '');
+    const entry = {
+      id: 'h1',
+      finishedAt: '2026-05-04T00:00:00.000Z',
+      reviewDir,
+      projectDir: dir,
+      videoPath: originalVideo,
+    };
+
+    const health = historyUtils.annotateHistoryEntry(entry);
+    assert.strictEqual(health.health.status, 'missing_video');
+    assert.strictEqual(health.health.canOpenReview, true);
+    assert.strictEqual(health.health.canCut, false);
+
+    const relinked = historyUtils.relinkHistoryVideo([entry], entry, newVideo);
+    assert.strictEqual(relinked[0].videoPath, newVideo);
+    assert.strictEqual(historyUtils.annotateHistoryEntry(relinked[0]).health.status, 'ready');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 function testMainSettingsDoNotExposeImageSize() {
@@ -223,6 +361,11 @@ testImageDirectorPromptSanitizer();
 testImagePlanPromptRulesAndAspectRatio();
 testLlmMarkingPromptIsConservative();
 testJianyingDraftExport();
+testCutPrecisionModeAdjustsOnlySubmittedSegments();
+testDeleteSegmentDiagnosticsFindsRisks();
 testGeneratedReviewInlineScriptSyntax();
+testReviewStateBackupWriter();
+testHistoryReviewCanOpenWhenOriginalVideoIsMissing();
+testHistoryEntryHealthAndRelinkVideo();
 testMainSettingsDoNotExposeImageSize();
 console.log('review regression tests passed');

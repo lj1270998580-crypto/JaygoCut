@@ -127,7 +127,156 @@ function buildReviewDeleteSegments(words, selectedIndices, options = {}) {
   return adjusted;
 }
 
+function normalizeSegments(segments, durationSec) {
+  const maxDuration = Number.isFinite(Number(durationSec)) && Number(durationSec) > 0
+    ? Number(durationSec)
+    : Number.POSITIVE_INFINITY;
+  return (Array.isArray(segments) ? segments : [])
+    .map((seg) => ({
+      start: Math.max(0, Number(seg?.start)),
+      end: Math.min(maxDuration, Number(seg?.end)),
+    }))
+    .filter((seg) => Number.isFinite(seg.start) && Number.isFinite(seg.end) && seg.end > seg.start)
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+}
+
+function mergeSegments(segments) {
+  const merged = [];
+  for (const seg of segments) {
+    if (!merged.length || seg.start > merged[merged.length - 1].end) {
+      merged.push({ ...seg });
+      continue;
+    }
+    merged[merged.length - 1].end = Math.max(merged[merged.length - 1].end, seg.end);
+  }
+  return merged.map((seg) => ({
+    start: Number(seg.start.toFixed(3)),
+    end: Number(seg.end.toFixed(3)),
+  }));
+}
+
+function applyCutPrecisionMode(segments, mode = 'standard', durationSec) {
+  const normalized = normalizeSegments(segments, durationSec);
+  const selectedMode = ['conservative', 'standard', 'clean'].includes(mode) ? mode : 'standard';
+  if (selectedMode === 'standard') {
+    return normalized.map((seg) => ({
+      start: Number(seg.start.toFixed(3)),
+      end: Number(seg.end.toFixed(3)),
+    }));
+  }
+
+  const maxDuration = Number.isFinite(Number(durationSec)) && Number(durationSec) > 0
+    ? Number(durationSec)
+    : Number.POSITIVE_INFINITY;
+  const adjusted = normalized.map((seg) => {
+    const duration = seg.end - seg.start;
+    if (selectedMode === 'clean') {
+      const lead = duration < 0.16 ? 0.025 : 0.04;
+      const tail = duration < 0.16 ? 0.035 : 0.06;
+      return {
+        start: Math.max(0, seg.start - lead),
+        end: Math.min(maxDuration, seg.end + tail),
+      };
+    }
+
+    const trim = Math.min(0.025, Math.max(0, (duration - 0.06) / 2));
+    return {
+      start: seg.start + trim,
+      end: seg.end - trim,
+    };
+  }).filter((seg) => seg.end - seg.start >= 0.03);
+
+  return mergeSegments(adjusted);
+}
+
+function findNearestWordIndex(words, timeSec, direction) {
+  if (!Array.isArray(words)) return -1;
+  let bestIndex = -1;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i];
+    if (!word || word.isGap) continue;
+    const start = Number(word.start);
+    const end = Number(word.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+    if (direction === 'prev' && end > timeSec) continue;
+    if (direction === 'next' && start < timeSec) continue;
+    const point = direction === 'prev' ? end : start;
+    const distance = Math.abs(point - timeSec);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = i;
+    }
+  }
+  return bestIndex;
+}
+
+function diagnoseDeleteSegments(segments, words = [], options = {}) {
+  const normalized = normalizeSegments(segments, options.durationSec);
+  const risks = [];
+  const shortSec = Number.isFinite(Number(options.shortSec)) ? Number(options.shortSec) : 0.16;
+  const longSec = Number.isFinite(Number(options.longSec)) ? Number(options.longSec) : 8;
+  const tightSec = Number.isFinite(Number(options.tightSec)) ? Number(options.tightSec) : 0.045;
+  const denseGapSec = Number.isFinite(Number(options.denseGapSec)) ? Number(options.denseGapSec) : 0.25;
+  let denseCount = 0;
+
+  const details = normalized.map((seg, index) => {
+    const durationSec = seg.end - seg.start;
+    const detail = {
+      index,
+      start: Number(seg.start.toFixed(3)),
+      end: Number(seg.end.toFixed(3)),
+      durationSec: Number(durationSec.toFixed(3)),
+      prevWordIndex: findNearestWordIndex(words, seg.start, 'prev'),
+      nextWordIndex: findNearestWordIndex(words, seg.end, 'next'),
+      risks: [],
+    };
+
+    if (durationSec < shortSec) {
+      detail.risks.push('short');
+      risks.push({ type: 'short', index, message: '删除段过短，可能残留碎音。', ...detail });
+    }
+    if (durationSec > longSec) {
+      detail.risks.push('long');
+      risks.push({ type: 'long', index, message: '删除段较长，请确认没有误删有效内容。', ...detail });
+    }
+
+    const prevWord = words[detail.prevWordIndex];
+    const nextWord = words[detail.nextWordIndex];
+    const prevGap = prevWord ? seg.start - Number(prevWord.end) : Number.POSITIVE_INFINITY;
+    const nextGap = nextWord ? Number(nextWord.start) - seg.end : Number.POSITIVE_INFINITY;
+    if ((Number.isFinite(prevGap) && prevGap >= 0 && prevGap < tightSec)
+      || (Number.isFinite(nextGap) && nextGap >= 0 && nextGap < tightSec)) {
+      detail.risks.push('tight');
+      risks.push({ type: 'tight', index, message: '删除段紧贴保留词，可能吞字或留下尾音。', ...detail });
+    }
+
+    const nextSeg = normalized[index + 1];
+    if (nextSeg && nextSeg.start - seg.end >= 0 && nextSeg.start - seg.end < denseGapSec) {
+      detail.risks.push('dense');
+      denseCount += 1;
+      risks.push({ type: 'dense', index, message: '附近删除段过密，建议预听确认节奏。', ...detail });
+    }
+
+    return detail;
+  });
+
+  const totalDurationSec = normalized.reduce((sum, seg) => sum + (seg.end - seg.start), 0);
+  const byDuration = [...details].sort((a, b) => a.durationSec - b.durationSec);
+  return {
+    count: normalized.length,
+    totalDurationSec: Number(totalDurationSec.toFixed(3)),
+    longest: byDuration.length ? byDuration[byDuration.length - 1] : null,
+    shortest: byDuration.length ? byDuration[0] : null,
+    denseCount,
+    risks,
+    segments: details,
+  };
+}
+
 module.exports = {
+  applyCutPrecisionMode,
   buildReviewDeleteSegments,
+  diagnoseDeleteSegments,
   normalizeBoundarySettings,
 };

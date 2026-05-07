@@ -6,6 +6,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn, execSync } = require('child_process');
 const { normalizeSelectedIndices } = require('./auto_selected_utils');
+const { normalizeBoundarySettings } = require('./review_segment_utils');
 
 const PORT = Number(process.argv[2]) || 8899;
 const VIDEO_FILE = process.argv[3] || findVideoFile(process.cwd());
@@ -48,6 +49,7 @@ const MIME_TYPES = {
   '.mp4': 'video/mp4',
 };
 const REVIEW_STATE_FILE = path.resolve(process.cwd(), 'review_state.json');
+const REVIEW_STATE_BACKUP_FILE = path.resolve(process.cwd(), 'review-state.backup.json');
 const IMAGE_ASSET_DIR = path.resolve(process.cwd(), 'image_assets');
 const JIANYING_DRAFT_EXPORT_DIR_NAME = 'jianying_drafts';
 
@@ -118,6 +120,8 @@ function getRuntimeInfo() {
   const resolvedVideo = path.resolve(VIDEO_FILE);
   const themeMode = String(process.env.JAYGO_THEME_MODE || fileEnv.JAYGO_THEME_MODE || 'light').trim().toLowerCase();
   const normalizedTheme = themeMode === 'blackgold' || themeMode === 'system' ? themeMode : 'light';
+  const videoExists = !!(resolvedVideo && fs.existsSync(resolvedVideo));
+  const videoMissingMessage = String(process.env.JAYGO_REVIEW_VIDEO_MISSING_MESSAGE || '').trim();
 
   const configuredOutput = [
     OUTPUT_ROOT_ARG,
@@ -135,6 +139,8 @@ function getRuntimeInfo() {
     return {
       cutOutputDir,
       videoFile: resolvedVideo,
+      videoExists,
+      videoMissingMessage,
       envFile,
       themeMode: normalizedTheme,
       usesConfiguredOutputDir: true,
@@ -146,6 +152,8 @@ function getRuntimeInfo() {
   return {
     cutOutputDir: fallback,
     videoFile: resolvedVideo,
+    videoExists,
+    videoMissingMessage,
     envFile,
     themeMode: normalizedTheme,
     usesConfiguredOutputDir: false,
@@ -2520,6 +2528,11 @@ function normalizeReviewStatePayload(payload) {
       .map((v) => Number(v))
       .filter((v) => Number.isInteger(v) && v >= 0)
     : [];
+  const llmParagraphAfterIndices = Array.isArray(payload?.llmParagraphAfterIndices)
+    ? payload.llmParagraphAfterIndices
+      .map((v) => Number(v))
+      .filter((v) => Number.isInteger(v) && v >= 0)
+    : [];
 
   const llmReasons = {};
   if (payload?.llmReasons && typeof payload.llmReasons === 'object') {
@@ -2531,10 +2544,34 @@ function normalizeReviewStatePayload(payload) {
       llmReasons[String(idx)] = text;
     }
   }
+  const llmPunctuation = {};
+  if (payload?.llmPunctuation && typeof payload.llmPunctuation === 'object') {
+    for (const [key, value] of Object.entries(payload.llmPunctuation)) {
+      const idx = Number(key);
+      if (!Number.isInteger(idx) || idx < 0) continue;
+      const punct = String(value || '').trim();
+      if (/[，。！？；：]/.test(punct)) {
+        llmPunctuation[String(idx)] = punct[0];
+      }
+    }
+  }
+  const textOverrides = {};
+  if (payload?.textOverrides && typeof payload.textOverrides === 'object') {
+    for (const [key, value] of Object.entries(payload.textOverrides)) {
+      const idx = Number(key);
+      if (!Number.isInteger(idx) || idx < 0) continue;
+      const text = String(value ?? '').trim().slice(0, 80);
+      if (text) textOverrides[String(idx)] = text;
+    }
+  }
 
   const threshold = Number(payload?.threshold);
   const currentTime = Number(payload?.currentTimeSec);
   const version = Number(payload?.version);
+  const cutPrecisionModeRaw = String(payload?.cutPrecisionMode || 'standard');
+  const cutPrecisionMode = ['conservative', 'standard', 'clean'].includes(cutPrecisionModeRaw)
+    ? cutPrecisionModeRaw
+    : 'standard';
 
   return {
     version: Number.isInteger(version) && version > 0 ? version : 1,
@@ -2542,7 +2579,15 @@ function normalizeReviewStatePayload(payload) {
     selectedIndices: Array.from(new Set(selectedIndices)).sort((a, b) => a - b),
     llmSuggestedIndices: Array.from(new Set(llmSuggestedIndices)).sort((a, b) => a - b),
     llmReasons,
+    llmPunctuation,
+    textOverrides,
+    llmParagraphAfterIndices: Array.from(new Set(llmParagraphAfterIndices)).sort((a, b) => a - b),
+    llmTopic: String(payload?.llmTopic || '').trim().slice(0, 80),
+    llmOutline: String(payload?.llmOutline || '').trim().slice(0, 120),
+    llmMultiSpeaker: !!payload?.llmMultiSpeaker,
     threshold: Number.isFinite(threshold) && threshold >= 0.2 ? threshold : 0.2,
+    boundarySettings: normalizeBoundarySettings(payload?.boundarySettings),
+    cutPrecisionMode,
     currentTimeSec: Number.isFinite(currentTime) && currentTime >= 0 ? currentTime : 0,
   };
 }
@@ -2563,6 +2608,39 @@ function writeReviewState(payload) {
   fs.writeFileSync(tmp, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
   fs.renameSync(tmp, REVIEW_STATE_FILE);
   return normalized;
+}
+
+function writeReviewStateBackup(payload, backupFile = REVIEW_STATE_BACKUP_FILE) {
+  const normalized = normalizeReviewStatePayload(payload || readReviewState() || {});
+  const tmp = `${backupFile}.tmp.${process.pid}.${Date.now()}`;
+  fs.writeFileSync(tmp, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
+  fs.renameSync(tmp, backupFile);
+  return normalized;
+}
+
+function getCutPreflight(deleteCount = 0) {
+  const runtimeInfo = getRuntimeInfo();
+  const issues = [];
+  const videoExists = !!(VIDEO_FILE && fs.existsSync(VIDEO_FILE));
+  if (!videoExists) {
+    issues.push({ code: 'missing_video', message: `原视频文件不存在：${VIDEO_FILE || '-'}` });
+  }
+  try {
+    fs.mkdirSync(runtimeInfo.cutOutputDir, { recursive: true });
+    fs.accessSync(runtimeInfo.cutOutputDir, fs.constants.W_OK);
+  } catch (err) {
+    issues.push({ code: 'output_not_writable', message: `输出目录不可写：${runtimeInfo.cutOutputDir}（${err.message}）` });
+  }
+  if (!Number.isFinite(Number(deleteCount)) || Number(deleteCount) <= 0) {
+    issues.push({ code: 'empty_delete_list', message: '没有可裁剪的删除片段。' });
+  }
+  return {
+    ok: issues.length === 0,
+    issues,
+    videoExists,
+    cutOutputDir: runtimeInfo.cutOutputDir,
+    deleteCount: Math.max(0, Number(deleteCount) || 0),
+  };
 }
 
 function readBody(req) {
@@ -2684,6 +2762,22 @@ const server = http.createServer(async (req, res) => {
       const payload = JSON.parse(body || '{}');
       const state = writeReviewState(payload);
       writeJson(res, 200, { success: true, state });
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/review-state/backup') {
+      const body = await readBody(req);
+      const payload = body ? JSON.parse(body || '{}') : readReviewState();
+      const state = writeReviewStateBackup(payload);
+      writeJson(res, 200, { success: true, state, output: REVIEW_STATE_BACKUP_FILE });
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/cut-preflight') {
+      const body = await readBody(req);
+      const payload = JSON.parse(body || '{}');
+      const deleteCount = Array.isArray(payload?.segments) ? payload.segments.length : Number(payload?.deleteCount || 0);
+      writeJson(res, 200, { success: true, ...getCutPreflight(deleteCount) });
       return;
     }
 
@@ -2864,6 +2958,9 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && pathname === '/api/cut') {
+      if (!fs.existsSync(VIDEO_FILE)) {
+        throw new Error(`原视频文件不存在，无法执行裁剪：${VIDEO_FILE || '-'}`);
+      }
       if (currentCutJob.state === 'running') {
         writeJson(res, 202, {
           success: true,
@@ -2959,6 +3056,8 @@ if (process.env.JAYGO_CUT_TEST_EXPORTS === '1') {
     buildLlmPrompt,
     buildChatAdjustPrompt,
     writeJianyingDraft,
+    writeReviewStateBackup,
+    getCutPreflight,
     replaceTextContent,
   };
 } else {

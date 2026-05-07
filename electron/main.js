@@ -6,6 +6,15 @@ const os = require('os');
 const crypto = require('crypto');
 const net = require('net');
 const { spawn, spawnSync } = require('child_process');
+const {
+  annotateHistoryEntry,
+  buildHistoryReviewResumePlan,
+  findFirstExistingDir: findFirstExistingDirShared,
+  findReviewDirUnder: findReviewDirUnderShared,
+  relinkHistoryVideo,
+  resolveHistoryReviewDir: resolveHistoryReviewDirShared,
+  resolveHistoryVideoPath: resolveHistoryVideoPathShared,
+} = require('./history_utils');
 let autoUpdater = null;
 try {
   ({ autoUpdater } = require('electron-updater'));
@@ -541,6 +550,11 @@ async function saveHistory(list) {
   await fsp.writeFile(getHistoryFilePath(), `${JSON.stringify(list, null, 2)}\n`, 'utf8');
 }
 
+async function loadHistoryWithHealth() {
+  const list = await loadHistory();
+  return list.map((item) => annotateHistoryEntry(item));
+}
+
 async function addHistoryEntry(entry) {
   const list = await loadHistory();
   list.unshift(entry);
@@ -572,7 +586,20 @@ async function deleteHistoryEntry(target) {
   const list = await loadHistory();
   const next = list.filter((item) => !sameHistoryEntry(item, target));
   await saveHistory(next);
-  return next;
+  return next.map((item) => annotateHistoryEntry(item));
+}
+
+async function relinkHistoryEntryVideo(target) {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '重新选择原视频文件',
+    properties: ['openFile'],
+    filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'm4v', 'mkv'] }],
+  });
+  if (result.canceled || !result.filePaths[0]) return loadHistoryWithHealth();
+  const list = await loadHistory();
+  const next = relinkHistoryVideo(list, target, result.filePaths[0]);
+  await saveHistory(next);
+  return next.map((item) => annotateHistoryEntry(item));
 }
 
 function taskSnapshot() {
@@ -2483,27 +2510,21 @@ function resolveHistoryVideoPath(entry, reviewDir) {
 }
 
 async function resumeReviewFromHistory(entry) {
-  if (!entry) {
-    throw new Error('Invalid history entry');
-  }
-  const reviewDir = resolveHistoryReviewDir(entry);
-  if (!reviewDir) {
-    throw new Error(`Review directory is missing and could not be located: ${entry.reviewDir || entry.projectDir || '-'}`);
-  }
-  const videoPath = resolveHistoryVideoPath(entry, reviewDir);
-  if (!videoPath || !fs.existsSync(videoPath)) {
-    throw new Error(`Video file is missing: ${videoPath || entry.videoPath || '-'}`);
-  }
+  const plan = buildHistoryReviewResumePlan(entry);
 
   stopServerProc(standaloneReviewServer);
 
   const port = await getFreePort();
   const runtimeEnv = buildRuntimeEnv(await loadSettings());
-  await rebuildReviewHtml(reviewDir, runtimeEnv);
+  if (!plan.videoExists) {
+    runtimeEnv.JAYGO_REVIEW_VIDEO_MISSING = '1';
+    runtimeEnv.JAYGO_REVIEW_VIDEO_MISSING_MESSAGE = plan.warning;
+  }
+  await rebuildReviewHtml(plan.reviewDir, runtimeEnv);
   standaloneReviewServer = startReviewServer(
-    reviewDir,
-    videoPath,
-    entry.outputRoot || path.dirname(entry.projectDir || reviewDir),
+    plan.reviewDir,
+    plan.videoPath || '',
+    plan.outputRoot,
     port,
     runtimeEnv,
   );
@@ -2511,7 +2532,7 @@ async function resumeReviewFromHistory(entry) {
   await waitForReviewServerReady(port);
   const url = `http://localhost:${port}`;
   openReviewWindow(url);
-  return url;
+  return { url, warning: plan.warning, canCut: plan.canCut };
 }
 
 function cleanupReviewServer() {
@@ -2550,8 +2571,9 @@ app.whenReady().then(async () => {
   ipcMain.handle('llm:test', async (_event, payload) => testLlmConnection(payload));
   ipcMain.handle('asr:test', async (_event, payload) => testAsrConnection(payload));
   ipcMain.handle('task:get', () => taskSnapshot());
-  ipcMain.handle('history:get', async () => loadHistory());
+  ipcMain.handle('history:get', async () => loadHistoryWithHealth());
   ipcMain.handle('history:delete', async (_event, entry) => deleteHistoryEntry(entry));
+  ipcMain.handle('history:relink-video', async (_event, entry) => relinkHistoryEntryVideo(entry));
   ipcMain.handle('history:open-project', async (_event, entry) => {
     const dir = entry?.projectDir;
     if (!dir) throw new Error('历史记录无效');

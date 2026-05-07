@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('talkcut', {
   getTask: () => ipcRenderer.invoke('task:get'),
   getHistory: () => ipcRenderer.invoke('history:get'),
   deleteHistory: (entry) => ipcRenderer.invoke('history:delete', entry),
+  relinkHistoryVideo: (entry) => ipcRenderer.invoke('history:relink-video', entry),
   startTask: (input) => ipcRenderer.invoke('task:start', input),
   openReviewWindow: () => ipcRenderer.invoke('task:open-review'),
   openProjectFolder: () => ipcRenderer.invoke('task:open-folder'),

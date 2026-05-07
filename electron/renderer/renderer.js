@@ -307,17 +307,25 @@ function renderHistory(list) {
     const time = item.finishedAt ? new Date(item.finishedAt).toLocaleString() : '-';
     const video = item.videoPath || '-';
     const project = item.projectDir || '-';
+    const health = item.health || {};
+    const healthStatus = health.status || 'unknown';
+    const healthLabel = health.label || '未检查';
+    const healthMessage = health.message || '';
+    const canOpenReview = health.canOpenReview !== false;
+    const needsRelink = healthStatus === 'missing_video';
     return `
       <div class="history-item">
         <div class="history-row">
           <div class="history-meta">
-            <strong>${escapeHtml(time)}</strong>
+            <strong>${escapeHtml(time)} <span class="history-badge ${escapeHtml(healthStatus)}">${escapeHtml(healthLabel)}</span></strong>
             <span class="mono">${escapeHtml(video)}</span>
             <span class="mono">${escapeHtml(project)}</span>
+            ${healthMessage ? `<span class="history-health-note">${escapeHtml(healthMessage)}</span>` : ''}
           </div>
           <div class="history-actions">
             <button type="button" class="secondary" data-history-open="${index}">打开目录</button>
-            <button type="button" class="secondary" data-history-review="${index}">恢复审核</button>
+            ${needsRelink ? `<button type="button" class="secondary" data-history-relink="${index}">重新定位视频</button>` : ''}
+            <button type="button" class="secondary" data-history-review="${index}" ${canOpenReview ? '' : 'disabled'}>恢复审核</button>
             <button type="button" class="danger" data-history-delete="${index}">删除记录</button>
           </div>
         </div>
@@ -890,6 +898,7 @@ els.historyList.addEventListener('click', async (event) => {
 
   const openIndex = btn.getAttribute('data-history-open');
   const reviewIndex = btn.getAttribute('data-history-review');
+  const relinkIndex = btn.getAttribute('data-history-relink');
   const deleteIndex = btn.getAttribute('data-history-delete');
 
   try {
@@ -903,7 +912,18 @@ els.historyList.addEventListener('click', async (event) => {
     if (reviewIndex !== null) {
       const item = historyCache[Number(reviewIndex)];
       if (!item) return;
-      await window.talkcut.resumeHistoryReview(item);
+      const result = await window.talkcut.resumeHistoryReview(item);
+      if (result && result.warning) {
+        alert(result.warning);
+      }
+      return;
+    }
+
+    if (relinkIndex !== null) {
+      const item = historyCache[Number(relinkIndex)];
+      if (!item) return;
+      const list = await window.talkcut.relinkHistoryVideo(item);
+      renderHistory(list);
       return;
     }
 

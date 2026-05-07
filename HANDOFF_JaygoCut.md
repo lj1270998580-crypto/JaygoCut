@@ -1,7 +1,7 @@
 # Jaygo Cut Handoff Document
 
-更新时间：2026-05-02
-当前源码版本：`0.1.13`
+更新时间：2026-05-07
+当前源码版本：`0.1.14`
 项目目录：`C:\Users\15119\Documents\New project\repo`
 本机测试安装目录：`D:\Jaygo Cut\JaygoCut`
 在线更新地址：`https://ailabing.cn/downloads/jaygo/`
@@ -9,64 +9,52 @@ GitHub 仓库：`https://github.com/lj1270998580-crypto/JaygoCut`
 
 ## 1. 产品定位
 
-Jaygo Cut 是 Windows 桌面端口播视频剪辑工具。核心流程：选择视频 -> 提取音频 -> 云端 ASR 或本地模型转录 -> 生成审核页 -> 自动标记静音/语气词/重复句/LLM 建议 -> 人工复核 -> FFmpeg 精确裁剪 -> 导出成片/字幕/文案。
+Jaygo Cut 是 Windows 桌面端口播视频剪辑工具。核心流程是：选择视频 -> 提取音频 -> 云端 ASR 或本地模型转录 -> 生成审核页 -> 自动标记静音/语气词/重复句/LLM 建议 -> 人工复核 -> FFmpeg 精确裁剪 -> 导出成片、字幕、文案或剪映草稿。
 
-## 2. 当前重点能力
+## 2. 当前核心能力
 
 - 转录引擎：火山引擎 ASR、阿里 DashScope `qwen3-asr-flash-filetrans` 异步识别、本地 Whisper/ggml 模型。
-- 本地模型：安装包不内置大模型；设置页支持全机扫描可用语音模型和一键下载/安装。
-- 审核页：音频播放、波形缩放、逐字文本、颜色标记、拖选、撤销、静音阈值重算、历史恢复、自动保存。
-- 规则预标记：静音阈值默认 >= 0.2 秒；语气词、重复句、卡壳/重说会用不同颜色标注。
-- LLM：多服务商兼容；支持语义标记、标点分段、发布建议、LLM 对话调标记。
-- 视频配图：审核页悬浮入口，可生成配图点、分镜提示词、图片预览、单图重试和批量下载。
-- 字幕：审核页支持导出 SRT（剪映可导入）、TXT 文案和剪映草稿目录；草稿可复用用户自己的字幕模板草稿目录。剪映 6.x+ 可能加密草稿，SRT 保留为兜底。
-- 更新：electron-updater generic provider，支持应用内显示版本更新内容。
+- 本地模型：安装包不内置大模型，设置页支持检查本机可用语音模型，并支持一键下载安装。
+- 审核页：音频播放、波形缩放、逐字文本、颜色标记、拖选、撤销/重做、静音阈值重算、历史恢复、自动保存。
+- 审核页可信度：支持预听当前删除点、删除诊断、剪辑精度模式、裁剪前备份和复制诊断信息。
+- 规则预标记：静音阈值默认 `>= 0.2` 秒；语气词、重复句、LLM 建议使用不同颜色标注。
+- LLM：多服务商兼容，支持语义标记、标点分段、发布建议、LLM 对话调标记。
+- 视频配图：审核页悬浮入口，支持配图点、分镜提示词、图片预览、单图重试和批量下载。
+- 字幕与剪映：审核页支持导出 SRT、TXT 和剪映草稿目录；SRT 作为剪映新版本兼容兜底方案。
+- 在线更新：electron-updater generic provider，应用内显示版本和更新说明。
 
-## 3. 关键目录
+## 3. 0.1.14 更新重点
+
+- 新增“预听当前删除点”：播放删除片段前后约 2 秒，支持快捷键 `S`。
+- 新增“删除诊断”：统计删除段数量、总删除时长、最长/最短删除段、连续密集删除段和风险片段。
+- 风险片段可点击跳转到审核文本对应位置。
+- 执行裁剪前自动保存 `review-state.json`，并额外写入 `review-state.backup.json`。
+- 新增剪辑精度模式：`保守`、`标准`、`干净`；默认 `标准`，只影响最终提交裁剪的边界。
+- 裁剪失败时给出更像人话的错误提示，详细错误保留在日志；支持复制诊断信息。
+- 历史审核增强：原视频缺失时不再直接打不开，可打开只读审核页，并支持重新定位视频。
+- 回归测试覆盖上述能力。
+
+## 4. 关键目录
 
 - `electron/`：Electron 主进程、预加载、主界面和资源。
-- `talkcut/`：口播剪辑核心逻辑。
-- `talkcut/scripts/`：转录、审核页、本地 review server、裁剪脚本。
-- `talkcut/user_rules/`：静音、语气词、重复句等规则文档。
-- `subtitles/`：字幕功能。
-- `server/jaygo-upload/`：公网临时音频上传服务。
-- `install/`：安装说明。
-- `evolution/`：原项目演进资料。
-
-## 4. 关键文件
-
-- `electron/main.js`：任务编排、设置保存、ASR 连通检测、模型扫描/安装、在线更新。
-- `electron/preload.js`：主进程 IPC API 暴露。
-- `electron/renderer/index.html`：主界面 DOM。
+- `electron/main.js`：任务编排、设置保存、ASR 连通检测、模型扫描/安装、在线更新、历史恢复。
+- `electron/preload.js`：IPC API 暴露。
 - `electron/renderer/renderer.js`：主界面交互。
 - `electron/renderer/styles.css`：主界面样式。
-- `talkcut/scripts/generate_review.js`：生成审核页 HTML/CSS/JS，审核体验核心。
+- `electron/history_utils.js`：历史记录健康检查、缺失视频处理和重新定位逻辑。
+- `talkcut/scripts/generate_review.js`：生成审核页 HTML/CSS/JS，是审核体验核心文件。
 - `talkcut/scripts/review_server.js`：审核页本地服务、LLM、发布建议、视频配图、裁剪 API。
+- `talkcut/scripts/review_segment_utils.js`：删除片段边界、诊断和备份相关工具函数。
 - `talkcut/scripts/cut_video.js`：FFmpeg 精确剪辑导出。
 - `talkcut/scripts/generate_subtitles.js`：转录结果转审核字幕。
 - `talkcut/scripts/qwen_asr_transcribe.js`：阿里 Qwen3-ASR 异步转录。
 - `talkcut/scripts/volcengine_transcribe.js`：火山引擎转录。
 - `talkcut/scripts/whisper_transcribe_local.js`：本地模型转录。
-- `release-notes.json`：在线更新说明示例，上传服务器后供客户端展示。
+- `tests/review_regression.test.js`：审核页和裁剪相关回归测试。
+- `release-notes.json`：在线更新说明，上传服务器后供客户端展示。
 - `CHANGELOG.md`：版本变更记录。
 
-## 5. 2026-05-03 最新改动
-- 主界面设置移除“图片比例”，比例选择统一放在审核页视频配图面板，减少设置区重复项。
-- 审核页仍会把当前图片比例传给图片生成接口，功能不丢失。
-- 版本升至 0.1.13，安装包和在线更新产物用于服务器/GitHub 发布。
-
-## 5. 2026-05-02 最新改动
-- 审核页新增快捷键指南按钮：Space 播放/暂停、Ctrl+Z 多步撤回、Ctrl+Y / Ctrl+Shift+Z 重做、Ctrl+F 聚焦搜索纠错、Ctrl+S 立即保存、Esc 关闭浮窗。
-- 审核页新增文本搜索与替换：支持单处替换和全部替换，用于修正“他/她/它”、人名、品牌名等识别错误；修正会保存到 review-state，并进入 SRT/TXT/剪映草稿导出。
-
-- 修复审核页非全屏时“发布建议”和“视频配图”悬浮按钮重叠：按钮改为 CSS 变量控制垂直栈，窄窗口保持固定间距。
-- LLM 口播标记提示词重写为保守剪辑策略：先理解主题和文章结构，再保护主线，只删高确定性冗余。
-- LLM 删除建议最低置信门槛从 `0.56` 提升到 `0.66`，语义删除要求更高，减少误删。
-- LLM 候选数量上限从 30% 降到 16%，无高置信候选时的 fallback 从 35% 降到 18%。
-- 在线更新状态增加 `releaseNotes`，客户端可从服务器 `release-notes.json` 显示本次更新内容。
-- README、软件介绍、交接文档、CHANGELOG、release-notes 已同步。
-
-## 6. 本地开发命令
+## 5. 本地开发命令
 
 ```powershell
 cd "C:\Users\15119\Documents\New project\repo"
@@ -76,19 +64,20 @@ npm run pack:win:local
 npm run dist:win:local
 ```
 
-## 7. 本机安装版热替换
+## 6. 本机安装版热替换
 
 用于快速测试，不用于发给用户。
 
 ```powershell
+cd "C:\Users\15119\Documents\New project\repo"
 Stop-Process -Name JaygoCut -Force -ErrorAction SilentlyContinue
 Copy-Item "D:\Jaygo Cut\JaygoCut\resources\app.asar" "D:\Jaygo Cut\JaygoCut\resources\app.asar.bak_$(Get-Date -Format yyyyMMdd_HHmmss)" -Force
 Copy-Item "dist\win-unpacked\resources\app.asar" "D:\Jaygo Cut\JaygoCut\resources\app.asar" -Force
 ```
 
-## 8. 打包产物
+## 7. 打包产物
 
-NSIS 打包后 `dist/` 至少有：
+NSIS 打包后 `dist/` 至少包含：
 
 - `JaygoCut-Setup-<version>.exe`
 - `JaygoCut-Setup-<version>.exe.blockmap`
@@ -97,14 +86,14 @@ NSIS 打包后 `dist/` 至少有：
 桌面复制示例：
 
 ```powershell
-$version = "0.1.13"
+$version = "0.1.14"
 Copy-Item "dist\JaygoCut-Setup-$version.exe" "C:\Users\15119\Desktop\JaygoCut-Setup-$version.exe" -Force
 Copy-Item "HANDOFF_JaygoCut.md" "C:\Users\15119\Desktop\HANDOFF_JaygoCut.md" -Force
 ```
 
-## 9. 在线更新服务器配置
+## 8. 在线更新服务器配置
 
-客户端配置：
+客户端配置位置：
 
 - `package.json` -> `build.publish.url`
 - `electron/main.js` -> `UPDATE_FEED_URL`
@@ -123,43 +112,40 @@ Copy-Item "HANDOFF_JaygoCut.md" "C:\Users\15119\Desktop\HANDOFF_JaygoCut.md" -Fo
 - 当前安装包 `.exe`
 - 当前 `.exe.blockmap`
 - `release-notes.json`
-- 可选：上一个版本安装包和 blockmap，方便差分失败时回退。
+- 可选：上一版本安装包和 blockmap，方便差分失败时回退。
 
-## 10. release-notes.json 格式
+## 9. release-notes.json 格式
 
 客户端会优先读取 `https://ailabing.cn/downloads/jaygo/release-notes.json`。
 
-支持格式一：
-
 ```json
 {
-  "version": "0.1.12",
-  "notes": "- 修复审核页按钮重叠\n- 优化 LLM 标记准确性"
+  "version": "0.1.14",
+  "notes": "- 更新内容第一条\n- 更新内容第二条"
 }
 ```
 
-支持格式二：
+也支持：
 
 ```json
 {
   "versions": {
-    "0.1.12": "- 修复审核页按钮重叠\n- 优化 LLM 标记准确性"
+    "0.1.14": "- 更新内容第一条\n- 更新内容第二条"
   }
 }
 ```
 
-## 11. 上传服务器流程
+## 10. 上传服务器流程
 
 敏感信息不要写入仓库或文档。SSH 密码、宝塔密码由项目负责人单独保存。下面用 `<SSH_PASSWORD>` 占位。
 
 ```powershell
-$version = "0.1.13"
+cd "C:\Users\15119\Documents\New project\repo"
+$version = "0.1.14"
 $remote = "root@47.115.58.109:/www/wwwroot/ailabing.cn/downloads/jaygo/"
 $tmp = Join-Path $env:TEMP 'jaygo_askpass.cmd'
 $pw = '<SSH_PASSWORD>'
-Set-Content -LiteralPath $tmp -Value "@echo off
-echo $pw
-" -Encoding ASCII
+Set-Content -LiteralPath $tmp -Value "@echo off`necho $pw`n" -Encoding ASCII
 $env:SSH_ASKPASS = $tmp
 $env:SSH_ASKPASS_REQUIRE = 'force'
 $env:DISPLAY = 'none'
@@ -179,10 +165,10 @@ try {
 }
 ```
 
-## 12. 上传后验证
+## 11. 上传后验证
 
 ```powershell
-$version = "0.1.13"
+$version = "0.1.14"
 curl.exe -L --max-time 30 https://ailabing.cn/downloads/jaygo/latest.yml
 curl.exe -L --max-time 30 https://ailabing.cn/downloads/jaygo/release-notes.json
 curl.exe -I --max-time 30 "https://ailabing.cn/downloads/jaygo/JaygoCut-Setup-$version.exe"
@@ -192,45 +178,52 @@ curl.exe -I --max-time 30 "https://ailabing.cn/downloads/jaygo/JaygoCut-Setup-$v
 
 - `latest.yml` 的 `version` 和 `path` 是当前版本。
 - 安装包 HEAD 请求返回 200。
-- `release-notes.json` 能正常返回 UTF-8 中文。
+- `release-notes.json` 正常返回 UTF-8 中文。
 - 客户端更新页能显示更新内容。
 
-## 13. 清理服务器旧版本
+## 12. GitHub 发布流程
 
-确认新版本可下载后再清理。建议至少保留当前版本；若担心差分更新失败，可多保留上一个版本。
-
-```powershell
-ssh root@47.115.58.109 "cd /www/wwwroot/ailabing.cn/downloads/jaygo && ls -lh"
-ssh root@47.115.58.109 "cd /www/wwwroot/ailabing.cn/downloads/jaygo && rm -f JaygoCut-Setup-0.1.6.exe JaygoCut-Setup-0.1.6.exe.blockmap JaygoCut-Setup-0.1.7.exe JaygoCut-Setup-0.1.7.exe.blockmap"
-ssh root@47.115.58.109 "cd /www/wwwroot/ailabing.cn/downloads/jaygo && ls -lh"
-```
-
-## 14. GitHub 发布流程建议
-
-优先使用 GitHub CLI 或网页创建 Release，不建议再使用旧 `publish.js`。旧 `publish.js` 若保留必须改成读取环境变量，不能写死 token。
+优先使用 GitHub CLI 或网页创建 Release。不要把 token 写进仓库。
 
 ```powershell
+cd "C:\Users\15119\Documents\New project\repo"
 git status --short
-git add .
-git commit -m "chore: release 0.1.12"
-git push
+git add electron/main.js electron/preload.js electron/renderer/renderer.js electron/renderer/styles.css electron/history_utils.js talkcut/scripts/generate_review.js talkcut/scripts/review_segment_utils.js talkcut/scripts/review_server.js tests/review_regression.test.js package.json package-lock.json release-notes.json CHANGELOG.md HANDOFF_JaygoCut.md
+git commit -m "chore: release 0.1.14"
+git tag v0.1.14
+git push origin main
+git push origin v0.1.14
 
-gh release create v0.1.12 `
-  "dist\JaygoCut-Setup-0.1.12.exe" `
-  "dist\JaygoCut-Setup-0.1.12.exe.blockmap" `
+gh release create v0.1.14 `
+  "dist\JaygoCut-Setup-0.1.14.exe" `
+  "dist\JaygoCut-Setup-0.1.14.exe.blockmap" `
   "dist\latest.yml" `
   "release-notes.json" `
-  --title "JaygoCut v0.1.12" `
+  --title "JaygoCut v0.1.14" `
   --notes-file CHANGELOG.md
 ```
 
-## 15. 常见排查
+## 13. 常见排查
 
 ### 审核页空白
 
 1. 运行 `npm run check`。
 2. 运行 `npm test`，测试会生成 `review.html` 并对内联脚本做 `node --check`。
-3. 检查 `generate_review.js` 模板字符串中是否把 `\n` 写成了真实换行。
+3. 检查 `generate_review.js` 模板字符串中是否把 `\n` 写成真实换行。
+4. 检查 `review-state.json` 是否损坏；必要时使用 `review-state.backup.json` 恢复。
+
+### 裁剪后残音或吞字
+
+1. 在审核页使用“预听当前删除点”检查边界。
+2. 打开“删除诊断”，优先处理短片段、紧贴保留词和密集删除区域。
+3. 根据内容选择剪辑精度模式：保守减少吞字，干净减少残音。
+4. 若问题集中在 ASR 时间戳错误，优先手动取消对应标记或扩大/缩小选择。
+
+### 历史审核打不开
+
+1. 历史记录会显示原视频是否缺失。
+2. 原视频缺失时可打开只读审核页查看文本。
+3. 使用“重新定位视频”选择新的原视频路径后再恢复完整裁剪能力。
 
 ### LLM 标记不准
 
@@ -245,7 +238,7 @@ gh release create v0.1.12 `
 2. 检查 Nginx `client_max_body_size`。
 3. 检查 HTTPS 证书和域名解析。
 4. 检查上传目录权限。
-5. 客户端会多端点/多次重试，但服务端不稳仍会失败。
+5. 客户端有多端点/多次重试，但服务端不稳定仍会失败。
 
 ### 本地模型不可用
 
@@ -253,15 +246,19 @@ gh release create v0.1.12 `
 2. 若未找到，点击“安装本地模型”。
 3. 模型不应打入安装包，避免安装包过大。
 
-## 16. 当前风险与待办
+## 14. 当前风险与待办
 
-- 剪映草稿导出已生成 `draft_content.json` / `draft_meta_info.json` / `draft_virtual_store.json`，并支持自定义字幕模板；但剪映 6.x+ 草稿可能加密，无法保证所有版本直接打开。
+- 剪映草稿导出已生成草稿目录并支持字幕模板，但剪映 6.x+ 草稿可能加密，SRT 仍需保留为兜底方案。
 - 视频配图依赖用户配置的图片生成模型，质量取决于模型能力和 prompt。
-- LLM 标记已经更保守，但仍必须由用户在审核页确认后再执行裁剪。
-- `publish.js` 已改为安全版本，只读取环境变量，不再写死 token。`DESKTOP_APP.md`、`install/README.md`、`evolution/README.md` 已清理；`install/SKILL.md` 保留。
+- LLM 标记必须由用户在审核页确认后再执行裁剪，不能完全自动删除。
+- 免费代码签名目前没有适合普通 Windows 用户的稳定方案；未签名安装包仍可能被安全软件误报或隔离。
 
-## 17. 参考资料
+## 15. 发布前检查清单
 
-- Electron updater generic provider：`https://www.electron.build/auto-update`
-- 阿里 DashScope Qwen ASR：`https://help.aliyun.com/zh/model-studio/qwen-asr-api-reference`
-- qwen3-asr-flash-filetrans：项目负责人提供的 Bailian 控制台文档 URL。
+- `npm run check` 通过。
+- `npm test` 通过，输出包含 `review regression tests passed`。
+- `npm run dist:win:local` 成功生成安装包、blockmap、latest.yml。
+- 本机安装版或 `win-unpacked` 能打开主界面。
+- 审核页能打开，文本和波形不为空。
+- 更新服务器 `latest.yml`、安装包、blockmap、`release-notes.json` 可访问。
+- GitHub Release 资产和服务器版本一致。

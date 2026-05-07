@@ -564,6 +564,40 @@ button.danger {
   gap: 3px;
 }
 
+.history-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.history-badge.ready {
+  color: #166534;
+  background: #dcfce7;
+  border-color: #86efac;
+}
+
+.history-badge.missing_video {
+  color: #92400e;
+  background: #fef3c7;
+  border-color: #fbbf24;
+}
+
+.history-badge.missing_review {
+  color: #991b1b;
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
+.history-health-note {
+  color: var(--muted);
+  max-width: 680px;
+}
+
 .history-actions {
   display: flex;
   gap: 8px;
