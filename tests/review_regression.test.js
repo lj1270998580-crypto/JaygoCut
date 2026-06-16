@@ -10,6 +10,7 @@ const {
   applyCutPrecisionMode,
   diagnoseDeleteSegments,
 } = require('../talkcut/scripts/review_segment_utils');
+const { parseTermGlossary } = require('../talkcut/scripts/term_glossary');
 process.env.JAYGO_CUT_TEST_EXPORTS = '1';
 const reviewServerTools = require('../talkcut/scripts/review_server');
 const historyUtils = require('../electron/history_utils');
@@ -182,6 +183,33 @@ function testImagePlanPromptRulesAndAspectRatio() {
   assert.strictEqual(reviewServerTools.imageSizeToOpenAiSize('9:16'), '1024x1536');
 }
 
+function testAgnesVideoPlanningAndOverlayWiring() {
+  const prompt = reviewServerTools.buildVideoPlanPrompt(
+    [{ id: 'u1', start: 10, end: 15, text: '这里需要一个观点冲突的 B-roll 画面' }],
+    { topic: '测试主题', outline: '测试梗概' },
+    '电影写实',
+    2,
+    '16:9',
+  );
+  assert.ok(prompt.includes('start/end'), 'video plan prompt should require exact timeline ranges');
+  assert.ok(prompt.includes('videoPrompt'), 'video plan prompt should ask for a video generation prompt');
+  assert.ok(prompt.includes('禁止直接复制原文句子'), 'video plan prompt should prevent direct transcript copy');
+
+  const items = reviewServerTools.sanitizeVideoPlanItems({
+    items: [{
+      id: 'vid_01',
+      start: 10,
+      end: 15,
+      title: '测试视频素材',
+      textBasis: '这里需要一个观点冲突的 B-roll 画面',
+      prompt: '这里需要一个观点冲突的 B-roll 画面',
+    }],
+  }, [{ id: 'u1', start: 10, end: 15, text: '这里需要一个观点冲突的 B-roll 画面' }], 1, { topic: '测试主题' }, '电影写实', '16:9');
+  assert.strictEqual(items.length, 1);
+  assert.strictEqual(items[0].type, 'video');
+  assert.ok(items[0].videoPrompt.includes('Scene story'), 'video prompt should be transformed into visual scene language');
+}
+
 function testLlmMarkingPromptIsConservative() {
   const prompt = reviewServerTools.buildLlmPrompt([
     { id: 1, start: 0, end: 1, text: '这个我觉得核心观点是不要误删内容' },
@@ -242,12 +270,30 @@ function testGeneratedReviewInlineScriptSyntax() {
     wordsPath,
     selectedPath,
     audioPath,
-  ], { cwd: dir, encoding: 'utf8' });
+  ], { cwd: dir, encoding: 'utf8', env: { ...process.env, TERM_GLOSSARY: '杰哥 => Jaygo' } });
   assert.strictEqual(result.status, 0, result.stderr || result.stdout);
 
   const html = fs.readFileSync(path.join(dir, 'review.html'), 'utf8');
   assert.ok(html.includes('id="btnShortcutHelp"'), 'review page should expose a shortcut guide button');
   assert.ok(html.includes('id="btnPreviewDelete"'), 'review page should expose delete preview button');
+  assert.ok(html.includes('id="btnToggleVideoPreview"'), 'review page should expose video preview toggle');
+  assert.ok(html.includes('id="sourceVideo"'), 'review page should include source video preview element');
+  assert.ok(html.includes('id="btnGenerateVideos"'), 'review page should expose Agnes video material generation');
+  assert.ok(html.includes('id="imageMotionEffect"'), 'review page should expose image motion effect selector');
+  assert.ok(html.includes('/api/llm-video-plan'), 'review page should request LLM video material plans');
+  assert.ok(html.includes('/api/generate-video'), 'review page should call video generation API');
+  assert.ok(html.includes('buildMediaOverlaysForCut'), 'review page should submit generated image/video overlays to cut API');
+  assert.ok(html.includes('motionEffect'), 'review page should persist and submit selected image motion effects');
+  assert.ok(html.includes('mediaAssets'), 'review state should persist generated media assets');
+  assert.ok(html.includes('/source-video'), 'review page should load source video through a safe route');
+  assert.ok(html.includes('syncVideoPreview'), 'review page should keep video preview synced with playback');
+  assert.ok(html.includes('toolbar-card.video-preview-visible'), 'video preview should use the compact top-right toolbar layout');
+  assert.ok(html.includes("toolbarCardEl.classList.toggle('video-preview-visible'"), 'video preview layout should only reserve space while visible');
+  assert.ok(html.includes('silenceVideoPreview'), 'video preview should force visual-only muted playback');
+  assert.ok(html.includes("sourceVideoEl.addEventListener('volumechange'"), 'video preview should re-mute if the browser restores volume');
+  assert.ok(!html.includes('id="sourceVideo" preload="metadata" src="/source-video" playsinline muted controls'), 'video preview should not expose native controls that can unmute audio');
+  assert.ok(html.includes('function smoothSkipTo'), 'review playback should smooth automatic skip transitions');
+  assert.ok(html.includes('smoothSkipTo(target)'), 'selected delete segment playback should not hard-seek abruptly');
   assert.ok(html.includes('id="btnShowDeleteDiagnostics"'), 'review page should expose delete diagnostics button');
   assert.ok(html.includes('id="cutPrecisionMode"'), 'review page should expose cut precision mode selector');
   assert.ok(html.includes('id="btnCopyDiagnostics"'), 'review page should expose copy diagnostics button');
@@ -255,6 +301,10 @@ function testGeneratedReviewInlineScriptSyntax() {
   assert.ok(html.includes('/api/cut-preflight'), 'review page should run preflight before cut');
   assert.ok(html.includes('id="replaceFindText"'), 'review page should expose keyword search input');
   assert.ok(html.includes('id="btnReplaceAll"'), 'review page should expose batch keyword replacement');
+  assert.ok(html.includes('id="btnApplyGlossary"'), 'review page should expose one-click glossary correction');
+  assert.ok(html.includes('"from":"杰哥"'), 'review page should inject parsed term glossary entries');
+  assert.ok(html.includes('id="btnFocusReview"'), 'review page should expose focus review mode');
+  assert.ok(html.includes('review-focus-mode'), 'review page should include focus mode styles');
   assert.ok(html.includes('textOverrides'), 'review state should persist transcript text corrections');
   const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
   assert.ok(scripts.length >= 1, 'review.html should contain inline script');
@@ -264,6 +314,69 @@ function testGeneratedReviewInlineScriptSyntax() {
     const check = spawnSync(process.execPath, ['--check', scriptPath], { encoding: 'utf8' });
     assert.strictEqual(check.status, 0, check.stderr || check.stdout);
   });
+}
+
+function testTermGlossaryParsingAndSettingsWiring() {
+  const entries = parseTermGlossary([
+    '# comment',
+    '杰哥 => Jaygo',
+    '王超然=王超燃',
+    '剪映, 剪影',
+    '空行 => ',
+    'Jaygo=>Jaygo',
+  ].join('\n'));
+
+  assert.deepStrictEqual(entries, [
+    { from: '杰哥', to: 'Jaygo' },
+    { from: '王超然', to: '王超燃' },
+    { from: '剪映', to: '剪影' },
+  ]);
+
+  const main = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'electron', 'renderer', 'index.html'), 'utf8');
+  const renderer = fs.readFileSync(path.join(__dirname, '..', 'electron', 'renderer', 'renderer.js'), 'utf8');
+  assert.ok(main.includes('termGlossary'), 'main settings should persist term glossary');
+  assert.ok(main.includes('AGNES_VIDEO_MODEL'), 'main settings should provide Agnes video model defaults');
+  assert.ok(main.includes('VIDEO_API_BASE_URL'), 'runtime env should pass video generation config');
+  assert.ok(main.includes('TERM_GLOSSARY'), 'runtime env should pass term glossary to review generation');
+  assert.ok(html.includes('id="termGlossary"'), 'settings page should expose term glossary textarea');
+  assert.ok(html.includes('id="videoApiBaseUrl"'), 'settings page should expose video API base URL');
+  assert.ok(html.includes('id="videoModel"'), 'settings page should expose video generation model');
+  assert.ok(renderer.includes('termGlossary'), 'renderer should read and write term glossary setting');
+  assert.ok(renderer.includes('videoApiBaseUrl'), 'renderer should read and write video generation settings');
+}
+
+function testReviewServerProvidesSafeSourceVideoRoute() {
+  const server = fs.readFileSync(path.join(__dirname, '..', 'talkcut', 'scripts', 'review_server.js'), 'utf8');
+  assert.ok(server.includes("pathname === '/source-video'"), 'review server should expose source video through a dedicated route');
+  assert.ok(server.includes('VIDEO_FILE') && server.includes('serveFile(req, res, VIDEO_FILE'), 'source video route should stream the bound task video only');
+  assert.ok(server.includes("pathname.startsWith('/video_assets/')"), 'review server should expose generated video assets safely');
+  assert.ok(server.includes("pathname === '/api/llm-video-plan'"), 'review server should expose video material planning endpoint');
+  assert.ok(server.includes("pathname === '/api/generate-video'"), 'review server should expose video material generation endpoint');
+  assert.ok(server.includes('buildAgnesVideoQueryEndpoint'), 'review server should use Agnes video_id polling endpoint');
+  assert.ok(server.includes('allowedMotionEffects'), 'review server should sanitize media overlay motion effects');
+  const cutVideo = fs.readFileSync(path.join(__dirname, '..', 'talkcut', 'scripts', 'cut_video.js'), 'utf8');
+  assert.ok(cutVideo.includes('loadMediaOverlays'), 'cut script should read media overlay plans');
+  assert.ok(cutVideo.includes('runFfmpegOverlay'), 'cut script should apply generated media overlays');
+  assert.ok(cutVideo.includes('buildOverlayVisualFilter'), 'cut script should apply image motion effects during overlay');
+  assert.ok(cutVideo.includes('zoom-in'), 'cut script should support zoom-in image motion');
+}
+
+function testTextFilesStayUtf8Readable() {
+  const files = [
+    'CHANGELOG.md',
+    'HANDOFF_JaygoCut.md',
+    'release-notes.json',
+    'electron/renderer/index.html',
+    'talkcut/scripts/generate_review.js',
+  ];
+  for (const rel of files) {
+    const text = fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
+    assert.ok(!text.includes('\uFFFD'), `${rel} should not contain replacement characters`);
+    assert.ok(!/[鏇鐨涓绔搴]/.test(text), `${rel} should not contain common mojibake characters`);
+  }
+  const releaseNotes = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'release-notes.json'), 'utf8').replace(/^\uFEFF/, ''));
+  assert.ok(releaseNotes.notes.includes('插入素材'), 'release notes should stay readable Chinese UTF-8');
 }
 
 function testReviewStateBackupWriter() {
@@ -359,6 +472,7 @@ testTranscriptQuality();
 testReviewBoundarySettings();
 testImageDirectorPromptSanitizer();
 testImagePlanPromptRulesAndAspectRatio();
+testAgnesVideoPlanningAndOverlayWiring();
 testLlmMarkingPromptIsConservative();
 testJianyingDraftExport();
 testCutPrecisionModeAdjustsOnlySubmittedSegments();
@@ -368,4 +482,7 @@ testReviewStateBackupWriter();
 testHistoryReviewCanOpenWhenOriginalVideoIsMissing();
 testHistoryEntryHealthAndRelinkVideo();
 testMainSettingsDoNotExposeImageSize();
+testTermGlossaryParsingAndSettingsWiring();
+testReviewServerProvidesSafeSourceVideoRoute();
+testTextFilesStayUtf8Readable();
 console.log('review regression tests passed');

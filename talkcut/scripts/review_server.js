@@ -51,6 +51,10 @@ const MIME_TYPES = {
 const REVIEW_STATE_FILE = path.resolve(process.cwd(), 'review_state.json');
 const REVIEW_STATE_BACKUP_FILE = path.resolve(process.cwd(), 'review-state.backup.json');
 const IMAGE_ASSET_DIR = path.resolve(process.cwd(), 'image_assets');
+const VIDEO_ASSET_DIR = path.resolve(process.cwd(), 'video_assets');
+const AGNES_API_BASE_URL = 'https://apihub.agnes-ai.com/v1';
+const AGNES_IMAGE_MODEL = 'agnes-image-2.1-flash';
+const AGNES_VIDEO_MODEL = 'agnes-video-v2.0';
 const JIANYING_DRAFT_EXPORT_DIR_NAME = 'jianying_drafts';
 
 let currentCutJob = {
@@ -275,8 +279,7 @@ function getImageConfig() {
   const rawBaseUrl = normalizeLlmBaseUrl(
     process.env.IMAGE_API_BASE_URL
     || fileEnv.IMAGE_API_BASE_URL
-    || llm.baseUrl
-    || 'https://api.openai.com/v1',
+    || AGNES_API_BASE_URL,
   );
   const endpoint = buildImageEndpoint(rawBaseUrl);
   const minimax = isMiniMaxImageEndpoint(endpoint);
@@ -289,7 +292,7 @@ function getImageConfig() {
   const model = String(
     process.env.IMAGE_MODEL
     || fileEnv.IMAGE_MODEL
-    || (minimax ? 'image-01' : 'gpt-image-1'),
+    || (minimax ? 'image-01' : AGNES_IMAGE_MODEL),
   ).trim();
   const size = normalizeImageSize(process.env.IMAGE_SIZE || fileEnv.IMAGE_SIZE || '1024x1024');
   const missing = [];
@@ -304,7 +307,79 @@ function getImageConfig() {
     ready: missing.length === 0,
     missing,
     endpoint,
-    provider: minimax ? 'minimax' : 'openai_compatible',
+    provider: minimax ? 'minimax' : (/agnes/i.test(rawBaseUrl) ? 'agnes' : 'openai_compatible'),
+  };
+}
+
+function buildVideoEndpoint(baseUrl) {
+  const clean = String(baseUrl || '').trim().replace(/\/+$/, '');
+  if (!clean) return '';
+  if (/\/videos$/i.test(clean)) return clean;
+  if (/\/v1$/i.test(clean)) return `${clean}/videos`;
+  return `${clean}/v1/videos`;
+}
+
+function buildAgnesVideoQueryEndpoint(baseUrl, videoId) {
+  const clean = String(baseUrl || AGNES_API_BASE_URL).trim();
+  let origin = 'https://apihub.agnes-ai.com';
+  try {
+    origin = new URL(clean).origin;
+  } catch {
+    origin = 'https://apihub.agnes-ai.com';
+  }
+  return `${origin}/agnesapi?video_id=${encodeURIComponent(videoId)}`;
+}
+
+function normalizeVideoFrameCount(value, fallback = 121) {
+  const allowed = [81, 121, 161, 241, 441];
+  const n = Number(value);
+  if (allowed.includes(n)) return n;
+  return fallback;
+}
+
+function aspectToVideoSize(aspect) {
+  const raw = String(aspect || '').trim();
+  if (raw === '9:16' || raw === '2:3' || raw === '3:4') return { width: 768, height: 1152 };
+  if (raw === '1:1') return { width: 1024, height: 1024 };
+  return { width: 1152, height: 768 };
+}
+
+function getVideoConfig() {
+  const { env: fileEnv } = loadEnvFileConfig();
+  const llm = getLlmConfig();
+  const rawBaseUrl = normalizeLlmBaseUrl(
+    process.env.VIDEO_API_BASE_URL
+    || fileEnv.VIDEO_API_BASE_URL
+    || process.env.IMAGE_API_BASE_URL
+    || fileEnv.IMAGE_API_BASE_URL
+    || AGNES_API_BASE_URL,
+  );
+  const apiKey = String(
+    process.env.VIDEO_API_KEY
+    || fileEnv.VIDEO_API_KEY
+    || process.env.IMAGE_API_KEY
+    || fileEnv.IMAGE_API_KEY
+    || llm.apiKey
+    || '',
+  ).trim();
+  const model = String(
+    process.env.VIDEO_MODEL
+    || fileEnv.VIDEO_MODEL
+    || AGNES_VIDEO_MODEL,
+  ).trim();
+  const endpoint = buildVideoEndpoint(rawBaseUrl);
+  const missing = [];
+  if (!rawBaseUrl) missing.push('VIDEO_API_BASE_URL');
+  if (!apiKey) missing.push('VIDEO_API_KEY');
+  if (!model) missing.push('VIDEO_MODEL');
+  return {
+    baseUrl: rawBaseUrl,
+    apiKey,
+    model,
+    endpoint,
+    ready: missing.length === 0,
+    missing,
+    provider: /agnes/i.test(rawBaseUrl) ? 'agnes' : 'openai_compatible',
   };
 }
 
@@ -1451,6 +1526,150 @@ function buildFallbackImagePlan(units, analysis, count, style = '') {
   return items;
 }
 
+function buildVideoPlanPrompt(units, analysis, style, count, aspectRatio) {
+  const list = units
+    .slice(0, 220)
+    .map((u) => `${u.id}|${u.start.toFixed(2)}-${u.end.toFixed(2)}|${u.text}`)
+    .join('\n');
+  const targetCount = Math.max(1, Math.min(4, Number(count) || 3));
+  const visualStyle = String(style || '').trim() || 'cinematic realistic B-roll, consistent character and scene';
+  return [
+    '你是短视频口播内容的导演、分镜师和 AI 视频提示词专家。',
+    '任务：阅读主视频转录文本，规划可插入主视频的短视频素材点。素材用于覆盖式 B-roll，不改变主视频音频。',
+    '请先理解主题、人物、文化语境、情绪和叙事结构，再选择真正需要画面辅助的节点。',
+    '选择原则：优先开头钩子、观点冲突、案例画面、人物行动、情绪转折、结尾记忆点；不要机械平均切分。',
+    '每个视频素材点必须有明确 start/end，代表它覆盖主视频画面的字幕时间范围。范围建议 3-8 秒，必须来自文本时间轴。',
+    'videoPrompt 必须是可拍摄/可生成的视频画面描述：人物或主体、地点、动作、镜头运动、光线、风格、情绪、环境细节；禁止直接复制原文句子。',
+    '如文本是中国语境，用中国人物、服饰、空间和生活场景；如是海外故事，要匹配对应国家/时代/建筑/服饰。',
+    '输出只允许 JSON，不要 markdown。',
+    `生成 ${targetCount} 个视频素材点。`,
+    `用户选择风格：${visualStyle}`,
+    `目标比例：${aspectRatio || '16:9'}`,
+    `主题参考：${String(analysis?.topic || '').trim() || '未知'}`,
+    `梗概参考：${String(analysis?.outline || '').trim() || '未知'}`,
+    'JSON 格式：',
+    '{"topic":"...","items":[{"id":"vid_01","start":10.0,"end":15.0,"timeRange":"00:10-00:15","title":"...","purpose":"开头钩子/B-roll/案例画面/转场/结尾","textBasis":"对应原文依据，不超过40字","directorIntent":"为什么这里需要视频素材","sceneStory":"具体画面故事","camera":"镜头运动和构图","videoPrompt":"完整视频生成提示词","negativePrompt":"负面提示词"}]}',
+    '文本单元（id|start-end|text）：',
+    list,
+  ].join('\n');
+}
+
+function sanitizeVideoPlanItems(parsed, units, count, analysis, fallbackStyle, aspectRatio) {
+  const targetCount = Math.max(1, Math.min(4, Number(count) || 3));
+  const rawItems = Array.isArray(parsed?.items)
+    ? parsed.items
+    : Array.isArray(parsed?.videoPoints)
+      ? parsed.videoPoints
+      : Array.isArray(parsed?.points)
+        ? parsed.points
+        : [];
+  const out = [];
+  const styleAnchor = trimByChars(String(fallbackStyle || parsed?.style || 'cinematic realistic B-roll').replace(/\s+/g, ' '), 180);
+  const visualBible = buildVisualBibleText(parsed, analysis, fallbackStyle);
+  for (let i = 0; i < rawItems.length; i += 1) {
+    const item = rawItems[i] || {};
+    const fallbackUnit = units[Math.min(units.length - 1, Math.floor((i / Math.max(1, targetCount - 1)) * Math.max(0, units.length - 1)))] || {};
+    const rawStart = Number.isFinite(Number(item.start)) ? Number(item.start) : Number(fallbackUnit.start || 0);
+    const rawEnd = Number.isFinite(Number(item.end)) ? Number(item.end) : Number(fallbackUnit.end || rawStart + 5);
+    const start = Math.max(0, rawStart);
+    const end = Math.max(start + 1.5, rawEnd);
+    const id = String(item.id || `vid_${String(out.length + 1).padStart(2, '0')}`).replace(/[^\w-]/g, '_').slice(0, 32);
+    const title = trimByChars(String(item.title || item.name || `视频素材 ${out.length + 1}`).replace(/\s+/g, ' '), 40);
+    const purpose = trimByChars(String(item.purpose || 'B-roll').replace(/\s+/g, ' '), 32);
+    const textBasis = trimByChars(String(item.textBasis || item.basis || fallbackUnit.text || '').replace(/\s+/g, ' '), 80);
+    let sceneStory = trimByChars(String(item.sceneStory || item.scene_story || item.story || '').replace(/\s+/g, ' '), 220);
+    let camera = trimByChars(String(item.camera || item.shot || item.composition || '').replace(/\s+/g, ' '), 120);
+    const fallbackScene = buildDirectorFallbackScene(textBasis, title, purpose, out.length);
+    if (!sceneStory || hasDirectTranscriptCopy(sceneStory, textBasis) || !hasDirectorVisualLanguage(sceneStory)) {
+      sceneStory = fallbackScene.sceneStory;
+    }
+    if (!camera || hasDirectTranscriptCopy(camera, textBasis)) {
+      camera = fallbackScene.camera;
+    }
+    const rawPrompt = trimByChars(String(item.videoPrompt || item.prompt || '').replace(/\s+/g, ' '), 1000);
+    const videoPrompt = trimByChars([
+      visualBible ? `Consistent visual bible: ${visualBible}` : '',
+      styleAnchor ? `Style: ${styleAnchor}` : '',
+      `Scene story: ${sceneStory}`,
+      `Camera: ${camera}; slow natural motion, stable cinematic B-roll, no subtitles, no text, no watermark, no logo.`,
+      rawPrompt && !hasDirectTranscriptCopy(rawPrompt, textBasis) ? `Additional direction: ${rawPrompt}` : '',
+    ].filter(Boolean).join(' '), 1400);
+    if (!videoPrompt) continue;
+    out.push({
+      id,
+      type: 'video',
+      timeRange: String(item.timeRange || item.range || formatSecondsRange(start, end)).slice(0, 32),
+      start,
+      end,
+      aspectRatio: aspectRatio || '16:9',
+      title,
+      purpose,
+      textBasis,
+      directorIntent: trimByChars(String(item.directorIntent || item.intent || item.reason || '').replace(/\s+/g, ' '), 100),
+      sceneStory,
+      camera,
+      videoPrompt,
+      prompt: videoPrompt,
+      negativePrompt: trimByChars(String(item.negativePrompt || item.negative_prompt || 'low quality, blurry, text, subtitles, watermark, logo, distorted face, inconsistent character, wrong culture').replace(/\s+/g, ' '), 320),
+    });
+    if (out.length >= targetCount) break;
+  }
+  return out;
+}
+
+function buildFallbackVideoPlan(units, analysis, count, style = '', aspectRatio = '16:9') {
+  const imageLike = buildFallbackImagePlan(units, analysis, Math.max(4, Number(count) || 3), style).slice(0, Math.max(1, Math.min(4, Number(count) || 3)));
+  return imageLike.map((item, index) => {
+    const end = Math.max(Number(item.start) + 3, Number(item.end) || Number(item.start) + 5);
+    return {
+      ...item,
+      id: `vid_${String(index + 1).padStart(2, '0')}`,
+      type: 'video',
+      end,
+      timeRange: formatSecondsRange(item.start, end),
+      aspectRatio,
+      videoPrompt: trimByChars([
+        `Style: ${style || 'cinematic realistic B-roll'}.`,
+        `Scene story: ${item.sceneStory}.`,
+        `Camera: ${item.camera}; slow natural camera movement, stable action, no subtitles, no text, no watermark, no logo.`,
+      ].join(' '), 1400),
+    };
+  });
+}
+
+async function runLlmVideoPlan(words, config, payload = {}) {
+  const sourceWords = pickWordsForVisualPlan(words, payload.selectedIndices);
+  const units = buildTranscriptUnits(sourceWords);
+  if (!units.length) {
+    throw new Error('No transcript text available for video material planning');
+  }
+  const analysis = await resolveAnalysis(units, config, payload.analysis);
+  const count = Math.max(1, Math.min(4, Number(payload.count) || 3));
+  const style = String(payload.style || '').trim();
+  const aspectRatio = String(payload.aspectRatio || payload.aspect || '16:9').trim() || '16:9';
+  let items = [];
+  let raw = '';
+  try {
+    raw = await callLlmProvider(config, buildVideoPlanPrompt(units, analysis, style, count, aspectRatio));
+    const parsed = extractJsonObject(raw) || {};
+    items = sanitizeVideoPlanItems(parsed, units, count, analysis, style, aspectRatio);
+    if (parsed.topic && !analysis.topic) analysis.topic = trimByChars(String(parsed.topic), 80);
+  } catch (err) {
+    appendCutLog(`Video plan LLM fallback: ${err.message || String(err)}`);
+  }
+  if (!items.length) {
+    items = buildFallbackVideoPlan(units, analysis, count, style, aspectRatio);
+  }
+  return {
+    topic: analysis.topic,
+    outline: analysis.outline,
+    style: style || 'cinematic realistic B-roll',
+    aspectRatio,
+    items,
+    raw: raw.slice(0, 1000),
+  };
+}
+
 async function runLlmImagePlan(words, config, payload = {}) {
   const sourceWords = pickWordsForVisualPlan(words, payload.selectedIndices);
   const units = buildTranscriptUnits(sourceWords);
@@ -1505,12 +1724,37 @@ async function saveImageBuffer(buffer, id, ext = '.png') {
   };
 }
 
+async function saveVideoBuffer(buffer, id, ext = '.mp4') {
+  fs.mkdirSync(VIDEO_ASSET_DIR, { recursive: true });
+  const safeId = sanitizeAssetName(id || 'video');
+  const suffix = ['.mp4', '.mov', '.webm', '.m4v'].includes(String(ext || '').toLowerCase())
+    ? String(ext || '').toLowerCase()
+    : '.mp4';
+  const fileName = `${Date.now()}_${safeId}${suffix}`;
+  const filePath = path.join(VIDEO_ASSET_DIR, fileName);
+  fs.writeFileSync(filePath, buffer);
+  return {
+    fileName,
+    filePath,
+    url: `/video_assets/${encodeURIComponent(fileName)}`,
+  };
+}
+
 function imageExtFromContentType(contentType) {
   const type = String(contentType || '').toLowerCase();
   if (type.includes('jpeg') || type.includes('jpg')) return '.jpg';
   if (type.includes('webp')) return '.webp';
   if (type.includes('svg')) return '.svg';
   return '.png';
+}
+
+function videoExtFromContentType(contentType, url = '') {
+  const type = String(contentType || '').toLowerCase();
+  const lowerUrl = String(url || '').toLowerCase();
+  if (type.includes('webm') || /\.webm(\?|#|$)/.test(lowerUrl)) return '.webm';
+  if (type.includes('quicktime') || /\.mov(\?|#|$)/.test(lowerUrl)) return '.mov';
+  if (/\.m4v(\?|#|$)/.test(lowerUrl)) return '.m4v';
+  return '.mp4';
 }
 
 async function rewriteImagePromptWithLlm(config, item, userNote = '') {
@@ -1580,18 +1824,25 @@ async function callImageGenerationApi(config, item) {
     return saveImageBuffer(Buffer.from(data, 'base64'), item.id || 'image', '.jpg');
   }
 
+  const requestBody = {
+    model: config.model,
+    prompt,
+    size: imageSizeToOpenAiSize(config.size),
+    n: 1,
+  };
+  if (config.provider === 'agnes') {
+    requestBody.extra_body = {
+      response_format: 'url',
+    };
+  }
+
   const res = await fetch(config.endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${config.apiKey}`,
     },
-    body: JSON.stringify({
-      model: config.model,
-      prompt,
-      size: imageSizeToOpenAiSize(config.size),
-      n: 1,
-    }),
+    body: JSON.stringify(requestBody),
   });
   const text = await res.text();
   if (!res.ok) {
@@ -1617,6 +1868,159 @@ async function callImageGenerationApi(config, item) {
     return saveImageBuffer(buffer, item.id || 'image', imageExtFromContentType(imageRes.headers.get('content-type')));
   }
   throw new Error('图片生成接口未返回 url 或 base64 图片');
+}
+
+function findVideoIdFromResponse(json) {
+  return String(
+    json?.video_id
+    || json?.id
+    || json?.data?.video_id
+    || json?.data?.id
+    || json?.output?.video_id
+    || json?.result?.video_id
+    || '',
+  ).trim();
+}
+
+function findVideoUrlFromResponse(json) {
+  const candidates = [
+    json?.video_url,
+    json?.url,
+    json?.output_url,
+    json?.data?.video_url,
+    json?.data?.url,
+    json?.data?.output_url,
+    json?.output?.video_url,
+    json?.output?.url,
+    json?.result?.video_url,
+    json?.result?.url,
+  ];
+  if (Array.isArray(json?.data)) {
+    candidates.push(json.data[0]?.video_url, json.data[0]?.url, json.data[0]?.output_url);
+  }
+  if (Array.isArray(json?.videos)) {
+    candidates.push(json.videos[0]?.url, json.videos[0]?.video_url);
+  }
+  return String(candidates.find((value) => typeof value === 'string' && /^https?:\/\//i.test(value)) || '').trim();
+}
+
+function findVideoStatusFromResponse(json) {
+  return String(
+    json?.status
+    || json?.state
+    || json?.data?.status
+    || json?.data?.state
+    || json?.output?.status
+    || json?.result?.status
+    || '',
+  ).toLowerCase();
+}
+
+async function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pollAgnesVideoResult(config, videoId) {
+  const deadline = Date.now() + 8 * 60 * 1000;
+  let attempt = 0;
+  let lastText = '';
+  while (Date.now() < deadline) {
+    attempt += 1;
+    const queryUrl = buildAgnesVideoQueryEndpoint(config.baseUrl, videoId);
+    const res = await fetch(queryUrl, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+      },
+    });
+    const text = await res.text();
+    lastText = text;
+    if (!res.ok) {
+      if (res.status === 429 || res.status >= 500) {
+        await sleep(Math.min(15000, 2500 + attempt * 1000));
+        continue;
+      }
+      throw new Error(`Agnes video query failed: HTTP ${res.status} ${text.slice(0, 300)}`);
+    }
+    let json = {};
+    try {
+      json = JSON.parse(text);
+    } catch {
+      throw new Error(`Agnes video query returned non-JSON: ${text.slice(0, 120)}`);
+    }
+    const url = findVideoUrlFromResponse(json);
+    if (url) return url;
+    const status = findVideoStatusFromResponse(json);
+    if (['failed', 'error', 'canceled', 'cancelled'].includes(status)) {
+      throw new Error(`Agnes video generation failed: ${text.slice(0, 300)}`);
+    }
+    appendCutLog(`[video] waiting Agnes video ${videoId}, attempt ${attempt}, status=${status || 'pending'}`);
+    await sleep(5000);
+  }
+  throw new Error(`Agnes video generation timed out. Last response: ${lastText.slice(0, 240)}`);
+}
+
+async function callVideoGenerationApi(config, item, options = {}) {
+  if (!config.ready) {
+    throw new Error(`Video generation config incomplete: missing ${config.missing.join(', ')}`);
+  }
+  const prompt = String(item?.videoPrompt || item?.prompt || '').trim();
+  if (!prompt) throw new Error('Video prompt is empty');
+
+  const size = aspectToVideoSize(options.aspectRatio || item?.aspectRatio || '16:9');
+  const frameRate = Math.max(1, Math.min(60, Number(options.frameRate || item?.frameRate || 24) || 24));
+  const numFrames = normalizeVideoFrameCount(options.numFrames || item?.numFrames || 121, 121);
+  const requestBody = {
+    model: config.model || AGNES_VIDEO_MODEL,
+    prompt,
+    width: size.width,
+    height: size.height,
+    num_frames: numFrames,
+    frame_rate: frameRate,
+    negative_prompt: String(item?.negativePrompt || item?.negative_prompt || 'low quality, blurry, text, watermark, logo, distorted face, inconsistent character').trim(),
+  };
+
+  const res = await fetch(config.endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify(requestBody),
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`Agnes video create failed: HTTP ${res.status} ${text.slice(0, 300)}`);
+  }
+  let json = {};
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new Error(`Agnes video create returned non-JSON: ${text.slice(0, 120)}`);
+  }
+  let videoUrl = findVideoUrlFromResponse(json);
+  const videoId = findVideoIdFromResponse(json);
+  if (!videoUrl) {
+    if (!videoId) {
+      throw new Error(`Agnes video create did not return video_id: ${text.slice(0, 300)}`);
+    }
+    appendCutLog(`[video] Agnes video queued: ${videoId}`);
+    videoUrl = await pollAgnesVideoResult(config, videoId);
+  }
+  const videoRes = await fetch(videoUrl);
+  if (!videoRes.ok) throw new Error(`Video asset download failed: HTTP ${videoRes.status}`);
+  const buffer = Buffer.from(await videoRes.arrayBuffer());
+  const saved = await saveVideoBuffer(buffer, item.id || videoId || 'video', videoExtFromContentType(videoRes.headers.get('content-type'), videoUrl));
+  return {
+    ...saved,
+    sourceUrl: videoUrl,
+    videoId,
+    model: config.model,
+    frameRate,
+    numFrames,
+    width: size.width,
+    height: size.height,
+  };
 }
 
 function randomDraftId(prefix = 'jaygo') {
@@ -2472,23 +2876,54 @@ function probeDuration(mediaPath) {
   }
 }
 
-async function runCutJob(deleteList) {
+function normalizeMediaOverlays(overlays) {
+  if (!Array.isArray(overlays)) return [];
+  const allowedMotionEffects = new Set(['none', 'zoom-in', 'zoom-out', 'pan-left', 'pan-right', 'pan-up', 'pan-down']);
+  return overlays.map((item) => {
+    const type = String(item?.type || '').toLowerCase() === 'video' ? 'video' : 'image';
+    const filePath = String(item?.filePath || '').trim();
+    const start = Number(item?.start);
+    const end = Number(item?.end);
+    const motionEffect = type === 'image' && allowedMotionEffects.has(String(item?.motionEffect || ''))
+      ? String(item.motionEffect)
+      : 'none';
+    if (!filePath || !fs.existsSync(filePath)) return null;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || start < 0) return null;
+    return {
+      type,
+      filePath: path.resolve(filePath),
+      start,
+      end,
+      title: String(item?.title || '').slice(0, 80),
+      fit: String(item?.fit || 'cover').slice(0, 20),
+      motionEffect,
+    };
+  }).filter(Boolean).slice(0, 50);
+}
+
+async function runCutJob(deleteList, mediaOverlays = []) {
   const runtimeInfo = getRuntimeInfo();
   fs.mkdirSync(runtimeInfo.cutOutputDir, { recursive: true });
 
   const baseName = path.parse(VIDEO_FILE).name;
   const outputFile = path.join(runtimeInfo.cutOutputDir, `${baseName}_cut.mp4`);
   const deleteFile = path.resolve('delete_segments.json');
+  const overlayFile = path.resolve('media_overlays.json');
   fs.writeFileSync(deleteFile, JSON.stringify(deleteList, null, 2));
+  const normalizedOverlays = normalizeMediaOverlays(mediaOverlays);
+  fs.writeFileSync(overlayFile, JSON.stringify(normalizedOverlays, null, 2));
 
   appendCutLog(`Output directory: ${runtimeInfo.cutOutputDir}`);
+  if (normalizedOverlays.length) {
+    appendCutLog(`Media overlays: ${normalizedOverlays.length}`);
+  }
 
   const cutScript = path.join(__dirname, 'cut_video.js');
   if (!fs.existsSync(cutScript)) {
     throw new Error(`cut_video.js not found: ${cutScript}`);
   }
 
-  await runNodeScript(cutScript, [VIDEO_FILE, deleteFile, outputFile], 'cutting');
+  await runNodeScript(cutScript, [VIDEO_FILE, deleteFile, outputFile, overlayFile], 'cutting');
   setCutJobState({ phase: 'finalizing' });
 
   const originalDuration = probeDuration(VIDEO_FILE);
@@ -2515,6 +2950,45 @@ async function runCutJob(deleteList) {
 function writeJson(res, statusCode, body) {
   res.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(body));
+}
+
+function sanitizeReviewMediaItems(items, kind) {
+  if (!Array.isArray(items)) return [];
+  return items.map((item) => {
+    const start = Number(item?.start);
+    const end = Number(item?.end);
+    const assetKey = kind === 'video' ? 'video' : 'image';
+    const asset = item?.[assetKey] && typeof item[assetKey] === 'object' ? item[assetKey] : null;
+    const sanitizedAsset = asset ? {
+      fileName: String(asset.fileName || '').slice(0, 160),
+      filePath: String(asset.filePath || '').slice(0, 500),
+      url: String(asset.url || '').slice(0, 500),
+      model: String(asset.model || '').slice(0, 80),
+      size: String(asset.size || '').slice(0, 40),
+      sourceUrl: String(asset.sourceUrl || '').slice(0, 500),
+      videoId: String(asset.videoId || '').slice(0, 120),
+    } : null;
+    return {
+      id: String(item?.id || '').replace(/[^\w-]/g, '_').slice(0, 48),
+      type: kind,
+      timeRange: String(item?.timeRange || '').slice(0, 40),
+      start: Number.isFinite(start) && start >= 0 ? start : 0,
+      end: Number.isFinite(end) && end > start ? end : Math.max(0, start) + 3,
+      aspectRatio: String(item?.aspectRatio || '').slice(0, 20),
+      title: String(item?.title || '').slice(0, 80),
+      purpose: String(item?.purpose || '').slice(0, 80),
+      textBasis: String(item?.textBasis || '').slice(0, 140),
+      directorIntent: String(item?.directorIntent || '').slice(0, 200),
+      sceneStory: String(item?.sceneStory || '').slice(0, 360),
+      camera: String(item?.camera || '').slice(0, 220),
+      prompt: String(item?.prompt || '').slice(0, 1600),
+      videoPrompt: String(item?.videoPrompt || '').slice(0, 1600),
+      negativePrompt: String(item?.negativePrompt || '').slice(0, 500),
+      status: ['queued', 'generating', 'done', 'error'].includes(String(item?.status || '')) ? String(item.status) : '',
+      error: String(item?.error || '').slice(0, 500),
+      [assetKey]: sanitizedAsset,
+    };
+  }).filter((item) => item.id || item.prompt || item.videoPrompt || item[`${kind}`]).slice(0, 80);
 }
 
 function normalizeReviewStatePayload(payload) {
@@ -2589,6 +3063,10 @@ function normalizeReviewStatePayload(payload) {
     boundarySettings: normalizeBoundarySettings(payload?.boundarySettings),
     cutPrecisionMode,
     currentTimeSec: Number.isFinite(currentTime) && currentTime >= 0 ? currentTime : 0,
+    mediaAssets: {
+      images: sanitizeReviewMediaItems(payload?.mediaAssets?.images || payload?.imageItems, 'image'),
+      videos: sanitizeReviewMediaItems(payload?.mediaAssets?.videos || payload?.videoItems, 'video'),
+    },
   };
 }
 
@@ -2738,6 +3216,28 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && pathname === '/api/runtime-info') {
       writeJson(res, 200, { success: true, ...getRuntimeInfo() });
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/source-video') {
+      if (!VIDEO_FILE || !fs.existsSync(VIDEO_FILE)) {
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Source video not found');
+        return;
+      }
+      serveFile(req, res, VIDEO_FILE);
+      return;
+    }
+
+    if (req.method === 'GET' && pathname.startsWith('/video_assets/')) {
+      const relative = decodeURIComponent(pathname.replace(/^\/video_assets\/+/, ''));
+      const resolved = path.resolve(VIDEO_ASSET_DIR, relative);
+      if (!resolved.startsWith(path.resolve(VIDEO_ASSET_DIR))) {
+        res.writeHead(403);
+        res.end('Forbidden');
+        return;
+      }
+      serveFile(req, res, resolved);
       return;
     }
 
@@ -2948,6 +3448,65 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'POST' && pathname === '/api/llm-video-plan') {
+      const config = getLlmConfig();
+      if (!config.ready) {
+        throw new Error(`LLM 閰嶇疆涓嶅畬鏁达細缂哄皯 ${config.missing.join(', ')}`);
+      }
+
+      const body = await readBody(req);
+      const payload = JSON.parse(body || '{}');
+      const words = Array.isArray(payload.words) ? payload.words : [];
+      if (!words.length) {
+        throw new Error('words is empty, cannot plan video materials');
+      }
+      if (words.length > 50000) {
+        throw new Error('Transcript is too large; please cut or shorten before planning video materials');
+      }
+      appendCutLog(`Video material plan started: provider=${config.provider}, model=${config.model}, words=${words.length}`);
+      const result = await runLlmVideoPlan(words, config, payload);
+      appendCutLog(`Video material plan completed: ${result.items.length} points`);
+      writeJson(res, 200, { success: true, ...result });
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/generate-video') {
+      const videoConfig = getVideoConfig();
+      const llmConfig = getLlmConfig();
+      const body = await readBody(req);
+      const payload = JSON.parse(body || '{}');
+      const item = payload.item && typeof payload.item === 'object' ? payload.item : {};
+      const retry = !!payload.retry;
+      let nextItem = { ...item };
+      if (retry && llmConfig.ready) {
+        const rewritten = await rewriteImagePromptWithLlm(llmConfig, {
+          ...item,
+          prompt: item.videoPrompt || item.prompt || '',
+        }, payload.note);
+        if (rewritten && typeof rewritten === 'object') {
+          nextItem = {
+            ...nextItem,
+            videoPrompt: rewritten.prompt || nextItem.videoPrompt || nextItem.prompt,
+            prompt: rewritten.prompt || nextItem.prompt,
+            negativePrompt: rewritten.negativePrompt || nextItem.negativePrompt,
+          };
+        }
+      }
+      appendCutLog(`Video material generation started: ${String(nextItem.title || nextItem.id || 'video')}`);
+      const saved = await callVideoGenerationApi(videoConfig, nextItem, {
+        aspectRatio: payload.aspectRatio || nextItem.aspectRatio,
+        numFrames: payload.numFrames || nextItem.numFrames,
+        frameRate: payload.frameRate || nextItem.frameRate,
+      });
+      appendCutLog(`Video material generation completed: ${saved.fileName}`);
+      writeJson(res, 200, {
+        success: true,
+        item: nextItem,
+        video: saved,
+      });
+      return;
+    }
+
     if (req.method === 'POST' && pathname === '/api/export-jianying-draft') {
       const body = await readBody(req);
       const payload = JSON.parse(body || '{}');
@@ -2973,7 +3532,9 @@ const server = http.createServer(async (req, res) => {
       }
 
       const body = await readBody(req);
-      const deleteList = JSON.parse(body || '[]');
+      const payload = JSON.parse(body || '[]');
+      const deleteList = Array.isArray(payload) ? payload : payload.segments;
+      const mediaOverlays = Array.isArray(payload?.overlays) ? payload.overlays : [];
       if (!Array.isArray(deleteList)) throw new Error('delete list must be an array');
 
       const normalized = deleteList.map((seg) => ({
@@ -2993,14 +3554,14 @@ const server = http.createServer(async (req, res) => {
         startedAt: new Date().toISOString(),
         finishedAt: null,
         segmentsCount: normalized.length,
-        logTail: [`Queued ${normalized.length} delete segments.`],
+        logTail: [`Queued ${normalized.length} delete segments, ${mediaOverlays.length} media overlays.`],
         result: null,
         error: '',
       });
 
       (async () => {
         try {
-          const result = await runCutJob(normalized);
+          const result = await runCutJob(normalized, mediaOverlays);
           appendCutLog('Cut task completed.');
           setCutJobState({
             state: 'completed',
@@ -3047,10 +3608,15 @@ process.on('unhandledRejection', (reason) => {
 if (process.env.JAYGO_CUT_TEST_EXPORTS === '1') {
   module.exports = {
     buildImagePlanPrompt,
+    buildVideoPlanPrompt,
     sanitizeImagePlanItems,
+    sanitizeVideoPlanItems,
     buildFallbackImagePlan,
+    buildFallbackVideoPlan,
     hasDirectTranscriptCopy,
     hasDirectorVisualLanguage,
+    normalizeMediaOverlays,
+    getVideoConfig,
     imageSizeToMiniMaxAspectRatio,
     imageSizeToOpenAiSize,
     buildLlmPrompt,

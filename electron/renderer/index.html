@@ -41,10 +41,16 @@
           </label>
 
           <label>
+            小米 MiMo API Key
+            <input id="mimoApiKey" type="password" placeholder="用于 MiMo-V2.5-ASR Token Plan" />
+          </label>
+
+          <label>
             转录引擎
             <select id="asrEngine">
               <option value="volcengine">火山引擎（云端）</option>
               <option value="aliyun_qwen">阿里 Qwen3-ASR（云端）</option>
+              <option value="mimo">小米 MiMo-V2.5-ASR（云端）</option>
               <option value="local">本地 Whisper（按需install）</option>
             </select>
           </label>
@@ -125,17 +131,37 @@
 
           <label class="span-2">
             图片生成接口地址（OpenAI 兼容）
-            <input id="imageApiBaseUrl" type="text" placeholder="可留空复用 LLM；MiniMax 会自动走 /v1/image_generation" />
+            <input id="imageApiBaseUrl" type="text" placeholder="https://apihub.agnes-ai.com/v1" />
           </label>
 
           <label>
             图片生成 API Key
-            <input id="imageApiKey" type="password" placeholder="不填则尝试复用 LLM API Key" />
+            <input id="imageApiKey" type="password" placeholder="不填则复用 LLM API Key" />
           </label>
 
           <label>
             图片生成模型
-            <input id="imageModel" type="text" placeholder="MiniMax 可留空，默认 image-01" />
+            <input id="imageModel" type="text" placeholder="agnes-image-2.1-flash" />
+          </label>
+
+          <label class="span-2">
+            Agnes 视频生成接口地址（OpenAI 兼容）
+            <input id="videoApiBaseUrl" type="text" placeholder="https://apihub.agnes-ai.com/v1" />
+          </label>
+
+          <label>
+            Agnes 视频生成 API Key
+            <input id="videoApiKey" type="password" placeholder="不填则复用图片或 LLM API Key" />
+          </label>
+
+          <label>
+            Agnes 视频生成模型
+            <input id="videoModel" type="text" placeholder="agnes-video-v2.0" />
+          </label>
+
+          <label class="span-2">
+            专有名词词库（每行：错词 => 正确词）
+            <textarea id="termGlossary" rows="4" placeholder="例如：&#10;杰哥 =&gt; Jaygo&#10;剪影 =&gt; 剪映&#10;王超然 =&gt; 王超燃"></textarea>
           </label>
 
           <label class="span-2">

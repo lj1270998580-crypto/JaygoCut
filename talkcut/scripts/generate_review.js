@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { normalizeSelectedIndices } = require('./auto_selected_utils');
 const { analyzeTranscriptQuality } = require('./transcript_quality');
+const { parseTermGlossary } = require('./term_glossary');
 
 let subtitlesFile = process.argv[2] || 'subtitles_words.json';
 const autoSelectedFile = process.argv[3] || 'auto_selected.json';
@@ -107,6 +108,7 @@ const wordsJson = JSON.stringify(words).replace(/</g, '\\u003c');
 const selectedJson = JSON.stringify(autoSelected).replace(/</g, '\\u003c');
 const autoReasonsJson = JSON.stringify(autoReasonByIndex || {}).replace(/</g, '\\u003c');
 const autoStatsJson = JSON.stringify(autoStats || {}).replace(/</g, '\\u003c');
+const termGlossaryJson = JSON.stringify(parseTermGlossary(process.env.TERM_GLOSSARY || '')).replace(/</g, '\\u003c');
 const qualityJson = JSON.stringify({
   generated: liveQuality,
   saved: savedQuality,
@@ -227,12 +229,105 @@ const html = `<!doctype html>
       z-index: 40;
       box-shadow: 0 10px 26px rgba(15, 23, 42, 0.08);
       backdrop-filter: blur(3px);
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+    }
+    .toolbar-card.video-preview-visible {
+      grid-template-columns: minmax(0, 1fr) clamp(260px, 25vw, 430px);
+    }
+    .toolbar-card > #audio,
+    .toolbar-card > .wave-wrap,
+    .toolbar-card > .wave-toolbar,
+    .toolbar-card > .primary-actions {
+      grid-column: 1;
+      min-width: 0;
+    }
+    .toolbar-card > #deletePreviewInfo,
+    .toolbar-card > #deleteDiagnosticsPanel,
+    .toolbar-card > .tool-fold {
+      grid-column: 1 / -1;
     }
     .content-card {
       flex: 0 0 auto;
       min-height: 0;
       overflow: hidden;
       height: clamp(520px, 74vh, 980px);
+    }
+    .video-preview-panel {
+      grid-column: 2;
+      grid-row: 1 / span 4;
+      justify-self: stretch;
+      align-self: start;
+      margin: 0;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+      background: #020617;
+      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.26);
+    }
+    .video-preview-panel[hidden] {
+      display: none;
+    }
+    .video-preview-panel video {
+      display: block;
+      width: 100%;
+      height: clamp(146px, 16vw, 242px);
+      max-height: 242px;
+      object-fit: contain;
+      background: #000;
+    }
+    .video-preview-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 12px;
+      color: rgba(255, 255, 255, 0.78);
+      font-size: 11px;
+      background: rgba(15, 23, 42, 0.92);
+    }
+    .video-preview-meta span:first-child {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    body.review-focus-mode .wave-wrap,
+    body.review-focus-mode .wave-toolbar,
+    body.review-focus-mode .video-preview-panel,
+    body.review-focus-mode .tool-fold,
+    body.review-focus-mode .floating-toggle,
+    body.review-focus-mode .floating-side {
+      display: none !important;
+    }
+    body.review-focus-mode .toolbar-card {
+      padding: 12px 16px;
+    }
+    body.review-focus-mode .content-card {
+      height: calc(100vh - 178px);
+    }
+    body.review-focus-mode #content {
+      font-size: 22px;
+      line-height: 2.45;
+      letter-spacing: 0.08em;
+    }
+    body.review-focus-mode .token {
+      margin: 4px 3px;
+      padding: 3px 7px;
+      border-radius: 8px;
+    }
+    @media (max-width: 1180px) {
+      .toolbar-card.video-preview-visible {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      .toolbar-card.video-preview-visible .video-preview-panel {
+        grid-column: 1;
+        grid-row: auto;
+        justify-self: end;
+        width: min(360px, 100%);
+      }
     }
     .side-panel {
       min-width: 220px;
@@ -258,6 +353,10 @@ const html = `<!doctype html>
       pointer-events: none;
       transition: opacity 0.18s ease, transform 0.18s ease;
       isolation: isolate;
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-gutter: stable;
     }
     .floating-side.left {
       left: max(8px, calc((100vw - 1240px) / 2 - 410px));
@@ -265,6 +364,7 @@ const html = `<!doctype html>
     }
     .floating-side.image-side {
       width: clamp(340px, 24vw, 460px);
+      padding-right: 12px;
     }
     .floating-side.right {
       right: max(8px, calc((100vw - 1240px) / 2 - 410px));
@@ -386,13 +486,19 @@ const html = `<!doctype html>
       overflow-y: auto;
       max-height: 88px;
     }
-    #imageCardList {
+    #imageCardList,
+    #videoAssetList {
       display: flex;
       flex-direction: column;
       gap: 10px;
       overflow-y: auto;
       min-height: 260px;
       padding-right: 2px;
+    }
+    .media-video-section {
+      border-top: 1px dashed var(--border);
+      margin-top: 14px;
+      padding-top: 12px;
     }
     .image-card {
       border: 1px solid var(--border);
@@ -562,6 +668,9 @@ const html = `<!doctype html>
     .replace-actions #replaceWithText {
       flex: 1 1 180px;
       min-width: 140px;
+    }
+    .replace-actions #glossarySummary {
+      flex: 0 1 220px;
     }
     .replace-status {
       min-width: 160px;
@@ -985,6 +1094,13 @@ const html = `<!doctype html>
   <body>
   <div class="wrap">
     <div class="card toolbar-card">
+        <div id="videoPreviewPanel" class="video-preview-panel" hidden>
+          <video id="sourceVideo" preload="metadata" src="/source-video" playsinline muted disablepictureinpicture></video>
+          <div class="video-preview-meta">
+            <span>视频预览：画面跟随审核音频，默认静音避免双声道回音。</span>
+            <span id="videoPreviewStatus">未加载</span>
+          </div>
+        </div>
         <audio id="audio" controls preload="metadata" src="${audioName}" style="width: 100%"></audio>
         <div id="waveWrap" class="wave-wrap" title="点击波形可跳转播放位置">
           <canvas id="waveCanvas"></canvas>
@@ -999,7 +1115,9 @@ const html = `<!doctype html>
         <button id="btnPlay" class="primary">播放/暂停</button>
         <button id="btnClear">清空选择</button>
         <button id="btnPreviewDelete" type="button">预听当前删除点</button>
+        <button id="btnToggleVideoPreview" type="button">视频预览</button>
         <button id="btnCut" class="warn">执行裁剪</button>
+        <button id="btnFocusReview" type="button">专注审核</button>
         <select id="cutPrecisionMode" title="只影响最终裁剪边界，不改变审核文本时间戳">
           <option value="conservative">保守</option>
           <option value="standard" selected>标准</option>
@@ -1045,6 +1163,8 @@ const html = `<!doctype html>
           <button id="btnFindNext" type="button">下一个</button>
           <button id="btnReplaceOne" type="button">替换当前</button>
           <button id="btnReplaceAll" type="button">全部替换</button>
+          <button id="btnApplyGlossary" type="button">应用词库纠错</button>
+          <span id="glossarySummary" class="meta"></span>
           <span id="replaceStatus" class="meta replace-status"></span>
         </div>
         <div class="row compact-row boundary-row">
@@ -1148,7 +1268,7 @@ const html = `<!doctype html>
 
   <aside class="side-panel floating-side left image-side">
     <div class="panel-header">
-      <span>视频配图</span>
+      <span>插入素材</span>
       <div class="panel-actions">
         <button id="btnGenerateImages">生成配图</button>
         <button id="btnDownloadImages" disabled>批量下载</button>
@@ -1212,8 +1332,45 @@ const html = `<!doctype html>
         <option value="绘本，温暖故事插画，纸张肌理，统一人物和场景">绘本</option>
       </select>
     </div>
+    <div class="row compact-row">
+      <span class="meta">图片动效</span>
+      <select id="imageMotionEffect">
+        <option value="none" selected>无动效</option>
+        <option value="zoom-in">缓慢推进</option>
+        <option value="zoom-out">缓慢拉远</option>
+        <option value="pan-left">缓慢左移</option>
+        <option value="pan-right">缓慢右移</option>
+        <option value="pan-up">缓慢上移</option>
+        <option value="pan-down">缓慢下移</option>
+      </select>
+    </div>
     <div id="imageStatus" class="meta">点击“生成配图”后，会先规划配图点，再逐张调用图片 API 生成预览。</div>
     <div id="imageCardList"></div>
+    <div class="panel-section media-video-section">
+      <div class="panel-title">视频素材（Agnes）</div>
+      <div class="row compact-row">
+        <span class="meta">数量</span>
+        <select id="videoAssetCount">
+          <option value="1">1 段</option>
+          <option value="2">2 段</option>
+          <option value="3" selected>3 段</option>
+          <option value="4">4 段</option>
+        </select>
+      </div>
+      <div class="row compact-row">
+        <span class="meta">比例</span>
+        <select id="videoAssetAspect">
+          <option value="16:9" selected>16:9 横屏</option>
+          <option value="9:16">9:16 竖屏</option>
+          <option value="1:1">1:1 方形</option>
+        </select>
+      </div>
+      <div class="panel-actions">
+        <button id="btnGenerateVideos" type="button">生成视频素材</button>
+      </div>
+      <div id="videoAssetStatus" class="meta">点击后会先由 LLM 规划插入位置，再调用 Agnes 生成视频素材。</div>
+      <div id="videoAssetList"></div>
+    </div>
   </aside>
 
   <aside class="side-panel floating-side right">
@@ -1237,9 +1394,14 @@ const html = `<!doctype html>
     const AUTO = ${selectedJson};
     const AUTO_REASONS = ${autoReasonsJson};
     const AUTO_STATS = ${autoStatsJson};
+    const TERM_GLOSSARY = ${termGlossaryJson};
     const QUALITY = ${qualityJson};
 
     const audio = document.getElementById('audio');
+    const toolbarCardEl = document.querySelector('.toolbar-card');
+    const videoPreviewPanelEl = document.getElementById('videoPreviewPanel');
+    const sourceVideoEl = document.getElementById('sourceVideo');
+    const videoPreviewStatusEl = document.getElementById('videoPreviewStatus');
     const content = document.getElementById('content');
     const contentViewportEl = document.getElementById('contentViewport');
     const statusEl = document.getElementById('status');
@@ -1263,6 +1425,8 @@ const html = `<!doctype html>
     const btnApplyLlm = document.getElementById('btnApplyLlm');
     const btnClearLlm = document.getElementById('btnClearLlm');
     const btnPreviewDelete = document.getElementById('btnPreviewDelete');
+    const btnToggleVideoPreview = document.getElementById('btnToggleVideoPreview');
+    const btnFocusReview = document.getElementById('btnFocusReview');
     const btnShowDeleteDiagnostics = document.getElementById('btnShowDeleteDiagnostics');
     const btnCopyDiagnostics = document.getElementById('btnCopyDiagnostics');
     const cutPrecisionModeEl = document.getElementById('cutPrecisionMode');
@@ -1281,6 +1445,8 @@ const html = `<!doctype html>
     const btnFindNext = document.getElementById('btnFindNext');
     const btnReplaceOne = document.getElementById('btnReplaceOne');
     const btnReplaceAll = document.getElementById('btnReplaceAll');
+    const btnApplyGlossary = document.getElementById('btnApplyGlossary');
+    const glossarySummaryEl = document.getElementById('glossarySummary');
     const replaceStatusEl = document.getElementById('replaceStatus');
     const btnShortcutHelp = document.getElementById('btnShortcutHelp');
     const shortcutHelpEl = document.getElementById('shortcutHelp');
@@ -1296,6 +1462,7 @@ const html = `<!doctype html>
     const btnCloseRightPanel = document.getElementById('btnCloseRightPanel');
     const btnGeneratePublish = document.getElementById('btnGeneratePublish');
     const btnGenerateImages = document.getElementById('btnGenerateImages');
+    const btnGenerateVideos = document.getElementById('btnGenerateVideos');
     const btnDownloadImages = document.getElementById('btnDownloadImages');
     const publishStyleEl = document.getElementById('publishStyle');
     const publishStatusEl = document.getElementById('publishStatus');
@@ -1305,8 +1472,13 @@ const html = `<!doctype html>
     const imageCountEl = document.getElementById('imageCount');
     const imageAspectEl = document.getElementById('imageAspect');
     const imageStyleEl = document.getElementById('imageStyle');
+    const imageMotionEffectEl = document.getElementById('imageMotionEffect');
     const imageStatusEl = document.getElementById('imageStatus');
     const imageCardListEl = document.getElementById('imageCardList');
+    const videoAssetCountEl = document.getElementById('videoAssetCount');
+    const videoAssetAspectEl = document.getElementById('videoAssetAspect');
+    const videoAssetStatusEl = document.getElementById('videoAssetStatus');
+    const videoAssetListEl = document.getElementById('videoAssetList');
     const llmChatHistoryEl = document.getElementById('llmChatHistory');
     const llmChatInputEl = document.getElementById('llmChatInput');
     const btnLlmChatSend = document.getElementById('btnLlmChatSend');
@@ -1321,6 +1493,11 @@ const html = `<!doctype html>
     let activeSearchMatch = -1;
     let searchHitIndices = new Set();
     let searchActiveIndices = new Set();
+    const FOCUS_REVIEW_STORAGE_KEY = 'jaygo.review.focusMode';
+    const VIDEO_PREVIEW_STORAGE_KEY = 'jaygo.review.videoPreview';
+    let videoPreviewEnabled = false;
+    let syncingVideoFromAudio = false;
+    let syncingAudioFromVideo = false;
     const DEFAULT_BOUNDARY = {
       speechLeadMs: 45,
       speechTailMs: 90,
@@ -1475,12 +1652,16 @@ const html = `<!doctype html>
     let waveStaticKey = '';
     let previewSegment = null;
     let previewStopTime = null;
+    let skipFadeRaf = null;
+    let skipFadeTimer = null;
     let latestCutLogTail = [];
     let runtimeInfoCache = null;
     let publishLoading = false;
     let llmChatSubmitting = false;
     let imageGenerating = false;
+    let videoGenerating = false;
     let imageItems = [];
+    let videoItems = [];
     let isProgrammaticScroll = false;
     let programmaticScrollTimer = null;
     let lastUserScrollAt = 0;
@@ -1525,7 +1706,7 @@ const html = `<!doctype html>
       if (btnToggleImagePanel) {
         btnToggleImagePanel.classList.toggle('active', imagePanelOpen);
         btnToggleImagePanel.classList.toggle('hidden', anyLeftPanelOpen);
-        btnToggleImagePanel.textContent = '视频配图';
+        btnToggleImagePanel.textContent = '插入素材';
       }
       if (btnToggleRightPanel) {
         btnToggleRightPanel.classList.toggle('active', rightPanelOpen);
@@ -1629,6 +1810,26 @@ const html = `<!doctype html>
       if (imageCountEl) imageCountEl.disabled = imageGenerating;
       if (imageAspectEl) imageAspectEl.disabled = imageGenerating;
       if (imageStyleEl) imageStyleEl.disabled = imageGenerating;
+    }
+
+    function currentImageMotionEffect() {
+      const value = String(imageMotionEffectEl ? imageMotionEffectEl.value : 'none');
+      return ['none', 'zoom-in', 'zoom-out', 'pan-left', 'pan-right', 'pan-up', 'pan-down'].includes(value) ? value : 'none';
+    }
+
+    function setVideoAssetStatus(text) {
+      if (!videoAssetStatusEl) return;
+      videoAssetStatusEl.textContent = String(text || '');
+    }
+
+    function setVideoGenerating(next) {
+      videoGenerating = !!next;
+      if (btnGenerateVideos) {
+        btnGenerateVideos.disabled = videoGenerating;
+        btnGenerateVideos.textContent = videoGenerating ? '生成中...' : '生成视频素材';
+      }
+      if (videoAssetCountEl) videoAssetCountEl.disabled = videoGenerating;
+      if (videoAssetAspectEl) videoAssetAspectEl.disabled = videoGenerating;
     }
 
     function setLlmChatSubmitting(next) {
@@ -1931,6 +2132,93 @@ const html = `<!doctype html>
       setImageGenerating(imageGenerating);
     }
 
+    function renderVideoAssetCards() {
+      if (!videoAssetListEl) return;
+      videoAssetListEl.innerHTML = '';
+      if (!videoItems.length) {
+        const empty = document.createElement('div');
+        empty.className = 'meta';
+        empty.textContent = '暂无视频素材点。点击“生成视频素材”后会显示预览。';
+        videoAssetListEl.appendChild(empty);
+      } else {
+        videoItems.forEach((item, index) => {
+          const card = document.createElement('div');
+          card.className = 'image-card video-asset-card';
+          const preview = document.createElement('div');
+          preview.className = 'image-preview';
+          preview.style.aspectRatio = String(item.aspectRatio || videoAssetAspectEl?.value || '16:9').replace(':', ' / ');
+          if (item.video && item.video.url) {
+            const video = document.createElement('video');
+            video.src = item.video.url;
+            video.controls = true;
+            video.muted = true;
+            video.playsInline = true;
+            video.preload = 'metadata';
+            video.style.width = '100%';
+            video.style.height = '100%';
+            video.style.objectFit = 'cover';
+            preview.appendChild(video);
+          } else {
+            preview.textContent = item.status === 'error'
+              ? ('生成失败：' + (item.error || '未知错误'))
+              : (item.status === 'generating' ? '正在生成视频素材...' : '等待生成');
+          }
+
+          const title = document.createElement('div');
+          title.className = 'image-card-title';
+          title.textContent = (index + 1) + '. [' + (item.timeRange || '-') + '] ' + (item.title || '视频素材');
+
+          const purpose = document.createElement('div');
+          purpose.className = 'meta';
+          purpose.textContent = (item.purpose || 'B-roll') + (item.textBasis ? (' | 依据：' + item.textBasis) : '');
+
+          const scene = document.createElement('div');
+          scene.className = 'image-card-prompt';
+          scene.textContent = [
+            item.directorIntent ? ('导演意图：' + item.directorIntent) : '',
+            item.sceneStory ? ('画面故事：' + item.sceneStory) : '',
+            item.camera ? ('镜头：' + item.camera) : '',
+          ].filter(Boolean).join('\\n');
+
+          const prompt = document.createElement('div');
+          prompt.className = 'image-card-prompt';
+          prompt.textContent = item.videoPrompt || item.prompt || '';
+
+          const actions = document.createElement('div');
+          actions.className = 'image-card-actions';
+          const retryBtn = document.createElement('button');
+          retryBtn.type = 'button';
+          retryBtn.textContent = item.status === 'generating' ? '生成中...' : '重试';
+          retryBtn.disabled = item.status === 'generating' || videoGenerating;
+          retryBtn.dataset.videoRetry = String(index);
+          actions.appendChild(retryBtn);
+
+          const copyBtn = document.createElement('button');
+          copyBtn.type = 'button';
+          copyBtn.textContent = '复制提示词';
+          copyBtn.dataset.videoCopy = String(index);
+          actions.appendChild(copyBtn);
+
+          if (item.video && item.video.url) {
+            const link = document.createElement('a');
+            link.href = item.video.url;
+            link.download = ((item.title || item.id || 'video') + '.mp4').replace(/[\\/:*?"<>|]+/g, '_');
+            link.textContent = '下载';
+            actions.appendChild(link);
+          }
+
+          card.appendChild(preview);
+          card.appendChild(title);
+          card.appendChild(purpose);
+          if (scene.textContent) card.appendChild(scene);
+          card.appendChild(prompt);
+          card.appendChild(actions);
+          videoAssetListEl.appendChild(card);
+        });
+      }
+      setVideoGenerating(videoGenerating);
+    }
+
     function downloadGeneratedImages() {
       const files = imageItems.filter((item) => item?.image?.url);
       if (!files.length) {
@@ -2202,6 +2490,7 @@ const html = `<!doctype html>
         error: '',
       };
       renderImageCards();
+      scheduleReviewStateSave(200);
     }
 
     async function generateVideoImages() {
@@ -2254,8 +2543,98 @@ const html = `<!doctype html>
           }
         }
         setImageStatus('配图生成完成：成功 ' + ok + ' 张，失败 ' + (imageItems.length - ok) + ' 张。失败项可单张重试。');
+        scheduleReviewStateSave(200);
       } finally {
         setImageGenerating(false);
+      }
+    }
+
+    async function generateOneVideoAsset(index, retry = false) {
+      const item = videoItems[index];
+      if (!item) return;
+      item.status = 'generating';
+      item.error = '';
+      renderVideoAssetCards();
+      const response = await fetch('/api/generate-video', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          item,
+          retry,
+          aspectRatio: videoAssetAspectEl ? videoAssetAspectEl.value : item.aspectRatio,
+          numFrames: 121,
+          frameRate: 24,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || ('HTTP ' + response.status));
+      }
+      videoItems[index] = {
+        ...item,
+        ...(data.item || {}),
+        video: data.video,
+        status: 'done',
+        error: '',
+      };
+      renderVideoAssetCards();
+      scheduleReviewStateSave(200);
+    }
+
+    async function generateVideoAssets() {
+      if (videoGenerating) return;
+      setVideoGenerating(true);
+      try {
+        setVideoAssetStatus('正在让 LLM 规划视频素材插入点...');
+        videoItems = [];
+        renderVideoAssetCards();
+        const response = await fetch('/api/llm-video-plan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            words: WORDS,
+            selectedIndices: Array.from(selected),
+            count: Number(videoAssetCountEl ? videoAssetCountEl.value : 3) || 3,
+            style: imageStyleEl ? imageStyleEl.value : '',
+            aspectRatio: videoAssetAspectEl ? videoAssetAspectEl.value : '16:9',
+            analysis: {
+              topic: llmTopic,
+              outline: llmOutline,
+              multiSpeaker: llmMultiSpeaker,
+            },
+          }),
+        });
+        const plan = await response.json().catch(() => ({}));
+        if (!response.ok || !plan.success) {
+          throw new Error(plan.error || ('HTTP ' + response.status));
+        }
+        if (plan.topic && !llmTopic) llmTopic = String(plan.topic).slice(0, 80);
+        if (plan.outline && !llmOutline) llmOutline = String(plan.outline).slice(0, 120);
+        videoItems = (Array.isArray(plan.items) ? plan.items : []).map((item) => ({
+          ...item,
+          status: 'queued',
+          video: null,
+          error: '',
+        }));
+        renderVideoAssetCards();
+        setVideoAssetStatus('已规划 ' + videoItems.length + ' 个视频素材点，开始逐段生成...');
+
+        let ok = 0;
+        for (let i = 0; i < videoItems.length; i += 1) {
+          try {
+            setVideoAssetStatus('正在生成第 ' + (i + 1) + '/' + videoItems.length + ' 段视频素材...');
+            await generateOneVideoAsset(i, false);
+            ok += 1;
+          } catch (err) {
+            videoItems[i].status = 'error';
+            videoItems[i].error = err.message || String(err);
+            renderVideoAssetCards();
+          }
+        }
+        setVideoAssetStatus('视频素材生成完成：成功 ' + ok + ' 段，失败 ' + (videoItems.length - ok) + ' 段。失败项可单段重试。');
+        scheduleReviewStateSave(200);
+      } finally {
+        setVideoGenerating(false);
       }
     }
 
@@ -2283,7 +2662,7 @@ const html = `<!doctype html>
       });
 
       return {
-        version: 4,
+        version: 5,
         selectedIndices: Array.from(selected).sort((a, b) => a - b),
         llmSuggestedIndices: Array.from(llmSuggested).sort((a, b) => a - b),
         llmReasons,
@@ -2298,7 +2677,12 @@ const html = `<!doctype html>
         threshold: Math.max(0.2, Number(thresholdEl.value) || 0.2),
         boundarySettings: readBoundarySettings(),
         cutPrecisionMode: cutPrecisionModeEl ? String(cutPrecisionModeEl.value || 'standard') : 'standard',
+        imageMotionEffect: currentImageMotionEffect(),
         currentTimeSec: Math.max(0, Number(audio.currentTime) || 0),
+        mediaAssets: {
+          images: imageItems,
+          videos: videoItems,
+        },
       };
     }
 
@@ -2422,6 +2806,17 @@ const html = `<!doctype html>
         llmTopic = String(state.llmTopic || '').trim().slice(0, 80);
         llmOutline = String(state.llmOutline || '').trim().slice(0, 120);
         llmMultiSpeaker = !!state.llmMultiSpeaker;
+        const restoredMedia = state.mediaAssets && typeof state.mediaAssets === 'object' ? state.mediaAssets : {};
+        imageItems = Array.isArray(restoredMedia.images) ? restoredMedia.images : [];
+        videoItems = Array.isArray(restoredMedia.videos) ? restoredMedia.videos : [];
+        imageItems.forEach((item) => {
+          if (item && item.image && item.status !== 'error') item.status = item.image.url ? 'done' : (item.status || 'queued');
+        });
+        videoItems.forEach((item) => {
+          if (item && item.video && item.status !== 'error') item.status = item.video.url ? 'done' : (item.status || 'queued');
+        });
+        renderImageCards();
+        renderVideoAssetCards();
 
         const threshold = Number(state.threshold);
         if (Number.isFinite(threshold) && threshold >= 0.2) {
@@ -2433,15 +2828,18 @@ const html = `<!doctype html>
         if (cutPrecisionModeEl && ['conservative', 'standard', 'clean'].includes(String(state.cutPrecisionMode || ''))) {
           cutPrecisionModeEl.value = String(state.cutPrecisionMode);
         }
+        if (imageMotionEffectEl && ['none', 'zoom-in', 'zoom-out', 'pan-left', 'pan-right', 'pan-up', 'pan-down'].includes(String(state.imageMotionEffect || ''))) {
+          imageMotionEffectEl.value = String(state.imageMotionEffect);
+        }
 
         const resumeTime = Number(state.currentTimeSec);
         if (Number.isFinite(resumeTime) && resumeTime > 0) {
           if (Number.isFinite(audio.duration) && audio.duration > 0) {
-            audio.currentTime = Math.max(0, Math.min(audio.duration - 0.01, resumeTime));
+            setPlaybackTime(Math.max(0, Math.min(audio.duration - 0.01, resumeTime)));
           } else {
             audio.addEventListener('loadedmetadata', () => {
               const maxT = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration - 0.01 : resumeTime;
-              audio.currentTime = Math.max(0, Math.min(maxT, resumeTime));
+              setPlaybackTime(Math.max(0, Math.min(maxT, resumeTime)));
             }, { once: true });
           }
         }
@@ -2491,6 +2889,134 @@ const html = `<!doctype html>
       if (Number.isFinite(audio.duration) && audio.duration > 0) return audio.duration;
       if (ends.length) return Math.max(...ends);
       return 0;
+    }
+
+    function setVideoPreviewStatus(text) {
+      if (videoPreviewStatusEl) videoPreviewStatusEl.textContent = String(text || '');
+    }
+
+    function hasUsableVideoPreview() {
+      return !!(sourceVideoEl && runtimeInfoCache && runtimeInfoCache.videoExists !== false);
+    }
+
+    function silenceVideoPreview() {
+      if (!sourceVideoEl) return;
+      try {
+        sourceVideoEl.defaultMuted = true;
+        sourceVideoEl.muted = true;
+        if (sourceVideoEl.volume !== 0) sourceVideoEl.volume = 0;
+      } catch {
+        // Keep preview video visual-only; audio is always driven by the review audio element.
+      }
+    }
+
+    function syncVideoPreview(force = false) {
+      if (!videoPreviewEnabled || !hasUsableVideoPreview()) return;
+      if (syncingAudioFromVideo && !force) return;
+      silenceVideoPreview();
+      const target = Math.max(0, Number(audio.currentTime) || 0);
+      const current = Number(sourceVideoEl.currentTime) || 0;
+      if (force || Math.abs(current - target) > 0.12) {
+        syncingVideoFromAudio = true;
+        try {
+          const maxTime = Number.isFinite(sourceVideoEl.duration) && sourceVideoEl.duration > 0
+            ? Math.max(0, sourceVideoEl.duration - 0.01)
+            : target;
+          sourceVideoEl.currentTime = Math.max(0, Math.min(maxTime, target));
+        } catch {
+          // Some codecs refuse seeking before metadata is ready; the next timeupdate will retry.
+        }
+        setTimeout(() => { syncingVideoFromAudio = false; }, 80);
+      }
+      if (audio.paused) {
+        if (!sourceVideoEl.paused) sourceVideoEl.pause();
+      } else if (sourceVideoEl.paused) {
+        syncingVideoFromAudio = true;
+        sourceVideoEl.play().catch(() => {
+          setVideoPreviewStatus('视频等待手动播放');
+        });
+        setTimeout(() => { syncingVideoFromAudio = false; }, 80);
+      }
+      setVideoPreviewStatus('跟随 ' + formatWaveClock(target));
+    }
+
+    function setPlaybackTime(timeSec, options = {}) {
+      const total = getAudioTotalDuration();
+      const maxTarget = total > 0 ? Math.max(0, total - 0.01) : Number.POSITIVE_INFINITY;
+      const target = Math.max(0, Math.min(maxTarget, Number(timeSec) || 0));
+      audio.currentTime = target;
+      syncVideoPreview(options.forceVideo !== false);
+      return target;
+    }
+
+    function cancelSkipFade() {
+      if (skipFadeRaf) {
+        cancelAnimationFrame(skipFadeRaf);
+        skipFadeRaf = null;
+      }
+      if (skipFadeTimer) {
+        clearTimeout(skipFadeTimer);
+        skipFadeTimer = null;
+      }
+    }
+
+    function smoothSkipTo(targetTime) {
+      const target = Math.max(0, Number(targetTime) || 0);
+      const originalVolume = Math.max(0, Math.min(1, Number(audio.volume)));
+      if (audio.paused || audio.muted || originalVolume <= 0.02) {
+        return setPlaybackTime(target);
+      }
+
+      cancelSkipFade();
+      audio.volume = Math.max(0, originalVolume * 0.16);
+      skipFadeTimer = setTimeout(() => {
+        skipFadeTimer = null;
+        setPlaybackTime(target);
+        const startVolume = Math.max(0, Math.min(1, Number(audio.volume)));
+        const startedAt = performance.now();
+        const fadeMs = 42;
+        const step = (now) => {
+          const ratio = Math.min(1, Math.max(0, (now - startedAt) / fadeMs));
+          audio.volume = startVolume + (originalVolume - startVolume) * ratio;
+          if (ratio < 1 && !audio.paused) {
+            skipFadeRaf = requestAnimationFrame(step);
+          } else {
+            audio.volume = originalVolume;
+            skipFadeRaf = null;
+          }
+        };
+        skipFadeRaf = requestAnimationFrame(step);
+      }, 18);
+      return target;
+    }
+
+    function setVideoPreviewVisible(next) {
+      videoPreviewEnabled = !!next && hasUsableVideoPreview();
+      if (videoPreviewPanelEl) videoPreviewPanelEl.hidden = !videoPreviewEnabled;
+      if (toolbarCardEl) toolbarCardEl.classList.toggle('video-preview-visible', videoPreviewEnabled);
+      if (btnToggleVideoPreview) {
+        btnToggleVideoPreview.textContent = videoPreviewEnabled ? '隐藏视频' : '视频预览';
+        btnToggleVideoPreview.disabled = runtimeInfoCache && runtimeInfoCache.videoExists === false;
+      }
+      try {
+        localStorage.setItem(VIDEO_PREVIEW_STORAGE_KEY, videoPreviewEnabled ? '1' : '0');
+      } catch {
+        // Display preference only.
+      }
+      if (videoPreviewEnabled) {
+        silenceVideoPreview();
+        syncVideoPreview(true);
+      } else if (sourceVideoEl && !sourceVideoEl.paused) {
+        sourceVideoEl.pause();
+      }
+    }
+
+    function toggleVideoPreview() {
+      if (runtimeInfoCache && runtimeInfoCache.videoExists === false) {
+        setStatus(runtimeInfoCache.videoMissingMessage || '原视频缺失，无法预览视频');
+        return;
+      }
+      setVideoPreviewVisible(!videoPreviewEnabled);
     }
 
     function formatSec(sec) {
@@ -3210,6 +3736,63 @@ const html = `<!doctype html>
       return count > 0;
     }
 
+    function glossaryEntries() {
+      return (Array.isArray(TERM_GLOSSARY) ? TERM_GLOSSARY : [])
+        .filter((item) => item && item.from && item.to && item.from !== item.to);
+    }
+
+    function refreshGlossarySummary() {
+      const count = glossaryEntries().length;
+      if (glossarySummaryEl) {
+        glossarySummaryEl.textContent = count ? ('词库 ' + count + ' 条') : '未配置词库';
+      }
+      if (btnApplyGlossary) btnApplyGlossary.disabled = count === 0;
+    }
+
+    function applyGlossaryCorrections() {
+      const entries = glossaryEntries();
+      if (!entries.length) {
+        setReplaceStatus('请先在主界面设置专有名词词库');
+        return false;
+      }
+      let count = 0;
+      let pushedUndo = false;
+      for (const entry of entries) {
+        const matches = buildSearchMatches(entry.from);
+        if (!matches.length) continue;
+        if (!pushedUndo) {
+          pushSelectionUndo();
+          pushedUndo = true;
+        }
+        for (let i = matches.length - 1; i >= 0; i -= 1) {
+          count += applyReplacementToMatch(matches[i], entry.to);
+        }
+      }
+      refreshSearchMatches(false);
+      if (count > 0) {
+        setReplaceStatus('已按词库纠错 ' + count + ' 处');
+        scheduleReviewStateSave(150);
+      } else {
+        setReplaceStatus('词库没有匹配到可纠错内容');
+      }
+      return count > 0;
+    }
+
+    function applyFocusReviewMode(enabled) {
+      const next = !!enabled;
+      document.body.classList.toggle('review-focus-mode', next);
+      if (btnFocusReview) btnFocusReview.textContent = next ? '退出专注' : '专注审核';
+      try {
+        localStorage.setItem(FOCUS_REVIEW_STORAGE_KEY, next ? '1' : '0');
+      } catch {
+        // Ignore localStorage failures; focus mode is a display preference only.
+      }
+    }
+
+    function toggleFocusReviewMode() {
+      applyFocusReviewMode(!document.body.classList.contains('review-focus-mode'));
+    }
+
     function openShortcutHelp() {
       if (shortcutHelpEl) shortcutHelpEl.hidden = false;
     }
@@ -3303,7 +3886,7 @@ const html = `<!doctype html>
         if (!WORDS[i]?.isGap && Number.isFinite(end) && end > start) {
           target = start + Math.min(0.08, Math.max(0.015, (end - start) / 2));
         }
-        audio.currentTime = Math.max(0, target);
+        setPlaybackTime(Math.max(0, target));
         setCurrentIndex(i);
         drawWaveform();
         scheduleReviewStateSave(150);
@@ -3439,7 +4022,7 @@ const html = `<!doctype html>
       if (Math.abs(target - lastSkipTarget) < 0.01 && now - lastSkipAt < 250) return;
       lastSkipTarget = target;
       lastSkipAt = now;
-      audio.currentTime = target;
+      smoothSkipTo(target);
     }
 
     function startSyncTimer() {
@@ -3964,7 +4547,7 @@ const html = `<!doctype html>
           + ' | 删除段 ' + formatSec(seg.start) + '-' + formatSec(seg.end)
           + ' | 删除后 ' + formatSec(seg.end) + '-' + formatSec(end);
       }
-      audio.currentTime = start;
+      setPlaybackTime(start);
       audio.play().catch(() => {});
       setStatus('正在预听删除点');
     }
@@ -4042,7 +4625,7 @@ const html = `<!doctype html>
         ? risk.prevWordIndex
         : risk.nextWordIndex;
       const targetTime = Math.max(0, Number(risk.start) - 0.35);
-      audio.currentTime = targetTime;
+      setPlaybackTime(targetTime);
       if (Number.isInteger(targetIdx) && tokenEls[targetIdx]) {
         setCurrentIndex(targetIdx);
         tokenEls[targetIdx].scrollIntoView({ block: 'center', inline: 'nearest' });
@@ -4150,6 +4733,28 @@ const html = `<!doctype html>
       return d;
     }
 
+    function buildMediaOverlaysForCut() {
+      const overlays = [];
+      const pushOverlay = (type, item, asset) => {
+        const start = Number(item?.start);
+        const end = Number(item?.end);
+        const filePath = String(asset?.filePath || '').trim();
+        if (!filePath || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+        overlays.push({
+          type,
+          filePath,
+          start,
+          end,
+          title: String(item?.title || ''),
+          fit: 'cover',
+          motionEffect: type === 'image' ? currentImageMotionEffect() : 'none',
+        });
+      };
+      imageItems.forEach((item) => pushOverlay('image', item, item?.image));
+      videoItems.forEach((item) => pushOverlay('video', item, item?.video));
+      return overlays;
+    }
+
     async function waitCut(jobId) {
       while (true) {
         const r = await fetch('/api/cut-status?jobId=' + encodeURIComponent(jobId));
@@ -4192,7 +4797,10 @@ const html = `<!doctype html>
         const r = await fetch('/api/cut', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(segs),
+          body: JSON.stringify({
+            segments: segs,
+            overlays: buildMediaOverlaysForCut(),
+          }),
         });
 
         const d = await r.json();
@@ -4234,6 +4842,17 @@ const html = `<!doctype html>
           } else if (!cutSubmitting) {
             btnCut.disabled = false;
             btnCut.title = '';
+          }
+          if (btnToggleVideoPreview) {
+            const hasSourceVideo = d.videoExists !== false;
+            btnToggleVideoPreview.disabled = !hasSourceVideo;
+            btnToggleVideoPreview.title = hasSourceVideo ? '' : (d.videoMissingMessage || '原视频缺失，无法预览视频');
+            if (!hasSourceVideo) {
+              setVideoPreviewVisible(false);
+              setVideoPreviewStatus('原视频缺失');
+            } else {
+              setVideoPreviewStatus(videoPreviewEnabled ? '跟随中' : '可预览');
+            }
           }
           applyTheme(d.themeMode || 'light');
           drawWaveform();
@@ -4327,6 +4946,8 @@ const html = `<!doctype html>
 
     document.getElementById('btnSelectSilence').addEventListener('click', selectSilenceByThreshold);
     if (btnPreviewDelete) btnPreviewDelete.addEventListener('click', previewCurrentDeletePoint);
+    if (btnToggleVideoPreview) btnToggleVideoPreview.addEventListener('click', toggleVideoPreview);
+    if (btnFocusReview) btnFocusReview.addEventListener('click', toggleFocusReviewMode);
     if (btnShowDeleteDiagnostics) btnShowDeleteDiagnostics.addEventListener('click', renderDeleteDiagnostics);
     if (btnCopyDiagnostics) btnCopyDiagnostics.addEventListener('click', copyCutDiagnostics);
     if (cutPrecisionModeEl) {
@@ -4420,6 +5041,16 @@ const html = `<!doctype html>
     if (btnDownloadImages) {
       btnDownloadImages.addEventListener('click', downloadGeneratedImages);
     }
+    if (btnGenerateVideos) {
+      btnGenerateVideos.addEventListener('click', async () => {
+        try {
+          await generateVideoAssets();
+        } catch (e) {
+          setVideoAssetStatus('视频素材生成失败: ' + e.message);
+          alert('视频素材生成失败: ' + e.message);
+        }
+      });
+    }
     if (btnExportSrt) {
       btnExportSrt.addEventListener('click', () => exportSubtitles('srt'));
     }
@@ -4449,6 +5080,7 @@ const html = `<!doctype html>
     if (btnFindNext) btnFindNext.addEventListener('click', () => jumpSearchMatch(1));
     if (btnReplaceOne) btnReplaceOne.addEventListener('click', replaceActiveMatch);
     if (btnReplaceAll) btnReplaceAll.addEventListener('click', replaceAllMatches);
+    if (btnApplyGlossary) btnApplyGlossary.addEventListener('click', applyGlossaryCorrections);
     if (btnShortcutHelp) btnShortcutHelp.addEventListener('click', openShortcutHelp);
     if (btnCloseShortcutHelp) btnCloseShortcutHelp.addEventListener('click', closeShortcutHelp);
     if (shortcutHelpEl) {
@@ -4458,6 +5090,9 @@ const html = `<!doctype html>
     }
     if (imageAspectEl) {
       imageAspectEl.addEventListener('change', renderImageCards);
+    }
+    if (imageMotionEffectEl) {
+      imageMotionEffectEl.addEventListener('change', () => scheduleReviewStateSave(100));
     }
     if (imageCardListEl) {
       imageCardListEl.addEventListener('click', async (e) => {
@@ -4488,6 +5123,39 @@ const html = `<!doctype html>
             setImageStatus('已复制第 ' + (index + 1) + ' 张提示词');
           }).catch(() => {
             setImageStatus('复制失败，请手动选择提示词');
+          });
+        }
+      });
+    }
+    if (videoAssetListEl) {
+      videoAssetListEl.addEventListener('click', async (e) => {
+        const retryBtn = e.target.closest('[data-video-retry]');
+        const copyBtn = e.target.closest('[data-video-copy]');
+        if (retryBtn) {
+          const index = Number(retryBtn.dataset.videoRetry);
+          if (!Number.isInteger(index)) return;
+          try {
+            setVideoAssetStatus('正在重试第 ' + (index + 1) + ' 段视频素材...');
+            await generateOneVideoAsset(index, true);
+            setVideoAssetStatus('第 ' + (index + 1) + ' 段视频素材已重试完成');
+          } catch (err) {
+            if (videoItems[index]) {
+              videoItems[index].status = 'error';
+              videoItems[index].error = err.message || String(err);
+              renderVideoAssetCards();
+            }
+            setVideoAssetStatus('重试失败: ' + (err.message || String(err)));
+          }
+          return;
+        }
+        if (copyBtn) {
+          const index = Number(copyBtn.dataset.videoCopy);
+          const text = videoItems[index]?.videoPrompt || videoItems[index]?.prompt || '';
+          if (!text) return;
+          navigator.clipboard?.writeText(text).then(() => {
+            setVideoAssetStatus('已复制第 ' + (index + 1) + ' 段视频提示词');
+          }).catch(() => {
+            setVideoAssetStatus('复制失败，请手动选择提示词');
           });
         }
       });
@@ -4595,8 +5263,8 @@ const html = `<!doctype html>
         const rect = waveCanvas.getBoundingClientRect();
         if (rect.width <= 0) return;
         const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-        audio.currentTime = view.start + ratio * Math.max(0.001, view.end - view.start);
-        waveViewCenterSec = audio.currentTime;
+        const nextTime = setPlaybackTime(view.start + ratio * Math.max(0.001, view.end - view.start));
+        waveViewCenterSec = nextTime;
         syncCurrentToken();
         drawWaveform();
         scheduleReviewStateSave(120);
@@ -4645,8 +5313,47 @@ const html = `<!doctype html>
       stopSyncTimer();
     });
 
+    if (sourceVideoEl) {
+      silenceVideoPreview();
+      sourceVideoEl.addEventListener('loadedmetadata', () => {
+        silenceVideoPreview();
+        setVideoPreviewStatus('已加载');
+        syncVideoPreview(true);
+      });
+      sourceVideoEl.addEventListener('volumechange', () => {
+        if (!sourceVideoEl.muted || sourceVideoEl.volume !== 0) {
+          silenceVideoPreview();
+        }
+      });
+      sourceVideoEl.addEventListener('error', () => {
+        setVideoPreviewStatus('视频无法预览，可能是编码不受 Chromium 支持');
+      });
+      sourceVideoEl.addEventListener('play', () => {
+        silenceVideoPreview();
+        if (!videoPreviewEnabled || syncingVideoFromAudio) return;
+        syncingAudioFromVideo = true;
+        setPlaybackTime(Number(sourceVideoEl.currentTime) || 0, { forceVideo: false });
+        syncingAudioFromVideo = false;
+        if (audio.paused) audio.play().catch(() => {});
+      });
+      sourceVideoEl.addEventListener('pause', () => {
+        if (!videoPreviewEnabled || syncingVideoFromAudio) return;
+        if (!audio.paused) audio.pause();
+      });
+      sourceVideoEl.addEventListener('seeked', () => {
+        if (!videoPreviewEnabled || syncingVideoFromAudio) return;
+        syncingAudioFromVideo = true;
+        setPlaybackTime(Number(sourceVideoEl.currentTime) || 0, { forceVideo: false });
+        syncingAudioFromVideo = false;
+        syncCurrentToken();
+        drawWaveform();
+        scheduleReviewStateSave(120);
+      });
+    }
+
     audio.addEventListener('timeupdate', () => {
       syncCurrentToken();
+      syncVideoPreview(false);
       if (previewStopTime !== null && Number(audio.currentTime) >= previewStopTime) {
         audio.pause();
         previewStopTime = null;
@@ -4655,6 +5362,7 @@ const html = `<!doctype html>
     });
     audio.addEventListener('loadedmetadata', () => {
       updateSelectionStats();
+      syncVideoPreview(true);
       drawWaveform();
     });
     audio.addEventListener('durationchange', () => {
@@ -4663,16 +5371,21 @@ const html = `<!doctype html>
     });
     audio.addEventListener('play', () => {
       syncCurrentToken();
+      syncVideoPreview(true);
       startSyncTimer();
     });
     audio.addEventListener('pause', () => {
       stopSyncTimer();
+      cancelSkipFade();
+      if (videoPreviewEnabled && sourceVideoEl && !sourceVideoEl.paused) sourceVideoEl.pause();
       drawWaveform();
       scheduleReviewStateSave(200);
     });
     audio.addEventListener('ended', () => {
       stopSyncTimer();
+      cancelSkipFade();
       previewStopTime = null;
+      if (sourceVideoEl && !sourceVideoEl.paused) sourceVideoEl.pause();
       drawWaveform();
     });
     window.addEventListener('beforeunload', () => {
@@ -4696,11 +5409,23 @@ const html = `<!doctype html>
       syncUndoButton();
       renderPublishSuggestions({ titles: [], descriptions: [], keywords: [] });
       renderImageCards();
+      renderVideoAssetCards();
+      refreshGlossarySummary();
+      try {
+        applyFocusReviewMode(localStorage.getItem(FOCUS_REVIEW_STORAGE_KEY) === '1');
+      } catch {
+        applyFocusReviewMode(false);
+      }
       await restoreReviewState();
       syncCurrentToken();
       updateSelectionStats();
       refreshLlmSummary();
       await loadRuntime();
+      try {
+        setVideoPreviewVisible(localStorage.getItem(VIDEO_PREVIEW_STORAGE_KEY) === '1');
+      } catch {
+        setVideoPreviewVisible(false);
+      }
       await loadWaveform();
       drawWaveform();
       scheduleReviewStateSave(150);

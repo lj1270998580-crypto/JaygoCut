@@ -191,7 +191,8 @@ textarea {
 }
 
 input,
-select {
+select,
+textarea {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 9px;
@@ -202,9 +203,16 @@ select {
 }
 
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   border-color: var(--focus-border);
   box-shadow: var(--focus-shadow);
+}
+
+textarea {
+  min-height: 96px;
+  resize: vertical;
+  line-height: 1.55;
 }
 
 .inline-input {

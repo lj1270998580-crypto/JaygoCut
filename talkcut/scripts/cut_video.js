@@ -2,7 +2,7 @@
 /**
  * 根据删除列表剪辑视频（filter_complex 精确剪辑）— 跨平台 Node.js 版本
  *
- * 用法: node cut_video.js <input.mp4> <delete_segments.json> [output.mp4]
+ * 用法: node cut_video.js <input.mp4> <delete_segments.json> [output.mp4] [media_overlays.json]
  */
 
 const fs = require('fs');
@@ -12,11 +12,12 @@ const { execSync, spawnSync } = require('child_process');
 const INPUT = process.argv[2];
 const DELETE_JSON = process.argv[3];
 const OUTPUT = process.argv[4] || 'output_cut.mp4';
+const OVERLAY_JSON = process.argv[5] || '';
 const FFMPEG_BIN = process.env.FFMPEG_BIN || 'ffmpeg';
 const FFPROBE_BIN = process.env.FFPROBE_BIN || 'ffprobe';
 
 if (!INPUT || !DELETE_JSON) {
-  console.error('❌ 用法: node cut_video.js <input.mp4> <delete_segments.json> [output.mp4]');
+  console.error('❌ 用法: node cut_video.js <input.mp4> <delete_segments.json> [output.mp4] [media_overlays.json]');
   process.exit(1);
 }
 if (!fs.existsSync(INPUT)) {
@@ -77,6 +78,18 @@ function parseEncoderPreset(value, fallback = 'slow') {
 function parseAudioBitrate(value, fallback = '192k') {
   const bitrate = String(value || '').trim().toLowerCase();
   return /^\d{2,4}k$/.test(bitrate) ? bitrate : fallback;
+}
+
+function sanitizeMotionEffect(value) {
+  const effect = String(value || 'none').trim();
+  return ['none', 'zoom-in', 'zoom-out', 'pan-left', 'pan-right', 'pan-up', 'pan-down'].includes(effect)
+    ? effect
+    : 'none';
+}
+
+function evenDimension(value) {
+  const parsed = Math.max(2, Math.ceil(Number(value) || 2));
+  return parsed % 2 === 0 ? parsed : parsed + 1;
 }
 
 function parseMs(value, fallback) {
@@ -367,6 +380,204 @@ function runFfmpegWithFilterScript(inputPath, filterCmd, tempOutputPath) {
   }
 }
 
+function mapTimeAfterDeletes(time, deletedSegments) {
+  const t = Math.max(0, Number(time) || 0);
+  let removed = 0;
+  for (const seg of deletedSegments) {
+    if (seg.end <= t) {
+      removed += seg.end - seg.start;
+    } else if (seg.start < t) {
+      return Math.max(0, seg.start - removed);
+    } else {
+      break;
+    }
+  }
+  return Math.max(0, t - removed);
+}
+
+function loadMediaOverlays(overlayJson, deletedSegments, timelineOffsetSec, expectedDurationSec) {
+  if (!overlayJson || !fs.existsSync(overlayJson)) return [];
+  let raw = [];
+  try {
+    raw = readJsonFileSafe(overlayJson);
+  } catch (err) {
+    console.log(`⚠️ 无法读取素材合成文件: ${err.message}`);
+    return [];
+  }
+  if (!Array.isArray(raw)) return [];
+
+  const overlays = [];
+  for (const item of raw) {
+    const type = String(item?.type || '').toLowerCase() === 'video' ? 'video' : 'image';
+    const filePath = path.resolve(String(item?.filePath || ''));
+    if (!fs.existsSync(filePath)) continue;
+    const rawStart = Number(item?.start);
+    const rawEnd = Number(item?.end);
+    if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd) || rawEnd <= rawStart) continue;
+
+    const sourceStart = Math.max(0, rawStart + timelineOffsetSec);
+    const sourceEnd = Math.max(sourceStart + 0.2, rawEnd + timelineOffsetSec);
+    const mappedStart = mapTimeAfterDeletes(sourceStart, deletedSegments);
+    let mappedEnd = mapTimeAfterDeletes(sourceEnd, deletedSegments);
+    if (mappedEnd - mappedStart < 0.5) {
+      mappedEnd = mappedStart + Math.min(5, Math.max(1.5, rawEnd - rawStart));
+    }
+    if (Number.isFinite(expectedDurationSec) && expectedDurationSec > 0) {
+      if (mappedStart >= expectedDurationSec) continue;
+      mappedEnd = Math.min(expectedDurationSec, mappedEnd);
+    }
+    if (mappedEnd <= mappedStart + 0.2) continue;
+
+    overlays.push({
+      type,
+      filePath,
+      start: mappedStart,
+      end: mappedEnd,
+      duration: mappedEnd - mappedStart,
+      title: String(item?.title || '').slice(0, 80),
+      motionEffect: type === 'image' ? sanitizeMotionEffect(item?.motionEffect) : 'none',
+    });
+  }
+  return overlays.slice(0, 50);
+}
+
+function buildOverlayVisualFilter(inputLabel, overlay, width, height, duration) {
+  const base = `[${inputLabel}:v]`;
+  const effect = overlay.type === 'image' ? sanitizeMotionEffect(overlay.motionEffect) : 'none';
+  const safeDuration = Math.max(0.2, Number(duration) || 0.2).toFixed(3);
+  const w = evenDimension(width);
+  const h = evenDimension(height);
+  if (overlay.type !== 'image' || effect === 'none') {
+    return `${base}scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setsar=1,format=rgba`;
+  }
+
+  if (effect === 'zoom-in' || effect === 'zoom-out') {
+    const scaleExpr = effect === 'zoom-in'
+      ? `(1+0.06*t/${safeDuration})`
+      : `(1.06-0.06*t/${safeDuration})`;
+    return base + [
+      `scale=w='ceil(${w}*${scaleExpr}/2)*2':h='ceil(${h}*${scaleExpr}/2)*2':eval=frame:force_original_aspect_ratio=increase`,
+      `crop=${w}:${h}:x='(iw-ow)/2':y='(ih-oh)/2'`,
+      'setsar=1',
+      'format=rgba',
+    ].join(',');
+  }
+
+  const panW = evenDimension(w * 1.08);
+  const panH = evenDimension(h * 1.08);
+  const xExpr = effect === 'pan-right'
+    ? `(iw-ow)*t/${safeDuration}`
+    : effect === 'pan-left'
+      ? `(iw-ow)*(1-t/${safeDuration})`
+      : '(iw-ow)/2';
+  const yExpr = effect === 'pan-down'
+    ? `(ih-oh)*t/${safeDuration}`
+    : effect === 'pan-up'
+      ? `(ih-oh)*(1-t/${safeDuration})`
+      : '(ih-oh)/2';
+  return base + [
+    `scale=${panW}:${panH}:force_original_aspect_ratio=increase`,
+    `crop=${w}:${h}:x='${xExpr}':y='${yExpr}'`,
+    'setsar=1',
+    'format=rgba',
+  ].join(',');
+}
+
+function runFfmpegOverlay(baseInputPath, overlays, tempOutputPath) {
+  if (!overlays.length) return false;
+
+  const info = probeMediaInfo(baseInputPath);
+  const video = info.streams.find(stream => stream.codec_type === 'video') || {};
+  const width = Math.max(2, Number(video.width) || 1920);
+  const height = Math.max(2, Number(video.height) || 1080);
+  const exportConfig = readEnvConfig();
+  const exportCrf = parseNumberInRange(configValue(exportConfig, 'CUT_EXPORT_CRF', '16'), 16, 0, 35);
+  const exportPreset = parseEncoderPreset(configValue(exportConfig, 'CUT_EXPORT_PRESET', 'slow'), 'slow');
+
+  const filterScriptPath = path.join(
+    path.dirname(path.resolve(tempOutputPath)),
+    `ffmpeg_overlay_${process.pid}_${Date.now()}.txt`
+  );
+  const filters = [`[0:v]format=yuv420p[base0]`];
+  let currentLabel = 'base0';
+
+  overlays.forEach((overlay, index) => {
+    const inputIndex = index + 1;
+    const start = Math.max(0, overlay.start);
+    const end = Math.max(start + 0.2, overlay.end);
+    const duration = Math.max(0.2, overlay.duration || (end - start));
+    const fade = Math.min(0.18, Math.max(0, duration / 4));
+    const outLabel = index === overlays.length - 1 ? 'vout' : `base${index + 1}`;
+    const fadeOutStart = Math.max(0, duration - fade);
+    let overlayFilter = buildOverlayVisualFilter(inputIndex, overlay, width, height, duration);
+    if (fade > 0.02) {
+      overlayFilter += `,fade=t=in:st=0:d=${fade.toFixed(3)}:alpha=1,fade=t=out:st=${fadeOutStart.toFixed(3)}:d=${fade.toFixed(3)}:alpha=1`;
+    }
+    overlayFilter += `,setpts=PTS-STARTPTS+${start.toFixed(3)}/TB[ov${index}]`;
+    filters.push(overlayFilter);
+    filters.push(`[${currentLabel}][ov${index}]overlay=0:0:enable='between(t,${start.toFixed(3)},${end.toFixed(3)})'[${outLabel}]`);
+    currentLabel = outLabel;
+  });
+  fs.writeFileSync(filterScriptPath, filters.join(';'), 'utf8');
+
+  const args = ['-y', '-i', baseInputPath];
+  for (const overlay of overlays) {
+    const duration = Math.max(0.2, overlay.duration || (overlay.end - overlay.start));
+    if (overlay.type === 'video') {
+      args.push('-stream_loop', '-1', '-t', duration.toFixed(3), '-i', overlay.filePath);
+    } else {
+      args.push('-loop', '1', '-t', duration.toFixed(3), '-i', overlay.filePath);
+    }
+  }
+  args.push(
+    '-filter_complex_script',
+    filterScriptPath,
+    '-map',
+    '[vout]',
+    '-map',
+    '0:a?',
+    '-map_metadata',
+    '-1',
+    '-map_chapters',
+    '-1',
+    '-c:v',
+    'libx264',
+    '-preset',
+    exportPreset,
+    '-crf',
+    String(exportCrf),
+    '-profile:v',
+    'high',
+    '-level:v',
+    '4.1',
+    '-pix_fmt',
+    'yuv420p',
+    '-tag:v',
+    'avc1',
+    '-movflags',
+    '+faststart',
+    '-c:a',
+    'copy',
+    '-shortest',
+    tempOutputPath,
+  );
+
+  try {
+    console.log(`🎬 合成素材覆盖层: ${overlays.length} 个`);
+    overlays.forEach((overlay, index) => {
+      console.log(`  #${index + 1} ${overlay.type} ${overlay.start.toFixed(2)}-${overlay.end.toFixed(2)}s ${path.basename(overlay.filePath)}`);
+    });
+    const result = spawnSync(FFMPEG_BIN, args, { stdio: 'inherit', windowsHide: true });
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error(`ffmpeg overlay exited with code ${result.status}`);
+    return true;
+  } finally {
+    if (fs.existsSync(filterScriptPath)) {
+      fs.rmSync(filterScriptPath, { force: true });
+    }
+  }
+}
+
 function detectSpeechBoundsInKeepSegment(inputPath, seg, options) {
   const segDuration = seg.end - seg.start;
   if (segDuration <= options.minKeepSec) {
@@ -607,6 +818,7 @@ filters.push('[outa]aresample=48000:first_pts=0,pan=stereo|c0=c0|c1=c0[afinal]')
 const filterCmd = filters.join(';');
 const expectedDuration = refinedKeepSegs.reduce((sum, seg) => sum + (seg.end - seg.start), 0);
 const tempOutput = buildTempOutputPath(OUTPUT);
+let overlayTempOutput = '';
 
 fs.mkdirSync(path.dirname(path.resolve(OUTPUT)), { recursive: true });
 
@@ -615,8 +827,19 @@ console.log('\n✂️ 执行 FFmpeg 精确剪辑...');
 try {
   runFfmpegWithFilterScript(INPUT, filterCmd, tempOutput);
 
-  const validated = validateOutputFile(tempOutput, expectedDuration);
-  fs.renameSync(tempOutput, path.resolve(OUTPUT));
+  validateOutputFile(tempOutput, expectedDuration);
+  let finalTempOutput = tempOutput;
+  const overlays = loadMediaOverlays(OVERLAY_JSON, mergedSegs, timelineOffsetSec, expectedDuration);
+  if (overlays.length) {
+    const overlayOutput = buildTempOutputPath(OUTPUT);
+    overlayTempOutput = overlayOutput;
+    runFfmpegOverlay(tempOutput, overlays, overlayOutput);
+    fs.rmSync(tempOutput, { force: true });
+    finalTempOutput = overlayOutput;
+  }
+
+  const validated = validateOutputFile(finalTempOutput, expectedDuration);
+  fs.renameSync(finalTempOutput, path.resolve(OUTPUT));
   ensureVisibleInFinder(OUTPUT);
   console.log(`✅ 已保存: ${OUTPUT}`);
   console.log(`📹 新时长: ${validated.duration}s`);
@@ -627,6 +850,9 @@ try {
 } catch (e) {
   if (fs.existsSync(tempOutput)) {
     fs.rmSync(tempOutput, { force: true });
+  }
+  if (overlayTempOutput && fs.existsSync(overlayTempOutput)) {
+    fs.rmSync(overlayTempOutput, { force: true });
   }
   console.error('❌ 剪辑失败');
   if (e instanceof Error && e.message) {

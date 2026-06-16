@@ -65,8 +65,11 @@ const WHISPER_MODEL_DOWNLOADS = {
 };
 const UPDATE_FEED_URL = 'https://ailabing.cn/downloads/jaygo/';
 const QWEN_ASR_MODEL = 'qwen3-asr-flash-filetrans';
+const MIMO_ASR_MODEL = 'mimo-v2.5-asr';
+const MIMO_ASR_BASE_URL = 'https://api.xiaomimimo.com/v1';
 const QWEN_ASR_TEST_AUDIO_URL = 'https://dashscope.oss-cn-beijing.aliyuncs.com/samples/audio/paraformer/hello_world.wav';
 const VOLCENGINE_ASR_TEST_AUDIO_URL = QWEN_ASR_TEST_AUDIO_URL;
+const MIMO_ASR_TEST_AUDIO_URL = QWEN_ASR_TEST_AUDIO_URL;
 const EXPORT_QUALITY_PRESETS = {
   preview: { label: '\u5feb\u901f\u9884\u89c8', crf: 23, preset: 'veryfast', audioBitrate: '160k' },
   standard: { label: '\u6807\u51c6\u9ad8\u8d28\u91cf', crf: 18, preset: 'fast', audioBitrate: '192k' },
@@ -93,11 +96,15 @@ const LLM_PROVIDER_KEYS = new Set([
 const DEFAULT_OUTPUT_ROOT = app.isPackaged
   ? path.join(os.homedir(), 'Documents', 'Jaygo Cut Output')
   : path.join(REPO_ROOT, 'output');
+const AGNES_API_BASE_URL = 'https://apihub.agnes-ai.com/v1';
+const AGNES_IMAGE_MODEL = 'agnes-image-2.1-flash';
+const AGNES_VIDEO_MODEL = 'agnes-video-v2.0';
 
 const DEFAULT_SETTINGS = {
   asrEngine: 'volcengine',
   volcengineApiKey: '',
   dashscopeApiKey: '',
+  mimoApiKey: '',
   outputRoot: DEFAULT_OUTPUT_ROOT,
   silenceThresholdSec: 0.2,
   exportQuality: DEFAULT_EXPORT_QUALITY,
@@ -111,9 +118,13 @@ const DEFAULT_SETTINGS = {
   llmApiKey: '',
   llmModel: '',
   llmTemperature: 0.2,
-  imageApiBaseUrl: '',
+  imageApiBaseUrl: AGNES_API_BASE_URL,
   imageApiKey: '',
-  imageModel: '',
+  imageModel: AGNES_IMAGE_MODEL,
+  videoApiBaseUrl: AGNES_API_BASE_URL,
+  videoApiKey: '',
+  videoModel: AGNES_VIDEO_MODEL,
+  termGlossary: '',
   closeBehavior: '',
   remoteUploadEndpoint: 'https://ailabing.cn/api/jaygo/upload-audio',
   remoteUploadToken: '6b5ec35b8e28d2e1fb24c899fa19e74f03355a5b62105df90c2086a76d14812a',
@@ -231,6 +242,29 @@ function normalizeThemeMode(value) {
   const mode = String(value || '').trim().toLowerCase();
   if (mode === 'blackgold' || mode === 'system') return mode;
   return 'light';
+}
+
+function normalizeAsrEngine(value) {
+  const engine = String(value || '').trim().toLowerCase();
+  if (['volcengine', 'aliyun_qwen', 'mimo', 'local'].includes(engine)) return engine;
+  if (engine === 'whisper') return 'local';
+  return DEFAULT_SETTINGS.asrEngine;
+}
+
+function asrEngineEnvValue(value) {
+  const engine = normalizeAsrEngine(value);
+  return engine === 'local' ? 'whisper' : engine;
+}
+
+function normalizeSettings(source = {}) {
+  return {
+    ...DEFAULT_SETTINGS,
+    ...source,
+    asrEngine: normalizeAsrEngine(source.asrEngine),
+    volcengineApiKey: String(source.volcengineApiKey || '').trim(),
+    dashscopeApiKey: String(source.dashscopeApiKey || '').trim(),
+    mimoApiKey: String(source.mimoApiKey || '').trim(),
+  };
 }
 
 function normalizeLlmProviderKey(value) {
@@ -493,8 +527,12 @@ function buildRuntimeEnv(settings) {
   return {
     VOLCENGINE_API_KEY: settings.volcengineApiKey || '',
     DASHSCOPE_API_KEY: settings.dashscopeApiKey || '',
+    MIMO_API_KEY: settings.mimoApiKey || '',
+    MIMO_ASR_BASE_URL: MIMO_ASR_BASE_URL,
+    MIMO_ASR_MODEL: MIMO_ASR_MODEL,
+    MIMO_ASR_LANGUAGE: 'zh',
     DASHSCOPE_ASR_MODEL: QWEN_ASR_MODEL,
-    ASR_ENGINE: settings.asrEngine === 'local' ? 'whisper' : (settings.asrEngine === 'aliyun_qwen' ? 'aliyun_qwen' : 'volcengine'),
+    ASR_ENGINE: asrEngineEnvValue(settings.asrEngine),
     DEFAULT_OUTPUT_DIR: settings.outputRoot || DEFAULT_SETTINGS.outputRoot,
     CUT_MIN_DELETE_MS: '200',
     CUT_EXPORT_QUALITY: exportQuality,
@@ -514,6 +552,10 @@ function buildRuntimeEnv(settings) {
     IMAGE_API_BASE_URL: String(settings.imageApiBaseUrl || '').trim(),
     IMAGE_API_KEY: String(settings.imageApiKey || settings.llmApiKey || '').trim(),
     IMAGE_MODEL: String(settings.imageModel || '').trim(),
+    VIDEO_API_BASE_URL: String(settings.videoApiBaseUrl || settings.imageApiBaseUrl || '').trim(),
+    VIDEO_API_KEY: String(settings.videoApiKey || settings.imageApiKey || settings.llmApiKey || '').trim(),
+    VIDEO_MODEL: String(settings.videoModel || '').trim(),
+    TERM_GLOSSARY: String(settings.termGlossary || ''),
   };
 }
 
@@ -531,6 +573,23 @@ function parseEnv(content) {
     out[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
   }
   return out;
+}
+
+function encodeMultilineEnvValue(value) {
+  return JSON.stringify(String(value || ''));
+}
+
+function decodeMultilineEnvValue(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('"') || raw.startsWith("'")) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return raw.replace(/^['"]|['"]$/g, '').replace(/\\n/g, '\n');
+    }
+  }
+  return raw.replace(/\\n/g, '\n');
 }
 
 async function loadHistory() {
@@ -1045,8 +1104,11 @@ async function loadSettings() {
       if (env.DEFAULT_OUTPUT_DIR) merged.outputRoot = env.DEFAULT_OUTPUT_DIR;
       if (env.VOLCENGINE_API_KEY) merged.volcengineApiKey = env.VOLCENGINE_API_KEY;
       if (env.DASHSCOPE_API_KEY) merged.dashscopeApiKey = env.DASHSCOPE_API_KEY;
+      if (env.MIMO_API_KEY) merged.mimoApiKey = env.MIMO_API_KEY;
       if (env.ASR_ENGINE === 'whisper') merged.asrEngine = 'local';
       if (env.ASR_ENGINE === 'volcengine') merged.asrEngine = 'volcengine';
+      if (env.ASR_ENGINE === 'aliyun_qwen') merged.asrEngine = 'aliyun_qwen';
+      if (env.ASR_ENGINE === 'mimo') merged.asrEngine = 'mimo';
       if (env.WHISPER_MODEL_QUALITY) merged.localWhisperModel = normalizeWhisperModelKey(env.WHISPER_MODEL_QUALITY);
       if (env.WHISPER_MODEL) merged.localWhisperModelPath = env.WHISPER_MODEL;
       if (env.JAYGO_THEME_MODE) merged.themeMode = normalizeThemeMode(env.JAYGO_THEME_MODE);
@@ -1059,6 +1121,10 @@ async function loadSettings() {
       if (env.IMAGE_API_BASE_URL) merged.imageApiBaseUrl = env.IMAGE_API_BASE_URL;
       if (env.IMAGE_API_KEY) merged.imageApiKey = env.IMAGE_API_KEY;
       if (env.IMAGE_MODEL) merged.imageModel = env.IMAGE_MODEL;
+      if (env.VIDEO_API_BASE_URL) merged.videoApiBaseUrl = env.VIDEO_API_BASE_URL;
+      if (env.VIDEO_API_KEY) merged.videoApiKey = env.VIDEO_API_KEY;
+      if (env.VIDEO_MODEL) merged.videoModel = env.VIDEO_MODEL;
+      if (env.TERM_GLOSSARY) merged.termGlossary = decodeMultilineEnvValue(env.TERM_GLOSSARY);
     } catch {
       // ignore malformed .env
     }
@@ -1069,6 +1135,10 @@ async function loadSettings() {
   }
   merged.localWhisperModel = normalizeWhisperModelKey(merged.localWhisperModel);
   merged.localWhisperModelPath = String(merged.localWhisperModelPath || '').trim();
+  merged.asrEngine = normalizeAsrEngine(merged.asrEngine);
+  merged.volcengineApiKey = String(merged.volcengineApiKey || '').trim();
+  merged.dashscopeApiKey = String(merged.dashscopeApiKey || '').trim();
+  merged.mimoApiKey = String(merged.mimoApiKey || '').trim();
   merged.exportQuality = normalizeExportQuality(merged.exportQuality);
   if (!merged.exportQualityMigratedToUltra && merged.exportQuality === 'high') {
     merged.exportQuality = DEFAULT_EXPORT_QUALITY;
@@ -1078,6 +1148,10 @@ async function loadSettings() {
   merged.llmProvider = normalizeLlmProviderKey(merged.llmProvider);
   if (!merged.llmApiBaseUrl) merged.llmApiBaseUrl = DEFAULT_SETTINGS.llmApiBaseUrl;
   if (!Number.isFinite(Number(merged.llmTemperature))) merged.llmTemperature = DEFAULT_SETTINGS.llmTemperature;
+  if (!String(merged.imageApiBaseUrl || '').trim()) merged.imageApiBaseUrl = DEFAULT_SETTINGS.imageApiBaseUrl;
+  if (!String(merged.imageModel || '').trim()) merged.imageModel = DEFAULT_SETTINGS.imageModel;
+  if (!String(merged.videoApiBaseUrl || '').trim()) merged.videoApiBaseUrl = DEFAULT_SETTINGS.videoApiBaseUrl;
+  if (!String(merged.videoModel || '').trim()) merged.videoModel = DEFAULT_SETTINGS.videoModel;
   return merged;
 }
 
@@ -1096,8 +1170,12 @@ async function syncSkillEnv(settings) {
     current.DEFAULT_OUTPUT_DIR = settings.outputRoot || DEFAULT_SETTINGS.outputRoot;
     current.VOLCENGINE_API_KEY = settings.volcengineApiKey || '';
     current.DASHSCOPE_API_KEY = settings.dashscopeApiKey || '';
+    current.MIMO_API_KEY = settings.mimoApiKey || '';
+    current.MIMO_ASR_BASE_URL = MIMO_ASR_BASE_URL;
+    current.MIMO_ASR_MODEL = MIMO_ASR_MODEL;
+    current.MIMO_ASR_LANGUAGE = 'zh';
     current.DASHSCOPE_ASR_MODEL = QWEN_ASR_MODEL;
-    current.ASR_ENGINE = settings.asrEngine === 'local' ? 'whisper' : (settings.asrEngine === 'aliyun_qwen' ? 'aliyun_qwen' : 'volcengine');
+    current.ASR_ENGINE = asrEngineEnvValue(settings.asrEngine);
     current.WHISPER_MODEL_QUALITY = normalizeWhisperModelKey(settings.localWhisperModel);
     current.WHISPER_MODEL = getConfiguredWhisperModelPath(settings) || settings.localWhisperModelPath || '';
     current.CUT_MIN_DELETE_MS = '200';
@@ -1117,10 +1195,18 @@ async function syncSkillEnv(settings) {
     current.IMAGE_API_BASE_URL = String(settings.imageApiBaseUrl || '');
     current.IMAGE_API_KEY = String(settings.imageApiKey || settings.llmApiKey || '');
     current.IMAGE_MODEL = String(settings.imageModel || '');
+    current.VIDEO_API_BASE_URL = String(settings.videoApiBaseUrl || settings.imageApiBaseUrl || '');
+    current.VIDEO_API_KEY = String(settings.videoApiKey || settings.imageApiKey || settings.llmApiKey || '');
+    current.VIDEO_MODEL = String(settings.videoModel || '');
+    current.TERM_GLOSSARY = encodeMultilineEnvValue(settings.termGlossary || '');
 
     const ordered = [
       'VOLCENGINE_API_KEY',
       'DASHSCOPE_API_KEY',
+      'MIMO_API_KEY',
+      'MIMO_ASR_BASE_URL',
+      'MIMO_ASR_MODEL',
+      'MIMO_ASR_LANGUAGE',
       'DASHSCOPE_ASR_MODEL',
       'ASR_ENGINE',
       'WHISPER_MODEL_QUALITY',
@@ -1134,6 +1220,10 @@ async function syncSkillEnv(settings) {
       'IMAGE_API_BASE_URL',
       'IMAGE_API_KEY',
       'IMAGE_MODEL',
+      'VIDEO_API_BASE_URL',
+      'VIDEO_API_KEY',
+      'VIDEO_MODEL',
+      'TERM_GLOSSARY',
       'DEFAULT_OUTPUT_DIR',
       'CUT_MIN_DELETE_MS',
       'CUT_EXPORT_QUALITY',
@@ -1164,11 +1254,10 @@ async function saveSettings(nextSettings = {}) {
     ...DEFAULT_SETTINGS,
     ...current,
     ...nextSettings,
-    asrEngine: ['volcengine', 'aliyun_qwen', 'local'].includes(source.asrEngine)
-      ? source.asrEngine
-      : DEFAULT_SETTINGS.asrEngine,
+    asrEngine: normalizeAsrEngine(source.asrEngine),
     volcengineApiKey: String(source.volcengineApiKey || '').trim(),
     dashscopeApiKey: String(source.dashscopeApiKey || '').trim(),
+    mimoApiKey: String(source.mimoApiKey || '').trim(),
     silenceThresholdSec: Number(source.silenceThresholdSec) >= 0.2
       ? Number(source.silenceThresholdSec)
       : 0.2,
@@ -1184,9 +1273,13 @@ async function saveSettings(nextSettings = {}) {
     llmTemperature: Number.isFinite(Number(source.llmTemperature))
       ? Math.max(0, Math.min(1.5, Number(source.llmTemperature)))
       : DEFAULT_SETTINGS.llmTemperature,
-    imageApiBaseUrl: String(source.imageApiBaseUrl || '').trim(),
+    imageApiBaseUrl: String(source.imageApiBaseUrl || DEFAULT_SETTINGS.imageApiBaseUrl).trim(),
     imageApiKey: String(source.imageApiKey || '').trim(),
-    imageModel: String(source.imageModel || '').trim(),
+    imageModel: String(source.imageModel || DEFAULT_SETTINGS.imageModel).trim(),
+    videoApiBaseUrl: String(source.videoApiBaseUrl || DEFAULT_SETTINGS.videoApiBaseUrl).trim(),
+    videoApiKey: String(source.videoApiKey || '').trim(),
+    videoModel: String(source.videoModel || DEFAULT_SETTINGS.videoModel).trim(),
+    termGlossary: String(source.termGlossary || '').replace(/\r\n/g, '\n').slice(0, 20000),
     closeBehavior: ['tray', 'exit'].includes(source.closeBehavior) ? source.closeBehavior : DEFAULT_SETTINGS.closeBehavior,
     remoteUploadEndpoint: String(source.remoteUploadEndpoint || DEFAULT_SETTINGS.remoteUploadEndpoint).trim(),
     remoteUploadToken: String(source.remoteUploadToken || DEFAULT_SETTINGS.remoteUploadToken).trim(),
@@ -1284,6 +1377,7 @@ async function getDependencyStatus() {
     && String(settings.llmApiKey || '').trim(),
   );
   const qwenReady = Boolean(String(settings.dashscopeApiKey || '').trim());
+  const mimoReady = Boolean(String(settings.mimoApiKey || '').trim());
 
   return {
     node: {
@@ -1323,6 +1417,10 @@ async function getDependencyStatus() {
     qwenAsr: {
       ok: qwenReady,
       detail: qwenReady ? 'Aliyun Qwen3-ASR configured' : 'DashScope API Key missing',
+    },
+    mimoAsr: {
+      ok: mimoReady,
+      detail: mimoReady ? 'Xiaomi MiMo-V2.5-ASR configured' : 'MiMo API Key missing',
     },
   };
 }
@@ -1502,6 +1600,24 @@ function parseJsonSafe(text) {
   }
 }
 
+function buildMimoAsrEndpoint(baseUrl = MIMO_ASR_BASE_URL) {
+  const clean = String(baseUrl || MIMO_ASR_BASE_URL).trim().replace(/\/+$/, '');
+  if (/\/chat\/completions$/i.test(clean)) return clean;
+  return `${clean}/chat/completions`;
+}
+
+async function fetchBinaryWithTimeout(url, timeoutMs = 15000) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: ac.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return Buffer.from(await res.arrayBuffer());
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function testAliyunQwenAsrConnection(settings) {
   const apiKey = String(settings.dashscopeApiKey || '').trim();
   if (!apiKey) return { ok: false, message: 'DashScope API Key 为空' };
@@ -1651,9 +1767,67 @@ async function testVolcengineAsrConnection(settings) {
   }
 }
 
+async function testMimoAsrConnection(settings) {
+  const apiKey = String(settings.mimoApiKey || '').trim();
+  if (!apiKey) return { ok: false, message: 'MiMo API Key 为空' };
+
+  const started = Date.now();
+  try {
+    const sample = await fetchBinaryWithTimeout(MIMO_ASR_TEST_AUDIO_URL, 15000);
+    const dataUrl = `data:audio/wav;base64,${sample.toString('base64')}`;
+    if (dataUrl.length > 9_800_000) {
+      return { ok: false, message: 'MiMo ASR 测试音频超过 10MB 限制' };
+    }
+
+    const request = await fetchTextWithRetry(buildMimoAsrEndpoint(MIMO_ASR_BASE_URL), {
+      method: 'POST',
+      headers: {
+        'api-key': apiKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: MIMO_ASR_MODEL,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'input_audio',
+                input_audio: { data: dataUrl },
+              },
+            ],
+          },
+        ],
+        asr_options: { language: 'zh' },
+        stream: false,
+      }),
+    }, { attempts: 2, timeoutMs: 30000, delayMs: 900 });
+
+    const json = parseJsonSafe(request.text);
+    if (!request.res.ok) {
+      return { ok: false, message: `MiMo ASR 失败 HTTP ${request.res.status}: ${request.text.slice(0, 260)}` };
+    }
+
+    const content = collectTextFragments(json?.choices?.[0]?.message?.content).join('').trim();
+    if (!json?.choices?.length) {
+      return { ok: false, message: `MiMo ASR 未返回 choices: ${request.text.slice(0, 260)}` };
+    }
+
+    return {
+      ok: true,
+      message: content
+        ? `MiMo-V2.5-ASR 连通成功（${Date.now() - started}ms）：${content.slice(0, 36)}`
+        : `MiMo-V2.5-ASR 连通成功（${Date.now() - started}ms），但测试音频返回空文本`,
+    };
+  } catch (err) {
+    return { ok: false, message: `MiMo ASR 连通失败: ${err.message || String(err)}` };
+  }
+}
+
 async function testAsrConnection(payload = {}) {
   const settings = normalizeSettings({ ...(await loadSettings()), ...payload });
   if (settings.asrEngine === 'aliyun_qwen') return testAliyunQwenAsrConnection(settings);
+  if (settings.asrEngine === 'mimo') return testMimoAsrConnection(settings);
   if (settings.asrEngine === 'volcengine') return testVolcengineAsrConnection(settings);
   const modelStatus = await getWhisperModelStatus({ scan: false });
   if (modelStatus.installed) {
@@ -2165,7 +2339,22 @@ async function runWorkflow(input) {
     stageLabel: 'extract_audio',
   });
 
-  if (settings.asrEngine === 'volcengine' || settings.asrEngine === 'aliyun_qwen') {
+  if (settings.asrEngine === 'mimo') {
+    if (!settings.mimoApiKey) {
+      throw new Error('MiMo API Key 为空，请先在设置中填写 Token Plan 密匙');
+    }
+    const audioMp3 = path.join(transcribeDir, 'audio_mimo.mp3');
+    await runCommand(getToolCommand('ffmpeg'), ['-y', '-i', audioWav, '-vn', '-ac', '1', '-ar', '16000', '-b:a', '48k', audioMp3], {
+      cwd: transcribeDir,
+      env: runtimeEnv,
+      stageLabel: 'prepare_upload',
+    });
+    await runNodeScript(path.join(SCRIPTS_DIR, 'mimo_asr_transcribe.js'), [audioMp3], {
+      cwd: transcribeDir,
+      env: runtimeEnv,
+      stageLabel: 'transcribe_remote',
+    });
+  } else if (settings.asrEngine === 'volcengine' || settings.asrEngine === 'aliyun_qwen') {
     const isAliyunQwen = settings.asrEngine === 'aliyun_qwen';
     if (!settings.volcengineApiKey) {
       if (!isAliyunQwen) throw new Error('火山引擎 API Key 为空，请先在设置中填写');

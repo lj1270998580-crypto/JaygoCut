@@ -3,6 +3,7 @@ const $ = (id) => document.getElementById(id);
 const els = {
   volcengineApiKey: $('volcengineApiKey'),
   dashscopeApiKey: $('dashscopeApiKey'),
+  mimoApiKey: $('mimoApiKey'),
   asrEngine: $('asrEngine'),
   themeMode: $('themeMode'),
   llmProvider: $('llmProvider'),
@@ -13,6 +14,10 @@ const els = {
   imageApiBaseUrl: $('imageApiBaseUrl'),
   imageApiKey: $('imageApiKey'),
   imageModel: $('imageModel'),
+  videoApiBaseUrl: $('videoApiBaseUrl'),
+  videoApiKey: $('videoApiKey'),
+  videoModel: $('videoModel'),
+  termGlossary: $('termGlossary'),
   testLlm: $('testLlm'),
   llmConnState: $('llmConnState'),
   testAsr: $('testAsr'),
@@ -55,7 +60,7 @@ const els = {
 
 function requireElementsReady() {
   const required = [
-    'volcengineApiKey', 'dashscopeApiKey', 'asrEngine',
+    'volcengineApiKey', 'dashscopeApiKey', 'mimoApiKey', 'asrEngine',
     'themeMode', 'outputRoot', 'silenceThresholdSec', 'exportQuality', 'videoPath',
     'taskState', 'taskStage', 'reviewUrl', 'projectDir', 'taskLogs',
     'historyList', 'startTask', 'openReview', 'openFolder',
@@ -80,6 +85,7 @@ const SETTINGS_COLLAPSE_KEY = 'jaygo.settings.collapsed';
 const ASR_MODE_LABELS = {
   volcengine: '火山引擎（云端）',
   aliyun_qwen: '阿里 Qwen3-ASR（云端）',
+  mimo: '小米 MiMo-V2.5-ASR（云端）',
   local: '本地 Whisper（按需install）',
 };
 
@@ -343,6 +349,7 @@ function getSettingsFromForm() {
   return {
     volcengineApiKey: els.volcengineApiKey.value.trim(),
     dashscopeApiKey: els.dashscopeApiKey.value.trim(),
+    mimoApiKey: els.mimoApiKey.value.trim(),
     asrEngine: els.asrEngine.value,
     localWhisperModel: settingsCache.localWhisperModel || 'high',
     localWhisperModelPath: settingsCache.localWhisperModelPath || '',
@@ -355,6 +362,10 @@ function getSettingsFromForm() {
     imageApiBaseUrl: els.imageApiBaseUrl ? els.imageApiBaseUrl.value.trim() : '',
     imageApiKey: els.imageApiKey ? els.imageApiKey.value.trim() : '',
     imageModel: els.imageModel ? els.imageModel.value.trim() : '',
+    videoApiBaseUrl: els.videoApiBaseUrl ? els.videoApiBaseUrl.value.trim() : '',
+    videoApiKey: els.videoApiKey ? els.videoApiKey.value.trim() : '',
+    videoModel: els.videoModel ? els.videoModel.value.trim() : '',
+    termGlossary: els.termGlossary ? els.termGlossary.value : '',
     outputRoot: els.outputRoot.value.trim(),
     silenceThresholdSec: Number(els.silenceThresholdSec.value) || 0.2,
     exportQuality: els.exportQuality.value || 'ultra',
@@ -377,6 +388,7 @@ function getAsrInputFromForm() {
     asrEngine: els.asrEngine.value,
     volcengineApiKey: els.volcengineApiKey.value.trim(),
     dashscopeApiKey: els.dashscopeApiKey.value.trim(),
+    mimoApiKey: els.mimoApiKey.value.trim(),
   };
 }
 
@@ -395,6 +407,10 @@ function markAsrConnPending() {
   }
   if (engine === 'volcengine' && !els.volcengineApiKey.value.trim()) {
     setAsrConnState('pending', 'ASR connection: Volcengine API Key required');
+    return;
+  }
+  if (engine === 'mimo' && !els.mimoApiKey.value.trim()) {
+    setAsrConnState('pending', 'ASR connection: MiMo API Key required');
     return;
   }
   if (engine === 'local') {
@@ -546,6 +562,7 @@ function applySettingsToForm(settings) {
   settingsCache = { ...(settings || {}) };
   els.volcengineApiKey.value = settings.volcengineApiKey || '';
   els.dashscopeApiKey.value = settings.dashscopeApiKey || '';
+  els.mimoApiKey.value = settings.mimoApiKey || '';
   els.asrEngine.value = settings.asrEngine || 'volcengine';
   els.themeMode.value = normalizeThemeMode(settings.themeMode || 'light');
 
@@ -569,6 +586,10 @@ function applySettingsToForm(settings) {
   if (els.imageApiBaseUrl) els.imageApiBaseUrl.value = settings.imageApiBaseUrl || '';
   if (els.imageApiKey) els.imageApiKey.value = settings.imageApiKey || '';
   if (els.imageModel) els.imageModel.value = settings.imageModel || '';
+  if (els.videoApiBaseUrl) els.videoApiBaseUrl.value = settings.videoApiBaseUrl || '';
+  if (els.videoApiKey) els.videoApiKey.value = settings.videoApiKey || '';
+  if (els.videoModel) els.videoModel.value = settings.videoModel || '';
+  if (els.termGlossary) els.termGlossary.value = settings.termGlossary || '';
 
   els.outputRoot.value = settings.outputRoot || '';
   els.silenceThresholdSec.value = String(settings.silenceThresholdSec || 0.2);
@@ -711,7 +732,7 @@ $('pickOutputRoot').addEventListener('click', async () => {
   if (picked) els.outputRoot.value = picked;
 });
 
-['volcengineApiKey', 'dashscopeApiKey'].forEach((id) => {
+['volcengineApiKey', 'dashscopeApiKey', 'mimoApiKey'].forEach((id) => {
   if (els[id]) {
     els[id].addEventListener('input', markAsrConnPending);
   }
