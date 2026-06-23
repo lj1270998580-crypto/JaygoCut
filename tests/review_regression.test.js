@@ -175,12 +175,18 @@ function testImagePlanPromptRulesAndAspectRatio() {
     { topic: '测试主题', outline: '测试梗概' },
     '水彩画',
     6,
+    [{ type: 'video', start: 4, end: 9, title: 'existing b-roll' }],
   );
   assert.ok(prompt.includes('导演转译'));
   assert.ok(prompt.includes('严禁把 textBasis 或原文句子直接塞进 prompt'));
+  assert.ok(prompt.includes('Existing image/video media ranges'), 'image plan prompt should avoid existing media ranges');
+  assert.ok(prompt.includes('video|4.00-9.00|existing b-roll'), 'image plan prompt should include blocked video ranges');
   assert.strictEqual(reviewServerTools.imageSizeToMiniMaxAspectRatio('2:3'), '2:3');
   assert.strictEqual(reviewServerTools.imageSizeToMiniMaxAspectRatio('16:9'), '16:9');
   assert.strictEqual(reviewServerTools.imageSizeToOpenAiSize('9:16'), '1024x1536');
+  assert.strictEqual(reviewServerTools.imageSizeToAgnesSize('9:16'), '768x1024');
+  assert.strictEqual(reviewServerTools.imageSizeToAgnesSize('16:9'), '1024x768');
+  assert.strictEqual(reviewServerTools.autoImageCountForUnits([{ start: 0, end: 60 }, { start: 60, end: 120 }]), 6);
 }
 
 function testAgnesVideoPlanningAndOverlayWiring() {
@@ -190,10 +196,14 @@ function testAgnesVideoPlanningAndOverlayWiring() {
     '电影写实',
     2,
     '16:9',
+    [{ type: 'image', start: 12, end: 18, title: 'existing image' }],
   );
   assert.ok(prompt.includes('start/end'), 'video plan prompt should require exact timeline ranges');
   assert.ok(prompt.includes('videoPrompt'), 'video plan prompt should ask for a video generation prompt');
   assert.ok(prompt.includes('禁止直接复制原文句子'), 'video plan prompt should prevent direct transcript copy');
+
+  assert.ok(prompt.includes('Existing image/video media ranges'), 'video plan prompt should avoid existing media ranges');
+  assert.ok(prompt.includes('image|12.00-18.00|existing image'), 'video plan prompt should include blocked image ranges');
 
   const items = reviewServerTools.sanitizeVideoPlanItems({
     items: [{
@@ -219,6 +229,7 @@ function testLlmMarkingPromptIsConservative() {
   assert.ok(prompt.includes('不删除事实、数字'));
   assert.ok(prompt.includes('不要“见词就删”'));
   assert.ok(prompt.includes('mark_delete 不要超过本批文本单元的 12%'));
+  assert.ok(prompt.includes('0.88'), 'high-risk semantic deletes should require explicit high confidence');
 }
 
 function testJianyingDraftExport() {
@@ -252,6 +263,104 @@ function testJianyingDraftExport() {
   }
 }
 
+function testJianyingFullDraftSpec() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jaygo-jianying-full-spec-'));
+  try {
+    const videoPath = path.join(dir, 'source.mp4');
+    const imagePath = path.join(dir, 'image.png');
+    const videoAssetPath = path.join(dir, 'broll.mp4');
+    fs.writeFileSync(videoPath, 'fake-video');
+    fs.writeFileSync(imagePath, 'fake-image');
+    fs.writeFileSync(videoAssetPath, 'fake-broll');
+
+    const { spec, stats } = reviewServerTools.buildJianyingFullDraftSpec({
+      draftName: 'full_spec_test',
+      sourceVideoPath: videoPath,
+      sourceDurationSec: 6,
+      sourceVideoMeta: { width: 1280, height: 720, fps: 30 },
+      deleteSegments: [{ start: 1, end: 2 }],
+      cues: [
+        { start: 0, end: 1, text: 'first caption' },
+        { start: 1, end: 2, text: 'second caption' },
+      ],
+      mediaAssets: {
+        images: [
+          { id: 'img_1', start: 0.2, end: 5.2, durationSec: 5, status: 'done', image: { filePath: imagePath } },
+        ],
+        videos: [
+          { id: 'vid_1', start: 2.2, end: 5.2, durationSec: 3, status: 'done', video: { filePath: videoAssetPath } },
+        ],
+      },
+    });
+
+    assert.strictEqual(spec.name, 'full_spec_test');
+    assert.strictEqual(spec.width, 1280);
+    assert.strictEqual(spec.height, 720);
+    assert.strictEqual(stats.keepSegments, 2);
+    assert.strictEqual(stats.outputDurationSec, 5);
+
+    const mainTrack = spec.tracks.find((track) => track.name === 'Jaygo Cut 主视频');
+    assert.ok(mainTrack, 'full draft should include editable main video track');
+    assert.strictEqual(mainTrack.items.length, 2);
+    assert.strictEqual(mainTrack.items[0].sourceStart, 0);
+    assert.strictEqual(mainTrack.items[1].start, 1);
+    assert.strictEqual(mainTrack.items[1].sourceStart, 2);
+
+    const imageTrack = spec.tracks.find((track) => track.name === 'Jaygo Cut 图片素材');
+    assert.ok(imageTrack, 'full draft should include image material track');
+    assert.strictEqual(imageTrack.items[0].type, 'photo');
+    assert.strictEqual(imageTrack.items[0].start, 0.2);
+    assert.strictEqual(imageTrack.items[0].duration, 4);
+
+    const videoTrack = spec.tracks.find((track) => track.name === 'Jaygo Cut 视频素材');
+    assert.ok(videoTrack, 'full draft should include video material track');
+    assert.strictEqual(videoTrack.items[0].start, 1.2);
+    assert.strictEqual(videoTrack.items[0].volume, 0);
+
+    const textTrack = spec.tracks.find((track) => track.name === 'Jaygo Cut 字幕');
+    assert.ok(textTrack, 'full draft should include subtitle track');
+    assert.strictEqual(textTrack.items.length, 2);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function testJianyingDraftRootExportTarget() {
+  const cwd = process.cwd();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jaygo-jianying-root-export-'));
+  const draftRoot = path.join(dir, 'com.lveditor.draft');
+  fs.mkdirSync(draftRoot, { recursive: true });
+  fs.writeFileSync(path.join(draftRoot, 'root_meta_info.json'), JSON.stringify({ all_draft_store: [] }), 'utf8');
+  process.chdir(dir);
+  try {
+    const videoPath = path.join(dir, 'source.mp4');
+    fs.writeFileSync(videoPath, 'fake-video');
+    const result = reviewServerTools.writeJianyingFullDraft({
+      draftName: 'root_export_test',
+      exportMode: 'custom',
+      targetRoot: draftRoot,
+      sourceVideoPath: videoPath,
+      sourceDurationSec: 3,
+      sourceVideoMeta: { width: 1280, height: 720, fps: 30 },
+      deleteSegments: [{ start: 1, end: 1.2 }],
+      cues: [
+        { start: 0, end: 1, text: 'first caption' },
+        { start: 1.2, end: 2, text: 'second caption' },
+      ],
+    });
+    assert.strictEqual(result.autoPlaced, true);
+    assert.strictEqual(result.exportRootSource, 'custom');
+    assert.ok(result.draftDir.startsWith(draftRoot), 'draft should be written inside selected Jianying root');
+    assert.ok(fs.existsSync(path.join(result.draftDir, 'draft_content.json')), 'full draft should write draft_content.json');
+    assert.ok(fs.existsSync(path.join(draftRoot, 'root_meta_info.json')), 'draft root index should remain present');
+    const foundDrafts = reviewServerTools.listJianyingDrafts(draftRoot);
+    assert.ok(foundDrafts.some((draft) => draft.path === result.draftDir), 'exported draft should be discoverable from draft root');
+  } finally {
+    process.chdir(cwd);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 function testGeneratedReviewInlineScriptSyntax() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jaygo-review-html-'));
   const wordsPath = path.join(dir, 'subtitles_words.json');
@@ -277,14 +386,86 @@ function testGeneratedReviewInlineScriptSyntax() {
   assert.ok(html.includes('id="btnShortcutHelp"'), 'review page should expose a shortcut guide button');
   assert.ok(html.includes('id="btnPreviewDelete"'), 'review page should expose delete preview button');
   assert.ok(html.includes('id="btnToggleVideoPreview"'), 'review page should expose video preview toggle');
+  assert.ok(html.includes('always-on-toggles'), 'video preview and focus review should stay visible as compact primary toggles');
+  assert.ok(html.includes('aria-pressed'), 'compact primary toggles should expose pressed state');
+  assert.ok(html.includes('id="waveZoomPopover"'), 'wave zoom should live in a compact popover instead of a permanent toolbar row');
+  assert.ok(html.includes('.wave-wrap'), 'review page should include a waveform container');
+  assert.ok(html.includes('overflow: visible'), 'wave zoom popover should not be clipped by the waveform container');
+  assert.ok(html.includes('id="btnToggleLogPanel"'), 'cut logs should be opened from a right-side floating toggle');
+  assert.ok(html.includes('class="side-panel floating-side right log-side"'), 'cut logs should live in a floating side panel instead of taking text review space');
+  assert.ok(!html.includes('class="card logs-card"'), 'cut logs should not consume vertical space below the review text');
+  assert.ok(html.includes('id="reviewToolFold"'), 'review page should group low-frequency tools in a compact fold panel');
+  assert.ok(html.includes('class="toolbar-status-grid"'), 'review page should show compact status chips below primary actions');
+  assert.ok(html.includes('id="statDeletedCount"'), 'review page should expose deleted segment count as a status chip');
+  assert.ok(html.includes('max-height: min(235px, 32vh)'), 'expanded review tool panel should not consume too much first-screen space');
+  assert.ok(html.includes('scrollbar-gutter: stable'), 'expanded review tool panel should keep an internal stable scrollbar');
+  assert.ok(html.includes('.tool-fold button'), 'review tool panel buttons should use compact sizing');
+  assert.ok(html.includes('data-tool-tab="marking"'), 'review page should expose tool tabs for grouped controls');
+  assert.ok(html.includes('data-tool-panel="export"'), 'review page should isolate export controls in a tool panel');
+  assert.ok(html.includes('导出完整剪映草稿'), 'review page should export a full Jianying draft instead of subtitle-only wording');
+  assert.ok(html.includes('fullDraft: true'), 'review page should request full Jianying draft export');
+  assert.ok(html.includes('id="jianyingExportMode"'), 'review page should let users choose Jianying draft export mode');
+  assert.ok(html.includes('id="jianyingDraftRoot"'), 'review page should expose the detected Jianying draft root');
+  assert.ok(html.includes('id="btnDetectJianyingDraftRoot"'), 'review page should expose a Jianying draft root detection button');
+  assert.ok(html.includes('/api/jianying-draft-targets'), 'review page should auto-detect Jianying draft targets');
+  assert.ok(html.includes('exportMode,'), 'review page should send Jianying export mode to the server');
+  assert.ok(html.includes('targetRoot,'), 'review page should send selected Jianying draft root to the server');
+  assert.ok(html.includes('sourceVideoMeta'), 'review page should send source video dimensions for full draft export');
+  assert.ok(html.includes('setToolPanel'), 'review page should switch grouped tool panels without regenerating the page');
   assert.ok(html.includes('id="sourceVideo"'), 'review page should include source video preview element');
+  assert.ok(html.includes('id="compositePreviewOverlay"'), 'review page should preview generated media overlays on top of the video preview');
   assert.ok(html.includes('id="btnGenerateVideos"'), 'review page should expose Agnes video material generation');
   assert.ok(html.includes('id="imageMotionEffect"'), 'review page should expose image motion effect selector');
+  assert.ok(html.includes('id="btnMediaModeImage"'), 'insert media panel should expose an image tab');
+  assert.ok(html.includes('id="btnMediaModeVideo"'), 'insert media panel should expose a video tab');
+  assert.ok(html.includes('id="imageMediaPanel"'), 'insert media panel should isolate image controls in their own panel');
+  assert.ok(html.includes('id="videoMediaPanel"'), 'insert media panel should isolate video controls in their own panel');
+  assert.ok(html.includes('class="media-control-grid"'), 'insert media panel should use compact two-column control grids');
+  assert.ok(html.includes('class="media-field"'), 'insert media controls should keep labels and selects compact');
+  assert.ok(html.includes('setMediaMode'), 'insert media tabs should switch image/video panels');
+  assert.ok(html.includes('aspectRatioToCss'), 'media previews should sanitize ratio labels before assigning CSS aspect-ratio');
+  assert.ok(!html.includes('data-image-motion'), 'image cards should not add crowded per-image motion controls');
+  assert.ok(html.includes("motionEffect: type === 'image' ? currentImageMotionEffect() : 'none'"), 'motion effects should apply only to inserted image overlays');
+  assert.ok(html.includes('appendMediaDetails'), 'image/video prompts should be rendered through collapsed details blocks');
+  assert.ok(html.includes("className = 'media-details'"), 'media prompt details should be collapsed by default');
+  assert.ok(html.includes('.video-asset-card'), 'video material cards should have their own layout styling');
+  assert.ok(html.includes('width: clamp(440px, 27vw, 540px)'), 'insert media side panel should be wide enough for image and video controls');
+  assert.ok(html.includes('.image-side > .panel-header .panel-actions button'), 'insert media header buttons should use compact sizing');
+  assert.ok(html.includes('height: clamp(220px, 30vh, 320px)'), 'insert media previews should keep a comfortable visible height');
+  assert.ok(html.includes('overflow-y: scroll'), 'insert media side panel should keep a visible scrollbar area');
+  assert.ok(html.includes('media-dimension-badge'), 'insert media cards should show actual media dimensions after loading');
+  assert.ok(html.includes('media-card-meta-line'), 'insert media cards should show time range and media metadata');
+  assert.ok(html.includes('attachMediaDimensionBadge'), 'insert media previews should detect image/video dimensions');
+  assert.ok(html.includes('border: 1px solid color-mix(in oklab, var(--accent) 32%, var(--border))'), 'video material section should be visually separated from image cards');
+  assert.ok(html.includes('.composite-preview-overlay video'), 'video material preview should explicitly opt out of image motion transforms');
+  assert.ok(html.includes('lastVideoPreviewSeekAt'), 'video preview should throttle forced seeks for smoother playback');
+  assert.ok(html.includes('VIDEO_PREVIEW_PLAYING_SEEK_TOLERANCE'), 'video preview should avoid frequent hard seeks while playing');
+  assert.ok(html.includes('syncVideoPreviewRate'), 'video preview should softly chase audio by tiny playback-rate adjustments');
+  assert.ok(html.includes('overflow-y: visible'), 'insert media card lists should rely on the side panel scrollbar instead of nested scrollbars');
+  assert.ok(html.includes('scrollbar-width: thin'), 'insert media side panel should use a thinner scrollbar');
+  assert.ok(html.includes('id="localImageUploadInput"'), 'review page should allow importing local replacement images');
+  assert.ok(html.includes('data-image-upload'), 'image cards should expose local upload replacement actions');
+  assert.ok(html.includes('/api/import-image'), 'review page should call local image import API');
+  assert.ok(html.includes('id="toggleAutoFiller"'), 'review page should let users toggle filler-word auto marking');
+  assert.ok(html.includes('id="fillerWordAllowList"'), 'review page should let users choose which filler words are auto-marked');
+  assert.ok(html.includes('id="toggleAutoRepeat"'), 'review page should let users toggle repeated-phrase auto marking');
+  assert.ok(html.includes('<option value="auto" selected>'), 'image material quantity should default to automatic matching');
   assert.ok(html.includes('/api/llm-video-plan'), 'review page should request LLM video material plans');
   assert.ok(html.includes('/api/generate-video'), 'review page should call video generation API');
   assert.ok(html.includes('buildMediaOverlaysForCut'), 'review page should submit generated image/video overlays to cut API');
   assert.ok(html.includes('motionEffect'), 'review page should persist and submit selected image motion effects');
+  assert.ok(html.includes('data-image-duration'), 'review page should let users tune each image display duration');
+  assert.ok(html.includes('window.confirm'), 'review page should ask before compositing generated media into final cut');
+  assert.ok(html.includes('syncCompositePreviewOverlay'), 'review page should keep generated media preview synced with playback');
+  assert.ok(html.includes('syncCompositePreviewBounds'), 'composite preview should align to the rendered video bounds');
+  assert.ok(html.includes('getRenderedSourceVideoRect'), 'review page should calculate the real video content rect');
+  assert.ok(html.includes('applyNonOverlappingSchedule'), 'media plans should be locally adjusted to avoid overlapping ranges');
+  assert.ok(html.includes('existingRanges'), 'media plan requests should send existing ranges to the LLM');
   assert.ok(html.includes('mediaAssets'), 'review state should persist generated media assets');
+  assert.ok(html.includes('applyMediaActions'), 'LLM chat should be able to apply safe media planning actions');
+  assert.ok(html.includes('collectMediaRangesExcept'), 'LLM media adjustments should avoid overlapping existing image/video ranges');
+  assert.ok(html.includes("fetch('/api/llm-chat-adjust'"), 'review page should send LLM chat adjustment requests');
+  assert.ok(html.includes('mediaActions'), 'review page should consume media actions returned by LLM chat');
   assert.ok(html.includes('/source-video'), 'review page should load source video through a safe route');
   assert.ok(html.includes('syncVideoPreview'), 'review page should keep video preview synced with playback');
   assert.ok(html.includes('toolbar-card.video-preview-visible'), 'video preview should use the compact top-right toolbar layout');
@@ -293,6 +474,9 @@ function testGeneratedReviewInlineScriptSyntax() {
   assert.ok(html.includes("sourceVideoEl.addEventListener('volumechange'"), 'video preview should re-mute if the browser restores volume');
   assert.ok(!html.includes('id="sourceVideo" preload="metadata" src="/source-video" playsinline muted controls'), 'video preview should not expose native controls that can unmute audio');
   assert.ok(html.includes('function smoothSkipTo'), 'review playback should smooth automatic skip transitions');
+  assert.ok(html.includes('skipFadeRestoreVolume'), 'interrupted skip fade should restore audio volume');
+  assert.ok(html.includes('The source video is a visual preview only'), 'video preview should not drive review audio playback');
+  assert.ok(html.includes('media.volume = 0'), 'generated video overlay preview should be muted at volume zero');
   assert.ok(html.includes('smoothSkipTo(target)'), 'selected delete segment playback should not hard-seek abruptly');
   assert.ok(html.includes('id="btnShowDeleteDiagnostics"'), 'review page should expose delete diagnostics button');
   assert.ok(html.includes('id="cutPrecisionMode"'), 'review page should expose cut precision mode selector');
@@ -338,6 +522,8 @@ function testTermGlossaryParsingAndSettingsWiring() {
   assert.ok(main.includes('termGlossary'), 'main settings should persist term glossary');
   assert.ok(main.includes('AGNES_VIDEO_MODEL'), 'main settings should provide Agnes video model defaults');
   assert.ok(main.includes('VIDEO_API_BASE_URL'), 'runtime env should pass video generation config');
+  assert.ok(main.includes('JAYGO_ENV_FILE'), 'runtime env should pass the live user env file to review servers');
+  assert.ok(main.includes('REVIEW_TEMPLATE_VERSION'), 'main process should know when old review HTML needs regeneration');
   assert.ok(main.includes('TERM_GLOSSARY'), 'runtime env should pass term glossary to review generation');
   assert.ok(html.includes('id="termGlossary"'), 'settings page should expose term glossary textarea');
   assert.ok(html.includes('id="videoApiBaseUrl"'), 'settings page should expose video API base URL');
@@ -350,16 +536,34 @@ function testReviewServerProvidesSafeSourceVideoRoute() {
   const server = fs.readFileSync(path.join(__dirname, '..', 'talkcut', 'scripts', 'review_server.js'), 'utf8');
   assert.ok(server.includes("pathname === '/source-video'"), 'review server should expose source video through a dedicated route');
   assert.ok(server.includes('VIDEO_FILE') && server.includes('serveFile(req, res, VIDEO_FILE'), 'source video route should stream the bound task video only');
+  assert.ok(server.includes("pathname.startsWith('/image_assets/')"), 'review server should expose generated image assets safely');
   assert.ok(server.includes("pathname.startsWith('/video_assets/')"), 'review server should expose generated video assets safely');
+  assert.ok(server.includes("pathname === '/api/import-image'"), 'review server should support local image replacement uploads');
   assert.ok(server.includes("pathname === '/api/llm-video-plan'"), 'review server should expose video material planning endpoint');
   assert.ok(server.includes("pathname === '/api/generate-video'"), 'review server should expose video material generation endpoint');
   assert.ok(server.includes('buildAgnesVideoQueryEndpoint'), 'review server should use Agnes video_id polling endpoint');
+  assert.ok(server.includes('buildAgnesVideoStatusEndpoint'), 'review server should also support the documented /v1/videos/{id} polling endpoint');
+  assert.ok(server.includes('remixed_from_video_id'), 'review server should detect Agnes completed video URL fields');
+  assert.ok(server.includes('envValue(fileEnv'), 'review server should prefer the live env file over stale process env values');
+  assert.ok(server.includes('AGNES_VIDEO_MIN_REQUEST_INTERVAL_MS'), 'review server should throttle Agnes video polling under the RPM limit');
+  assert.ok(server.includes('videoDurationToGenerationParams'), 'review server should map planned video durations to stable Agnes frame counts');
+  assert.ok(server.includes("mode: 'ti2vid'"), 'Agnes video requests should explicitly use the Agnes text-to-video mode');
+  assert.ok(server.includes('formatMediaItemsForChat'), 'LLM chat prompt should include existing media cards');
+  assert.ok(server.includes('sanitizeMediaActions'), 'LLM chat media actions should be sanitized server-side');
+  assert.ok(server.includes('normalizeMediaActionType'), 'LLM chat should accept common media action aliases');
+  assert.ok(server.includes('kind#index'), 'LLM chat should expose media ordinals for requests like second image');
+  assert.ok(server.includes('media_actions'), 'LLM chat should support image/video media action plans');
+  assert.ok(server.includes('mediaAssets = {}'), 'LLM chat should accept current media state without breaking old review pages');
   assert.ok(server.includes('allowedMotionEffects'), 'review server should sanitize media overlay motion effects');
   const cutVideo = fs.readFileSync(path.join(__dirname, '..', 'talkcut', 'scripts', 'cut_video.js'), 'utf8');
   assert.ok(cutVideo.includes('loadMediaOverlays'), 'cut script should read media overlay plans');
   assert.ok(cutVideo.includes('runFfmpegOverlay'), 'cut script should apply generated media overlays');
   assert.ok(cutVideo.includes('buildOverlayVisualFilter'), 'cut script should apply image motion effects during overlay');
   assert.ok(cutVideo.includes('zoom-in'), 'cut script should support zoom-in image motion');
+  assert.ok(cutVideo.includes('detectSourceFrameRate'), 'cut script should preserve the source frame rate by default');
+  assert.ok(cutVideo.includes('snapSegmentsToFrameGrid'), 'cut script should snap splice points to the output frame grid');
+  assert.ok(cutVideo.includes('fps=${outputFpsFilter}'), 'cut script should render final output at the detected/export frame rate');
+  assert.ok(cutVideo.includes('formatFpsForFilter(frameRate)'), 'image overlay motion should follow the current output frame rate');
 }
 
 function testTextFilesStayUtf8Readable() {
@@ -376,7 +580,7 @@ function testTextFilesStayUtf8Readable() {
     assert.ok(!/[鏇鐨涓绔搴]/.test(text), `${rel} should not contain common mojibake characters`);
   }
   const releaseNotes = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'release-notes.json'), 'utf8').replace(/^\uFEFF/, ''));
-  assert.ok(releaseNotes.notes.includes('插入素材'), 'release notes should stay readable Chinese UTF-8');
+  assert.ok(releaseNotes.notes.includes('剪映草稿'), 'release notes should stay readable Chinese UTF-8');
 }
 
 function testReviewStateBackupWriter() {
@@ -475,6 +679,8 @@ testImagePlanPromptRulesAndAspectRatio();
 testAgnesVideoPlanningAndOverlayWiring();
 testLlmMarkingPromptIsConservative();
 testJianyingDraftExport();
+testJianyingFullDraftSpec();
+testJianyingDraftRootExportTarget();
 testCutPrecisionModeAdjustsOnlySubmittedSegments();
 testDeleteSegmentDiagnosticsFindsRisks();
 testGeneratedReviewInlineScriptSyntax();

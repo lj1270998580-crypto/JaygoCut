@@ -4,7 +4,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { spawn, execSync } = require('child_process');
+const { spawn, spawnSync, execSync } = require('child_process');
 const { normalizeSelectedIndices } = require('./auto_selected_utils');
 const { normalizeBoundarySettings } = require('./review_segment_utils');
 
@@ -12,7 +12,9 @@ const PORT = Number(process.argv[2]) || 8899;
 const VIDEO_FILE = process.argv[3] || findVideoFile(process.cwd());
 const OUTPUT_ROOT_ARG = String(process.argv[4] || '').trim();
 const FFPROBE_BIN = process.env.FFPROBE_BIN || 'ffprobe';
-const LLM_MIN_CONFIDENCE = 0.66;
+const LLM_MIN_CONFIDENCE = 0.72;
+const LLM_SEMANTIC_MIN_CONFIDENCE = 0.78;
+const LLM_MAX_DELETE_RATIO = 0.10;
 const LLM_PROVIDER_KEYS = new Set([
   'openai',
   'anthropic',
@@ -42,6 +44,7 @@ const MIME_TYPES = {
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.webp': 'image/webp',
+  '.gif': 'image/gif',
   '.svg': 'image/svg+xml; charset=utf-8',
   '.mp3': 'audio/mpeg',
   '.m4a': 'audio/mp4',
@@ -55,7 +58,10 @@ const VIDEO_ASSET_DIR = path.resolve(process.cwd(), 'video_assets');
 const AGNES_API_BASE_URL = 'https://apihub.agnes-ai.com/v1';
 const AGNES_IMAGE_MODEL = 'agnes-image-2.1-flash';
 const AGNES_VIDEO_MODEL = 'agnes-video-v2.0';
+const AGNES_VIDEO_MIN_REQUEST_INTERVAL_MS = 3100;
 const JIANYING_DRAFT_EXPORT_DIR_NAME = 'jianying_drafts';
+
+let lastAgnesVideoRequestAt = 0;
 
 let currentCutJob = {
   jobId: null,
@@ -117,6 +123,16 @@ function loadEnvFileConfig() {
   }
 
   return { env: {}, envFile: '' };
+}
+
+function envValue(fileEnv, name, fallback = '') {
+  if (fileEnv && Object.prototype.hasOwnProperty.call(fileEnv, name)) {
+    return fileEnv[name];
+  }
+  if (Object.prototype.hasOwnProperty.call(process.env, name)) {
+    return process.env[name];
+  }
+  return fallback;
 }
 
 function getRuntimeInfo() {
@@ -197,21 +213,17 @@ function parseLlmTemperature(value) {
 function getLlmConfig() {
   const { env: fileEnv } = loadEnvFileConfig();
   const provider = normalizeLlmProviderKey(
-    process.env.LLM_PROVIDER
-    || fileEnv.LLM_PROVIDER
-    || 'openai',
+    envValue(fileEnv, 'LLM_PROVIDER', 'openai'),
   );
   const defaultBaseUrl = provider === 'anthropic'
     ? 'https://api.anthropic.com'
     : 'https://api.openai.com/v1';
   const baseUrl = normalizeLlmBaseUrl(
-    process.env.LLM_API_BASE_URL
-    || fileEnv.LLM_API_BASE_URL
-    || defaultBaseUrl,
+    envValue(fileEnv, 'LLM_API_BASE_URL', defaultBaseUrl),
   );
-  const apiKey = String(process.env.LLM_API_KEY || fileEnv.LLM_API_KEY || '').trim();
-  const model = String(process.env.LLM_MODEL || fileEnv.LLM_MODEL || '').trim();
-  const temperature = parseLlmTemperature(process.env.LLM_TEMPERATURE || fileEnv.LLM_TEMPERATURE || '0.2');
+  const apiKey = String(envValue(fileEnv, 'LLM_API_KEY', '') || '').trim();
+  const model = String(envValue(fileEnv, 'LLM_MODEL', '') || '').trim();
+  const temperature = parseLlmTemperature(envValue(fileEnv, 'LLM_TEMPERATURE', '0.2'));
 
   const missing = [];
   if (!baseUrl) missing.push('LLM_API_BASE_URL');
@@ -273,28 +285,36 @@ function imageSizeToOpenAiSize(size) {
   return '1024x1024';
 }
 
+function imageSizeToAgnesSize(size) {
+  const raw = String(size || '').trim().toLowerCase();
+  if (/^\d{3,4}x\d{3,4}$/.test(raw)) {
+    const [w, h] = raw.split('x').map((v) => Number(v));
+    if (w === h) return '1024x1024';
+    return w > h ? '1024x768' : '768x1024';
+  }
+  if (raw === '16:9' || raw === '4:3') return '1024x768';
+  if (raw === '9:16' || raw === '2:3' || raw === '3:4') return '768x1024';
+  return '1024x1024';
+}
+
 function getImageConfig() {
   const { env: fileEnv } = loadEnvFileConfig();
   const llm = getLlmConfig();
   const rawBaseUrl = normalizeLlmBaseUrl(
-    process.env.IMAGE_API_BASE_URL
-    || fileEnv.IMAGE_API_BASE_URL
-    || AGNES_API_BASE_URL,
+    envValue(fileEnv, 'IMAGE_API_BASE_URL', AGNES_API_BASE_URL),
   );
   const endpoint = buildImageEndpoint(rawBaseUrl);
   const minimax = isMiniMaxImageEndpoint(endpoint);
+  const canReuseLlmKey = !/agnes/i.test(rawBaseUrl) || /agnes/i.test(llm.baseUrl);
   const apiKey = String(
-    process.env.IMAGE_API_KEY
-    || fileEnv.IMAGE_API_KEY
-    || llm.apiKey
+    envValue(fileEnv, 'IMAGE_API_KEY', '')
+    || (canReuseLlmKey ? llm.apiKey : '')
     || '',
   ).trim();
   const model = String(
-    process.env.IMAGE_MODEL
-    || fileEnv.IMAGE_MODEL
-    || (minimax ? 'image-01' : AGNES_IMAGE_MODEL),
+    envValue(fileEnv, 'IMAGE_MODEL', minimax ? 'image-01' : AGNES_IMAGE_MODEL),
   ).trim();
-  const size = normalizeImageSize(process.env.IMAGE_SIZE || fileEnv.IMAGE_SIZE || '1024x1024');
+  const size = normalizeImageSize(envValue(fileEnv, 'IMAGE_SIZE', '1024x1024'));
   const missing = [];
   if (!rawBaseUrl) missing.push('IMAGE_API_BASE_URL');
   if (!apiKey) missing.push('IMAGE_API_KEY');
@@ -330,11 +350,38 @@ function buildAgnesVideoQueryEndpoint(baseUrl, videoId) {
   return `${origin}/agnesapi?video_id=${encodeURIComponent(videoId)}`;
 }
 
+function buildAgnesVideoStatusEndpoint(baseUrl, videoId) {
+  const clean = String(baseUrl || AGNES_API_BASE_URL).trim().replace(/\/+$/, '');
+  const base = /\/v1$/i.test(clean) ? clean : `${clean}/v1`;
+  return `${base}/videos/${encodeURIComponent(videoId)}`;
+}
+
+function buildAgnesVideoQueryEndpoints(baseUrl, videoId) {
+  return [
+    buildAgnesVideoStatusEndpoint(baseUrl, videoId),
+    buildAgnesVideoQueryEndpoint(baseUrl, videoId),
+  ];
+}
+
 function normalizeVideoFrameCount(value, fallback = 121) {
   const allowed = [81, 121, 161, 241, 441];
   const n = Number(value);
   if (allowed.includes(n)) return n;
   return fallback;
+}
+
+function clampDurationSec(value, min, max, fallback) {
+  const parsed = Number(value);
+  const next = Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  return Math.max(min, Math.min(max, next));
+}
+
+function videoDurationToGenerationParams(durationSec) {
+  const target = clampDurationSec(durationSec, 3, 8, 5);
+  if (target <= 3.9) return { numFrames: 81, frameRate: 24, generationDurationSec: 81 / 24 };
+  if (target <= 5.6) return { numFrames: 121, frameRate: 24, generationDurationSec: 121 / 24 };
+  if (target <= 7.2) return { numFrames: 161, frameRate: 24, generationDurationSec: 161 / 24 };
+  return { numFrames: 241, frameRate: 30, generationDurationSec: 241 / 30 };
 }
 
 function aspectToVideoSize(aspect) {
@@ -347,25 +394,21 @@ function aspectToVideoSize(aspect) {
 function getVideoConfig() {
   const { env: fileEnv } = loadEnvFileConfig();
   const llm = getLlmConfig();
+  const imageBaseUrl = envValue(fileEnv, 'IMAGE_API_BASE_URL', '');
   const rawBaseUrl = normalizeLlmBaseUrl(
-    process.env.VIDEO_API_BASE_URL
-    || fileEnv.VIDEO_API_BASE_URL
-    || process.env.IMAGE_API_BASE_URL
-    || fileEnv.IMAGE_API_BASE_URL
+    envValue(fileEnv, 'VIDEO_API_BASE_URL', '')
+    || imageBaseUrl
     || AGNES_API_BASE_URL,
   );
+  const canReuseLlmKey = !/agnes/i.test(rawBaseUrl) || /agnes/i.test(llm.baseUrl);
   const apiKey = String(
-    process.env.VIDEO_API_KEY
-    || fileEnv.VIDEO_API_KEY
-    || process.env.IMAGE_API_KEY
-    || fileEnv.IMAGE_API_KEY
-    || llm.apiKey
+    envValue(fileEnv, 'VIDEO_API_KEY', '')
+    || envValue(fileEnv, 'IMAGE_API_KEY', '')
+    || (canReuseLlmKey ? llm.apiKey : '')
     || '',
   ).trim();
   const model = String(
-    process.env.VIDEO_MODEL
-    || fileEnv.VIDEO_MODEL
-    || AGNES_VIDEO_MODEL,
+    envValue(fileEnv, 'VIDEO_MODEL', AGNES_VIDEO_MODEL),
   ).trim();
   const endpoint = buildVideoEndpoint(rawBaseUrl);
   const missing = [];
@@ -582,11 +625,38 @@ function pickUnitsForChatAdjust(units, selectedUnitIds, userMessage, maxUnits = 
     .map((i) => units[i]);
 }
 
-function buildChatAdjustPrompt(units, selectedUnitIds, userMessage, history, analysis) {
+
+function formatMediaItemsForChat(mediaAssets) {
+  const images = Array.isArray(mediaAssets?.images) ? mediaAssets.images : [];
+  const videos = Array.isArray(mediaAssets?.videos) ? mediaAssets.videos : [];
+  const rows = [];
+  const append = (kind, item, index) => {
+    if (!item) return;
+    const id = String(item.id || (kind + '_' + (index + 1))).replace(/[^\w-]/g, '_').slice(0, 48);
+    const start = Number.isFinite(Number(item.start)) ? Number(item.start) : 0;
+    const end = Number.isFinite(Number(item.end)) ? Number(item.end) : start + (kind === 'video' ? 5 : 7);
+    const promptText = kind === 'video' ? (item.videoPrompt || item.prompt || '') : (item.prompt || '');
+    rows.push([
+      kind + '#' + (index + 1),
+      id,
+      start.toFixed(2) + '-' + end.toFixed(2),
+      String(item.status || 'queued').slice(0, 20),
+      String(item.title || '').replace(/\s+/g, ' ').slice(0, 80),
+      String(item.purpose || '').replace(/\s+/g, ' ').slice(0, 100),
+      String(promptText || '').replace(/\s+/g, ' ').slice(0, 260),
+    ].join('|'));
+  };
+  images.slice(0, 40).forEach((item, index) => append('image', item, index));
+  videos.slice(0, 40).forEach((item, index) => append('video', item, index));
+  return rows.length ? rows.join('\n') : 'none';
+}
+
+function buildChatAdjustPrompt(units, selectedUnitIds, userMessage, history, analysis, mediaAssets = {}) {
   const scopedUnits = pickUnitsForChatAdjust(units, selectedUnitIds, userMessage);
   const list = scopedUnits
     .map((u) => `${u.id}|${u.start.toFixed(2)}-${u.end.toFixed(2)}|${u.text}`)
     .join('\n');
+  const mediaList = formatMediaItemsForChat(mediaAssets);
   const selectedText = selectedUnitIds.slice(0, 240).join(',');
   const hist = Array.isArray(history)
     ? history.slice(-10).map((it) => `${it.role || 'user'}: ${String(it.text || '').slice(0, 180)}`).join('\n')
@@ -604,8 +674,20 @@ function buildChatAdjustPrompt(units, selectedUnitIds, userMessage, history, ana
     `用户要求: ${String(userMessage || '').trim()}`,
     hist ? `最近对话:\n${hist}` : '最近对话: 无',
     '',
+    '',
+    'Media adjustment rules:',
+    'You may also adjust planned images/videos when the user asks about illustration, picture, image, video, B-roll, material, timing, duration, prompt, retry, or regeneration.',
+    'Return media_actions only as a plan. Do not claim files are generated. Do not call external tools.',
+    'Allowed action types: add_image, update_image, move_image, delete_image, regenerate_image, add_video, update_video, move_video, delete_video, regenerate_video.',
+    'Image duration must be 5-10 seconds. Video duration must be 3-8 seconds. Avoid overlapping media ranges whenever possible.',
+    'For add/update/regenerate, write concrete visual prompts with scene, subject, action, setting, mood, lens, and style. Do not merely repeat transcript text.',
+    'If changing an existing card, use its exact id. If adding a new card, provide a new readable id.',
+    'If the user says "第2张图", "第二张图片", "第1段视频", or similar ordinal wording, map it to the Existing media items ordinal and return either the exact id or index.',
+    '',
+    `Existing media items (kind#index|id|start-end|status|title|purpose|prompt):\n${mediaList}`,
+    '',
     '输出 JSON（只返回 JSON）：',
-    '{"add_ids":[12,13],"remove_ids":[2,3],"reason":"中文，不超过60字","summary":"中文，不超过80字","scope":"开头|中段|结尾|全片"}',
+    '{"add_ids":[12,13],"remove_ids":[2,3],"media_actions":[{"type":"update_image","id":"img_01","start":12.5,"durationSec":7,"title":"scene title","purpose":"why this visual helps","prompt":"concrete visual prompt","negativePrompt":"optional","regenerate":true}],"reason":"Chinese, <=60 chars","summary":"Chinese, <=80 chars","scope":"head|middle|tail|full"}',
     '',
     `文本单元（本次可用 ${scopedUnits.length} 条，id|start-end|text）：`,
     list,
@@ -619,8 +701,17 @@ function buildLlmPrompt(chunkUnits, context = {}) {
   const outline = String(context.outline || '').trim();
   const multiSpeaker = context.multiSpeaker ? 'true' : 'false';
   const mainSpeakerHint = String(context.mainSpeakerHint || '').trim();
+  const precisionRules = [
+    '???????????????????????????????????????',
+    '??????????????????????????????/??/??/?????????????????????',
+    '???????????????????????????????????????????????????????????????????????',
+    '??????????????????????????????????????????',
+    '??/???????????????????????????????',
+    '???????????????????????? confidence >= 0.88?',
+  ];
 
   return [
+    ...precisionRules,
     '你是资深口播短视频剪辑师，目标是提升节奏和信息密度，但绝不能破坏观点完整性。',
     '你必须先理解主题和结构，再决定是否标记删除。删除是高风险操作：宁可少删，也不要误删。',
     '',
@@ -898,6 +989,33 @@ function parseLlmDeleteItems(parsed, validIds) {
     });
   }
   return out;
+}
+
+function requiredConfidenceForDelete(item) {
+  const type = normalizeReasonType(item?.reasonType || item?.reason_type || item?.type);
+  if (type === 'filler' || type === 'repeat') return LLM_MIN_CONFIDENCE;
+  return LLM_SEMANTIC_MIN_CONFIDENCE;
+}
+
+function isProtectedSemanticText(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return false;
+  if (isInfoDenseTextForFallback(raw)) return true;
+  if (raw.length >= 42) return true;
+  return /(因为|所以|但是|不过|如果|只要|除非|结果|结论|核心|重点|原因|证明|意味着|反而|其实不是|真正|必须|不要|应该|可以|不能|不是|没有)/.test(raw);
+}
+
+function shouldKeepLlmDeleteCandidate(unit, item) {
+  if (!unit || !item) return false;
+  const confidence = Number(item.confidence) || 0;
+  const type = normalizeReasonType(item.reasonType);
+  if (confidence < requiredConfidenceForDelete(item)) return false;
+  if (isProtectedSemanticText(unit.text) && confidence < 0.88) return false;
+  const duration = Math.max(0, Number(unit.end) - Number(unit.start));
+  if (duration >= 7 && !['off_topic', 'opening_offtopic', 'ending_offtopic', 'other_speaker'].includes(type) && confidence < 0.9) {
+    return false;
+  }
+  return true;
 }
 
 function parseLlmDeleteItemsFromText(rawText, validIds) {
@@ -1289,13 +1407,29 @@ function pickWordsForVisualPlan(words, selectedIndices = []) {
   });
 }
 
-function buildImagePlanPrompt(units, analysis, style, count) {
+function formatExistingRangesForPrompt(existingRanges) {
+  const ranges = Array.isArray(existingRanges) ? existingRanges : [];
+  const list = ranges
+    .map((range) => ({
+      type: String(range?.type || 'media').slice(0, 16),
+      start: Number(range?.start),
+      end: Number(range?.end),
+      title: trimByChars(String(range?.title || '').replace(/\s+/g, ' '), 30),
+    }))
+    .filter((range) => Number.isFinite(range.start) && Number.isFinite(range.end) && range.end > range.start)
+    .slice(0, 30)
+    .map((range) => `${range.type}|${range.start.toFixed(2)}-${range.end.toFixed(2)}|${range.title}`);
+  return list.length ? list.join('\n') : 'none';
+}
+
+function buildImagePlanPrompt(units, analysis, style, count, existingRanges = []) {
   const list = units
     .slice(0, 260)
     .map((u) => `${u.id}|${u.start.toFixed(2)}-${u.end.toFixed(2)}|${u.text}`)
     .join('\n');
   const targetCount = Math.max(4, Math.min(12, Number(count) || 8));
   const visualStyle = String(style || '').trim() || '彩铅故事插画，温暖纸张纹理，统一人物设定';
+  const blockedRangesText = formatExistingRangesForPrompt(existingRanges);
   return [
     '你是短视频口播内容的导演、分镜师和 AI 图片提示词专家。',
     '任务：把口播文本翻译成一组能插入视频的配图分镜。你不是摘抄字幕的人，而是把抽象观点导演成具体画面的人。',
@@ -1306,7 +1440,7 @@ function buildImagePlanPrompt(units, analysis, style, count) {
     'D. 最后自检：每个 prompt 必须包含人物/主体、地点、动作、道具或环境、情绪、镜头构图、光线/色彩、统一画风。',
     '硬性要求：',
     `1. 生成 ${targetCount} 个配图点，配图点要服务视频理解和节奏，不要只因为某句话出现就配图。`,
-    '2. 每个配图点必须对应文本中的时间范围，不能脱离原文编造事实。',
+    '2. 每个配图点必须对应文本中的时间范围，不能脱离原文编造事实；展示时长必须控制在 5-10 秒之间，优先 6-8 秒。',
     '3. 先判断故事发生的文化语境：中国人物/中国社会/中文生活场景用中国人物与中国空间；海外案例/欧美历史匹配对应地域的人物、建筑、服饰和光线。',
     '4. 如果文本有具体人物，建立统一主角设定；如果没有，建立统一的叙事代表，例如同一位创作者、职场人、学习者或观察者。',
     '5. 画风必须严格统一，用户选择的画风优先级最高；每张图只能换镜头、动作、空间细节，不能混风格。',
@@ -1318,8 +1452,10 @@ function buildImagePlanPrompt(units, analysis, style, count) {
     `视觉风格：${visualStyle}`,
     `主题参考：${String(analysis?.topic || '').trim() || '未知'}`,
     `梗概参考：${String(analysis?.outline || '').trim() || '未知'}`,
+    'Existing image/video media ranges. Avoid all listed ranges and never overlap with them. If value is none, ignore:',
+    blockedRangesText,
     '输出 JSON（只返回 JSON，不要 markdown）：',
-    '{"topic":"...","style":"用户选择画风，必须贯穿所有图","visualBible":{"culturalContext":"中国/欧美/日本/其他/抽象","mainCharacter":"统一主角设定，年龄、发型、脸型、气质","outfit":"统一服饰和道具","sceneWorld":"统一时代、地点、空间基调","colorAndStyle":"统一色彩、笔触、构图风格，必须包含用户选择画风"},"items":[{"id":"img_01","timeRange":"00:10-00:25","start":10.0,"end":25.0,"title":"这一张图解决什么表达问题","purpose":"封面/观点说明/B-roll/转场/结尾","textBasis":"对应原文依据，不超过40字","directorIntent":"导演意图：为什么这里需要配图","sceneStory":"具体画面故事：人物、地点、动作、情绪、道具、前景背景","camera":"景别/角度/构图","visual":"画面描述，不超过120字","prompt":"完整图片生成提示词：画面场景 + 统一风格 + 镜头，不得复述原文","negativePrompt":"负面提示词","keywords":["..."]}]}',
+    '{"topic":"...","style":"用户选择画风，必须贯穿所有图","visualBible":{"culturalContext":"中国/欧美/日本/其他/抽象","mainCharacter":"统一主角设定，年龄、发型、脸型、气质","outfit":"统一服饰和道具","sceneWorld":"统一时代、地点、空间基调","colorAndStyle":"统一色彩、笔触、构图风格，必须包含用户选择画风"},"items":[{"id":"img_01","timeRange":"00:10-00:17","start":10.0,"end":17.0,"durationSec":7,"title":"这一张图解决什么表达问题","purpose":"封面/观点说明/B-roll/转场/结尾","textBasis":"对应原文依据，不超过40字","directorIntent":"导演意图：为什么这里需要配图","sceneStory":"具体画面故事：人物、地点、动作、情绪、道具、前景背景","camera":"景别/角度/构图","visual":"画面描述，不超过120字","prompt":"完整图片生成提示词：画面场景 + 统一风格 + 镜头，不得复述原文","negativePrompt":"负面提示词","keywords":["..."]}]}',
     '文本单元（id|start-end|text）：',
     list,
   ].join('\n');
@@ -1429,8 +1565,10 @@ function sanitizeImagePlanItems(parsed, units, count, analysis, fallbackStyle) {
   for (let i = 0; i < rawItems.length; i += 1) {
     const item = rawItems[i] || {};
     const fallbackUnit = units[Math.min(units.length - 1, Math.floor((i / Math.max(1, targetCount - 1)) * Math.max(0, units.length - 1)))] || {};
-    const start = Number.isFinite(Number(item.start)) ? Number(item.start) : Number(fallbackUnit.start || 0);
-    const end = Number.isFinite(Number(item.end)) ? Number(item.end) : Number(fallbackUnit.end || start + 8);
+    const start = Math.max(0, Number.isFinite(Number(item.start)) ? Number(item.start) : Number(fallbackUnit.start || 0));
+    const rawEnd = Number.isFinite(Number(item.end)) ? Number(item.end) : Number(fallbackUnit.end || start + 7);
+    const durationSec = clampDurationSec(item.durationSec || item.duration || (rawEnd - start), 5, 10, 7);
+    const end = start + durationSec;
     const id = String(item.id || `img_${String(out.length + 1).padStart(2, '0')}`).replace(/[^\w-]/g, '_').slice(0, 32);
     const title = trimByChars(String(item.title || item.name || `配图 ${out.length + 1}`).replace(/\s+/g, ' '), 40);
     const textBasis = trimByChars(String(item.textBasis || item.basis || fallbackUnit.text || '').replace(/\s+/g, ' '), 80);
@@ -1466,9 +1604,10 @@ function sanitizeImagePlanItems(parsed, units, count, analysis, fallbackStyle) {
     if (!prompt) continue;
     out.push({
       id,
-      timeRange: String(item.timeRange || item.range || formatSecondsRange(start, end)).slice(0, 32),
-      start: Math.max(0, start),
-      end: Math.max(start, end),
+      timeRange: formatSecondsRange(start, end),
+      start,
+      end,
+      durationSec,
       title,
       directorIntent: trimByChars(String(item.directorIntent || item.intent || item.reason || '').replace(/\s+/g, ' '), 80),
       purpose: trimByChars(String(item.purpose || '视频配图').replace(/\s+/g, ' '), 30),
@@ -1483,6 +1622,18 @@ function sanitizeImagePlanItems(parsed, units, count, analysis, fallbackStyle) {
     if (out.length >= targetCount) break;
   }
   return out;
+}
+
+function autoImageCountForUnits(units) {
+  if (!Array.isArray(units) || !units.length) return 6;
+  const start = Math.min(...units.map((u) => Number(u.start)).filter(Number.isFinite));
+  const end = Math.max(...units.map((u) => Number(u.end)).filter(Number.isFinite));
+  const duration = Number.isFinite(start) && Number.isFinite(end) && end > start ? end - start : units.length * 3;
+  if (duration <= 90) return 4;
+  if (duration <= 180) return 6;
+  if (duration <= 360) return 8;
+  if (duration <= 720) return 10;
+  return 12;
 }
 
 function buildFallbackImagePlan(units, analysis, count, style = '') {
@@ -1509,9 +1660,10 @@ function buildFallbackImagePlan(units, analysis, count, style = '') {
     ].join('，');
     items.push({
       id: `img_${String(i + 1).padStart(2, '0')}`,
-      timeRange: formatSecondsRange(unit.start, unit.end),
+      timeRange: formatSecondsRange(unit.start, unit.start + 7),
       start: unit.start,
-      end: unit.end,
+      end: unit.start + 7,
+      durationSec: 7,
       title,
       purpose: i === 0 ? '开头铺垫' : (i === targetCount - 1 ? '结尾总结' : '观点说明'),
       textBasis: trimByChars(unit.text, 80),
@@ -1526,29 +1678,32 @@ function buildFallbackImagePlan(units, analysis, count, style = '') {
   return items;
 }
 
-function buildVideoPlanPrompt(units, analysis, style, count, aspectRatio) {
+function buildVideoPlanPrompt(units, analysis, style, count, aspectRatio, existingRanges = []) {
   const list = units
     .slice(0, 220)
     .map((u) => `${u.id}|${u.start.toFixed(2)}-${u.end.toFixed(2)}|${u.text}`)
     .join('\n');
   const targetCount = Math.max(1, Math.min(4, Number(count) || 3));
   const visualStyle = String(style || '').trim() || 'cinematic realistic B-roll, consistent character and scene';
+  const blockedRangesText = formatExistingRangesForPrompt(existingRanges);
   return [
     '你是短视频口播内容的导演、分镜师和 AI 视频提示词专家。',
     '任务：阅读主视频转录文本，规划可插入主视频的短视频素材点。素材用于覆盖式 B-roll，不改变主视频音频。',
     '请先理解主题、人物、文化语境、情绪和叙事结构，再选择真正需要画面辅助的节点。',
     '选择原则：优先开头钩子、观点冲突、案例画面、人物行动、情绪转折、结尾记忆点；不要机械平均切分。',
-    '每个视频素材点必须有明确 start/end，代表它覆盖主视频画面的字幕时间范围。范围建议 3-8 秒，必须来自文本时间轴。',
+    '每个视频素材点必须有明确 start/end，代表它覆盖主视频画面的字幕时间范围。范围必须控制在 3-8 秒，优先 4-6 秒，由你根据语义节奏判断。',
     'videoPrompt 必须是可拍摄/可生成的视频画面描述：人物或主体、地点、动作、镜头运动、光线、风格、情绪、环境细节；禁止直接复制原文句子。',
     '如文本是中国语境，用中国人物、服饰、空间和生活场景；如是海外故事，要匹配对应国家/时代/建筑/服饰。',
     '输出只允许 JSON，不要 markdown。',
     `生成 ${targetCount} 个视频素材点。`,
     `用户选择风格：${visualStyle}`,
     `目标比例：${aspectRatio || '16:9'}`,
+    'Existing image/video media ranges. Avoid all listed ranges and never overlap with them. If value is none, ignore:',
+    blockedRangesText,
     `主题参考：${String(analysis?.topic || '').trim() || '未知'}`,
     `梗概参考：${String(analysis?.outline || '').trim() || '未知'}`,
     'JSON 格式：',
-    '{"topic":"...","items":[{"id":"vid_01","start":10.0,"end":15.0,"timeRange":"00:10-00:15","title":"...","purpose":"开头钩子/B-roll/案例画面/转场/结尾","textBasis":"对应原文依据，不超过40字","directorIntent":"为什么这里需要视频素材","sceneStory":"具体画面故事","camera":"镜头运动和构图","videoPrompt":"完整视频生成提示词","negativePrompt":"负面提示词"}]}',
+    '{"topic":"...","items":[{"id":"vid_01","start":10.0,"end":15.0,"durationSec":5,"timeRange":"00:10-00:15","title":"...","purpose":"开头钩子/B-roll/案例画面/转场/结尾","textBasis":"对应原文依据，不超过40字","directorIntent":"为什么这里需要视频素材","sceneStory":"具体画面故事","camera":"镜头运动和构图","videoPrompt":"完整视频生成提示词","negativePrompt":"负面提示词"}]}',
     '文本单元（id|start-end|text）：',
     list,
   ].join('\n');
@@ -1570,9 +1725,11 @@ function sanitizeVideoPlanItems(parsed, units, count, analysis, fallbackStyle, a
     const item = rawItems[i] || {};
     const fallbackUnit = units[Math.min(units.length - 1, Math.floor((i / Math.max(1, targetCount - 1)) * Math.max(0, units.length - 1)))] || {};
     const rawStart = Number.isFinite(Number(item.start)) ? Number(item.start) : Number(fallbackUnit.start || 0);
-    const rawEnd = Number.isFinite(Number(item.end)) ? Number(item.end) : Number(fallbackUnit.end || rawStart + 5);
     const start = Math.max(0, rawStart);
-    const end = Math.max(start + 1.5, rawEnd);
+    const rawEnd = Number.isFinite(Number(item.end)) ? Number(item.end) : Number(fallbackUnit.end || start + 5);
+    const durationSec = clampDurationSec(item.durationSec || item.duration || (rawEnd - start), 3, 8, 5);
+    const end = start + durationSec;
+    const generation = videoDurationToGenerationParams(durationSec);
     const id = String(item.id || `vid_${String(out.length + 1).padStart(2, '0')}`).replace(/[^\w-]/g, '_').slice(0, 32);
     const title = trimByChars(String(item.title || item.name || `视频素材 ${out.length + 1}`).replace(/\s+/g, ' '), 40);
     const purpose = trimByChars(String(item.purpose || 'B-roll').replace(/\s+/g, ' '), 32);
@@ -1598,10 +1755,14 @@ function sanitizeVideoPlanItems(parsed, units, count, analysis, fallbackStyle, a
     out.push({
       id,
       type: 'video',
-      timeRange: String(item.timeRange || item.range || formatSecondsRange(start, end)).slice(0, 32),
+      timeRange: formatSecondsRange(start, end),
       start,
       end,
       aspectRatio: aspectRatio || '16:9',
+      durationSec,
+      numFrames: generation.numFrames,
+      frameRate: generation.frameRate,
+      generationDurationSec: Number(generation.generationDurationSec.toFixed(2)),
       title,
       purpose,
       textBasis,
@@ -1620,12 +1781,18 @@ function sanitizeVideoPlanItems(parsed, units, count, analysis, fallbackStyle, a
 function buildFallbackVideoPlan(units, analysis, count, style = '', aspectRatio = '16:9') {
   const imageLike = buildFallbackImagePlan(units, analysis, Math.max(4, Number(count) || 3), style).slice(0, Math.max(1, Math.min(4, Number(count) || 3)));
   return imageLike.map((item, index) => {
-    const end = Math.max(Number(item.start) + 3, Number(item.end) || Number(item.start) + 5);
+    const durationSec = clampDurationSec(Number(item.durationSec) || 5, 3, 8, 5);
+    const end = Number(item.start) + durationSec;
+    const generation = videoDurationToGenerationParams(durationSec);
     return {
       ...item,
       id: `vid_${String(index + 1).padStart(2, '0')}`,
       type: 'video',
       end,
+      durationSec,
+      numFrames: generation.numFrames,
+      frameRate: generation.frameRate,
+      generationDurationSec: Number(generation.generationDurationSec.toFixed(2)),
       timeRange: formatSecondsRange(item.start, end),
       aspectRatio,
       videoPrompt: trimByChars([
@@ -1650,7 +1817,7 @@ async function runLlmVideoPlan(words, config, payload = {}) {
   let items = [];
   let raw = '';
   try {
-    raw = await callLlmProvider(config, buildVideoPlanPrompt(units, analysis, style, count, aspectRatio));
+    raw = await callLlmProvider(config, buildVideoPlanPrompt(units, analysis, style, count, aspectRatio, payload.existingRanges));
     const parsed = extractJsonObject(raw) || {};
     items = sanitizeVideoPlanItems(parsed, units, count, analysis, style, aspectRatio);
     if (parsed.topic && !analysis.topic) analysis.topic = trimByChars(String(parsed.topic), 80);
@@ -1677,12 +1844,14 @@ async function runLlmImagePlan(words, config, payload = {}) {
     throw new Error('可用于配图分析的文本为空');
   }
   const analysis = await resolveAnalysis(units, config, payload.analysis);
-  const count = Math.max(4, Math.min(12, Number(payload.count) || 8));
+  const count = String(payload.count || '').toLowerCase() === 'auto'
+    ? autoImageCountForUnits(units)
+    : Math.max(4, Math.min(12, Number(payload.count) || 8));
   const style = String(payload.style || '').trim();
   let items = [];
   let raw = '';
   try {
-    raw = await callLlmProvider(config, buildImagePlanPrompt(units, analysis, style, count));
+    raw = await callLlmProvider(config, buildImagePlanPrompt(units, analysis, style, count, payload.existingRanges));
     const parsed = extractJsonObject(raw) || {};
     items = sanitizeImagePlanItems(parsed, units, count, analysis, style);
     if (parsed.topic && !analysis.topic) analysis.topic = trimByChars(String(parsed.topic), 80);
@@ -1713,7 +1882,7 @@ function sanitizeAssetName(input) {
 async function saveImageBuffer(buffer, id, ext = '.png') {
   fs.mkdirSync(IMAGE_ASSET_DIR, { recursive: true });
   const safeId = sanitizeAssetName(id);
-  const suffix = ['.png', '.jpg', '.jpeg', '.webp', '.svg'].includes(ext.toLowerCase()) ? ext.toLowerCase() : '.png';
+  const suffix = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg'].includes(ext.toLowerCase()) ? ext.toLowerCase() : '.png';
   const fileName = `${Date.now()}_${safeId}${suffix}`;
   const filePath = path.join(IMAGE_ASSET_DIR, fileName);
   fs.writeFileSync(filePath, buffer);
@@ -1744,6 +1913,7 @@ function imageExtFromContentType(contentType) {
   const type = String(contentType || '').toLowerCase();
   if (type.includes('jpeg') || type.includes('jpg')) return '.jpg';
   if (type.includes('webp')) return '.webp';
+  if (type.includes('gif')) return '.gif';
   if (type.includes('svg')) return '.svg';
   return '.png';
 }
@@ -1821,13 +1991,22 @@ async function callImageGenerationApi(config, item) {
       throw new Error(`MiniMax 图片生成失败：${message}`);
     }
     const data = firstBase64.replace(/^data:image\/\w+;base64,/, '');
-    return saveImageBuffer(Buffer.from(data, 'base64'), item.id || 'image', '.jpg');
+    const saved = await saveImageBuffer(Buffer.from(data, 'base64'), item.id || 'image', '.jpg');
+    return {
+      ...saved,
+      aspectRatio: imageSizeToMiniMaxAspectRatio(config.size),
+      generatedSize: config.size,
+      requestedSize: config.size,
+    };
   }
 
+  const generatedSize = config.provider === 'agnes'
+    ? imageSizeToAgnesSize(config.size)
+    : imageSizeToOpenAiSize(config.size);
   const requestBody = {
     model: config.model,
     prompt,
-    size: imageSizeToOpenAiSize(config.size),
+    size: generatedSize,
     n: 1,
   };
   if (config.provider === 'agnes') {
@@ -1858,14 +2037,26 @@ async function callImageGenerationApi(config, item) {
   const b64 = first?.b64_json || first?.base64 || first?.image_base64;
   if (b64) {
     const data = String(b64).replace(/^data:image\/\w+;base64,/, '');
-    return saveImageBuffer(Buffer.from(data, 'base64'), item.id || 'image', '.png');
+    const saved = await saveImageBuffer(Buffer.from(data, 'base64'), item.id || 'image', '.png');
+    return {
+      ...saved,
+      aspectRatio: imageSizeToMiniMaxAspectRatio(generatedSize),
+      generatedSize,
+      requestedSize: config.size,
+    };
   }
   const imageUrl = first?.url || first?.image_url || first?.output_url;
   if (imageUrl) {
     const imageRes = await fetch(imageUrl);
     if (!imageRes.ok) throw new Error(`图片下载失败：HTTP ${imageRes.status}`);
     const buffer = Buffer.from(await imageRes.arrayBuffer());
-    return saveImageBuffer(buffer, item.id || 'image', imageExtFromContentType(imageRes.headers.get('content-type')));
+    const saved = await saveImageBuffer(buffer, item.id || 'image', imageExtFromContentType(imageRes.headers.get('content-type')));
+    return {
+      ...saved,
+      aspectRatio: imageSizeToMiniMaxAspectRatio(generatedSize),
+      generatedSize,
+      requestedSize: config.size,
+    };
   }
   throw new Error('图片生成接口未返回 url 或 base64 图片');
 }
@@ -1876,8 +2067,14 @@ function findVideoIdFromResponse(json) {
     || json?.id
     || json?.data?.video_id
     || json?.data?.id
+    || json?.data?.video?.video_id
+    || json?.data?.video?.id
     || json?.output?.video_id
+    || json?.output?.id
     || json?.result?.video_id
+    || json?.result?.id
+    || json?.task?.video_id
+    || json?.task?.id
     || '',
   ).trim();
 }
@@ -1887,19 +2084,29 @@ function findVideoUrlFromResponse(json) {
     json?.video_url,
     json?.url,
     json?.output_url,
+    json?.remixed_from_video_id,
     json?.data?.video_url,
     json?.data?.url,
     json?.data?.output_url,
+    json?.data?.remixed_from_video_id,
+    json?.data?.video?.video_url,
+    json?.data?.video?.url,
+    json?.data?.video?.output_url,
+    json?.data?.video?.remixed_from_video_id,
     json?.output?.video_url,
     json?.output?.url,
+    json?.output?.output_url,
+    json?.output?.remixed_from_video_id,
     json?.result?.video_url,
     json?.result?.url,
+    json?.result?.output_url,
+    json?.result?.remixed_from_video_id,
   ];
   if (Array.isArray(json?.data)) {
-    candidates.push(json.data[0]?.video_url, json.data[0]?.url, json.data[0]?.output_url);
+    candidates.push(json.data[0]?.video_url, json.data[0]?.url, json.data[0]?.output_url, json.data[0]?.remixed_from_video_id);
   }
   if (Array.isArray(json?.videos)) {
-    candidates.push(json.videos[0]?.url, json.videos[0]?.video_url);
+    candidates.push(json.videos[0]?.url, json.videos[0]?.video_url, json.videos[0]?.output_url, json.videos[0]?.remixed_from_video_id);
   }
   return String(candidates.find((value) => typeof value === 'string' && /^https?:\/\//i.test(value)) || '').trim();
 }
@@ -1920,13 +2127,24 @@ async function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function waitAgnesVideoRequestSlot() {
+  const now = Date.now();
+  const waitMs = Math.max(0, AGNES_VIDEO_MIN_REQUEST_INTERVAL_MS - (now - lastAgnesVideoRequestAt));
+  if (waitMs > 0) {
+    await sleep(waitMs);
+  }
+  lastAgnesVideoRequestAt = Date.now();
+}
+
 async function pollAgnesVideoResult(config, videoId) {
   const deadline = Date.now() + 8 * 60 * 1000;
   let attempt = 0;
   let lastText = '';
+  const queryEndpoints = buildAgnesVideoQueryEndpoints(config.baseUrl, videoId);
   while (Date.now() < deadline) {
     attempt += 1;
-    const queryUrl = buildAgnesVideoQueryEndpoint(config.baseUrl, videoId);
+    const queryUrl = queryEndpoints[(attempt - 1) % queryEndpoints.length];
+    await waitAgnesVideoRequestSlot();
     const res = await fetch(queryUrl, {
       method: 'GET',
       headers: {
@@ -1938,6 +2156,11 @@ async function pollAgnesVideoResult(config, videoId) {
     if (!res.ok) {
       if (res.status === 429 || res.status >= 500) {
         await sleep(Math.min(15000, 2500 + attempt * 1000));
+        continue;
+      }
+      if ((res.status === 400 || res.status === 404) && queryEndpoints.length > 1) {
+        appendCutLog(`[video] Agnes query endpoint not ready (${res.status}): ${queryUrl}`);
+        await sleep(5000);
         continue;
       }
       throw new Error(`Agnes video query failed: HTTP ${res.status} ${text.slice(0, 300)}`);
@@ -1954,7 +2177,8 @@ async function pollAgnesVideoResult(config, videoId) {
     if (['failed', 'error', 'canceled', 'cancelled'].includes(status)) {
       throw new Error(`Agnes video generation failed: ${text.slice(0, 300)}`);
     }
-    appendCutLog(`[video] waiting Agnes video ${videoId}, attempt ${attempt}, status=${status || 'pending'}`);
+    appendCutLog(`[video] waiting Agnes video ${videoId}, attempt ${attempt}, status=${status || 'pending'}, endpoint=${queryUrl}`);
+    // Polling stays below the Agnes 20 RPM free limit while supporting both documented and compatibility endpoints.
     await sleep(5000);
   }
   throw new Error(`Agnes video generation timed out. Last response: ${lastText.slice(0, 240)}`);
@@ -1968,18 +2192,25 @@ async function callVideoGenerationApi(config, item, options = {}) {
   if (!prompt) throw new Error('Video prompt is empty');
 
   const size = aspectToVideoSize(options.aspectRatio || item?.aspectRatio || '16:9');
-  const frameRate = Math.max(1, Math.min(60, Number(options.frameRate || item?.frameRate || 24) || 24));
-  const numFrames = normalizeVideoFrameCount(options.numFrames || item?.numFrames || 121, 121);
+  const targetDurationSec = clampDurationSec(options.durationSec || item?.durationSec || ((Number(item?.end) || 0) - (Number(item?.start) || 0)), 3, 8, 5);
+  const generation = videoDurationToGenerationParams(targetDurationSec);
+  const frameRate = Math.max(1, Math.min(60, Number(options.frameRate || item?.frameRate || generation.frameRate) || generation.frameRate));
+  const numFrames = normalizeVideoFrameCount(options.numFrames || item?.numFrames || generation.numFrames, generation.numFrames);
   const requestBody = {
     model: config.model || AGNES_VIDEO_MODEL,
     prompt,
+    mode: 'ti2vid',
     width: size.width,
     height: size.height,
     num_frames: numFrames,
     frame_rate: frameRate,
     negative_prompt: String(item?.negativePrompt || item?.negative_prompt || 'low quality, blurry, text, watermark, logo, distorted face, inconsistent character').trim(),
+    extra_body: {
+      mode: 'ti2vid',
+    },
   };
 
+  await waitAgnesVideoRequestSlot();
   const res = await fetch(config.endpoint, {
     method: 'POST',
     headers: {
@@ -2018,6 +2249,8 @@ async function callVideoGenerationApi(config, item, options = {}) {
     model: config.model,
     frameRate,
     numFrames,
+    durationSec: targetDurationSec,
+    generationDurationSec: Number((numFrames / frameRate).toFixed(2)),
     width: size.width,
     height: size.height,
   };
@@ -2064,6 +2297,162 @@ function resolveJianyingTemplatePath(input) {
   }
   if (stat.isFile() && path.basename(resolved).toLowerCase() === 'draft_content.json') return resolved;
   return '';
+}
+
+function resolveJianyingTemplateDir(input) {
+  const contentPath = resolveJianyingTemplatePath(input);
+  return contentPath ? path.dirname(contentPath) : '';
+}
+
+function isDirectorySafe(input) {
+  try {
+    return Boolean(input) && fs.existsSync(input) && fs.statSync(input).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function looksLikeJianyingDraftDir(dir) {
+  if (!isDirectorySafe(dir)) return false;
+  return ['draft_content.json', 'draft_info.json', 'draft_meta_info.json', 'template-2.tmp']
+    .some((name) => fs.existsSync(path.join(dir, name)));
+}
+
+function looksLikeJianyingDraftRoot(dir) {
+  if (!isDirectorySafe(dir)) return false;
+  const base = path.basename(dir).toLowerCase();
+  if (fs.existsSync(path.join(dir, 'root_meta_info.json'))) return true;
+  if (base !== 'com.lveditor.draft') return false;
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true })
+      .some((entry) => entry.isDirectory() && looksLikeJianyingDraftDir(path.join(dir, entry.name)));
+  } catch {
+    return false;
+  }
+}
+
+function normalizeExistingDir(input) {
+  const raw = String(input || '').trim().replace(/^"|"$/g, '');
+  if (!raw) return '';
+  const resolved = path.resolve(raw);
+  return isDirectorySafe(resolved) ? resolved : '';
+}
+
+function getJianyingDraftRootCandidates(extra = []) {
+  const roots = [];
+  const push = (value) => {
+    const normalized = normalizeExistingDir(value);
+    if (normalized && !roots.some((item) => item.toLowerCase() === normalized.toLowerCase())) {
+      roots.push(normalized);
+    }
+  };
+  extra.forEach(push);
+  push(process.env.JIANYING_DRAFT_ROOT);
+  const local = process.env.LOCALAPPDATA || '';
+  const roaming = process.env.APPDATA || '';
+  push(path.join(local, 'JianyingPro', 'User Data', 'Projects', 'com.lveditor.draft'));
+  push(path.join(roaming, 'JianyingPro', 'User Data', 'Projects', 'com.lveditor.draft'));
+  push(path.join(local, 'CapCut', 'User Data', 'Projects', 'com.lveditor.draft'));
+  push(path.join(roaming, 'CapCut', 'User Data', 'Projects', 'com.lveditor.draft'));
+  return roots;
+}
+
+function findJianyingDraftRoots(extra = []) {
+  return getJianyingDraftRootCandidates(extra)
+    .filter(looksLikeJianyingDraftRoot)
+    .map((dir) => ({
+      path: dir,
+      label: path.basename(path.dirname(path.dirname(path.dirname(dir)))) || path.basename(dir),
+    }));
+}
+
+function listJianyingDrafts(root) {
+  if (!looksLikeJianyingDraftRoot(root)) return [];
+  try {
+    return fs.readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => {
+        const dir = path.join(root, entry.name);
+        if (!looksLikeJianyingDraftDir(dir)) return null;
+        let name = entry.name;
+        let modified = 0;
+        for (const fileName of ['draft_meta_info.json', 'draft_content.json', 'draft_info.json']) {
+          const filePath = path.join(dir, fileName);
+          if (!fs.existsSync(filePath)) continue;
+          try {
+            const stat = fs.statSync(filePath);
+            modified = Math.max(modified, stat.mtimeMs || 0);
+            const json = parseJsonFileNoBom(filePath);
+            name = String(json.draft_name || json.name || name);
+            break;
+          } catch {
+            // Ignore partially unreadable draft metadata; the folder can still be used.
+          }
+        }
+        return {
+          name,
+          path: dir,
+          modified,
+          modifiedText: modified ? new Date(modified).toLocaleString('zh-CN', { hour12: false }) : '',
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => (b.modified || 0) - (a.modified || 0));
+  } catch {
+    return [];
+  }
+}
+
+function uniqueDraftName(baseName, exportRoot) {
+  const clean = sanitizeDraftName(baseName);
+  if (!isDirectorySafe(exportRoot)) return clean;
+  let candidate = clean;
+  let index = 2;
+  while (fs.existsSync(path.join(exportRoot, candidate))) {
+    candidate = sanitizeDraftName(`${clean}_${index}`);
+    index += 1;
+  }
+  return candidate;
+}
+
+function resolveJianyingExportTarget(payload = {}, templateDir = '') {
+  const exportMode = String(payload.exportMode || 'auto').toLowerCase();
+  const customRoot = normalizeExistingDir(payload.targetRoot || payload.draftRoot || '');
+  const templateRoot = templateDir && looksLikeJianyingDraftDir(templateDir)
+    ? path.dirname(templateDir)
+    : '';
+  if (exportMode === 'project') {
+    return {
+      exportRoot: path.resolve(process.cwd(), JIANYING_DRAFT_EXPORT_DIR_NAME),
+      exportRootSource: 'project',
+      autoPlaced: false,
+      templateDir,
+    };
+  }
+  if (customRoot) {
+    if (looksLikeJianyingDraftRoot(customRoot)) {
+      return { exportRoot: customRoot, exportRootSource: 'custom', autoPlaced: true, templateDir };
+    }
+    if (looksLikeJianyingDraftDir(customRoot)) {
+      return { exportRoot: path.dirname(customRoot), exportRootSource: 'custom-draft-parent', autoPlaced: true, templateDir: templateDir || customRoot };
+    }
+    if (exportMode === 'custom') {
+      throw new Error(`选择的剪映草稿目录不可用：${customRoot}`);
+    }
+  }
+  if (templateRoot && looksLikeJianyingDraftRoot(templateRoot)) {
+    return { exportRoot: templateRoot, exportRootSource: 'template-root', autoPlaced: true, templateDir };
+  }
+  const detected = findJianyingDraftRoots()[0];
+  if (detected?.path) {
+    return { exportRoot: detected.path, exportRootSource: 'auto', autoPlaced: true, templateDir };
+  }
+  return {
+    exportRoot: path.resolve(process.cwd(), JIANYING_DRAFT_EXPORT_DIR_NAME),
+    exportRootSource: 'project-fallback',
+    autoPlaced: false,
+    templateDir,
+  };
 }
 
 function loadJianyingTemplate(templatePath) {
@@ -2258,6 +2647,335 @@ function normalizeCueList(cues) {
     .sort((a, b) => a.start - b.start);
 }
 
+function clampNumber(value, min, max, fallback = min) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.max(min, Math.min(max, num));
+}
+
+function normalizeDraftDeleteSegments(segments, durationSec = Infinity) {
+  if (!Array.isArray(segments)) return [];
+  const maxEnd = Number.isFinite(durationSec) && durationSec > 0 ? durationSec : Infinity;
+  const normalized = segments
+    .map((seg) => {
+      const start = clampNumber(seg?.start, 0, maxEnd, NaN);
+      const end = clampNumber(seg?.end, 0, maxEnd, NaN);
+      return { start, end };
+    })
+    .filter((seg) => Number.isFinite(seg.start) && Number.isFinite(seg.end) && seg.end > seg.start)
+    .sort((a, b) => a.start - b.start);
+  const merged = [];
+  for (const seg of normalized) {
+    const last = merged[merged.length - 1];
+    if (last && seg.start <= last.end + 0.001) {
+      last.end = Math.max(last.end, seg.end);
+    } else {
+      merged.push({ ...seg });
+    }
+  }
+  return merged;
+}
+
+function sumDraftDeletedDuration(segments) {
+  return normalizeDraftDeleteSegments(segments)
+    .reduce((sum, seg) => sum + Math.max(0, seg.end - seg.start), 0);
+}
+
+function mapDraftTimeAfterDeletes(time, deleteSegments) {
+  const value = Math.max(0, Number(time) || 0);
+  let removed = 0;
+  for (const seg of deleteSegments) {
+    if (seg.end <= value) {
+      removed += seg.end - seg.start;
+    } else if (seg.start < value) {
+      removed += Math.max(0, value - seg.start);
+      break;
+    } else {
+      break;
+    }
+  }
+  return Math.max(0, value - removed);
+}
+
+function buildDraftKeepSegments(deleteSegments, sourceDurationSec) {
+  const duration = Math.max(0, Number(sourceDurationSec) || 0);
+  if (!(duration > 0)) return [];
+  const deletes = normalizeDraftDeleteSegments(deleteSegments, duration);
+  const keep = [];
+  let cursor = 0;
+  let outStart = 0;
+  for (const seg of deletes) {
+    const start = Math.max(0, Math.min(duration, seg.start));
+    const end = Math.max(0, Math.min(duration, seg.end));
+    if (start > cursor + 0.015) {
+      const keepDuration = start - cursor;
+      keep.push({ sourceStart: cursor, start: outStart, duration: keepDuration });
+      outStart += keepDuration;
+    }
+    cursor = Math.max(cursor, end);
+  }
+  if (cursor < duration - 0.015) {
+    keep.push({ sourceStart: cursor, start: outStart, duration: duration - cursor });
+  }
+  return keep.filter((seg) => seg.duration >= 0.04);
+}
+
+function resolveCapcutCliPath() {
+  let pkgPath = require.resolve('capcut-cli/package.json');
+  if (pkgPath.includes('.asar')) {
+    const unpackedPath = pkgPath.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1');
+    if (fs.existsSync(unpackedPath)) pkgPath = unpackedPath;
+  }
+  const cliPath = path.join(path.dirname(pkgPath), 'dist', 'index.js');
+  if (!fs.existsSync(cliPath)) {
+    throw new Error(`capcut-cli not found: ${cliPath}`);
+  }
+  return cliPath;
+}
+
+function inferJianyingCanvas(payload = {}) {
+  const meta = payload.sourceVideoMeta || payload.videoMeta || {};
+  const width = Math.round(Number(meta.width) || Number(payload.width) || 0);
+  const height = Math.round(Number(meta.height) || Number(payload.height) || 0);
+  if (width > 0 && height > 0) {
+    return {
+      width,
+      height,
+      fps: Math.round(Number(meta.fps) || Number(payload.fps) || 30),
+      ratio: 'original',
+    };
+  }
+  return { width: 1920, height: 1080, fps: 30, ratio: 'original' };
+}
+
+function textStyleForJianyingPreset(preset) {
+  const key = String(preset || '').toLowerCase();
+  if (key === 'blackgold') {
+    return { fontSize: 9, color: '#F8E7B0', y: -0.76 };
+  }
+  if (key === 'bold') {
+    return { fontSize: 10, color: '#FFFFFF', y: -0.74 };
+  }
+  return { fontSize: 9, color: '#FFFFFF', y: -0.76 };
+}
+
+function getDraftAssetFilePath(item, kind) {
+  const direct = String(item?.filePath || '').trim();
+  if (direct) return direct;
+  const nestedKey = kind === 'video' ? 'video' : 'image';
+  return String(item?.[nestedKey]?.filePath || '').trim();
+}
+
+function collectJianyingMediaItems(payload = {}, kind, deleteSegments) {
+  const mediaAssets = payload.mediaAssets && typeof payload.mediaAssets === 'object' ? payload.mediaAssets : {};
+  const rawItems = kind === 'video'
+    ? (mediaAssets.videos || payload.videoItems || [])
+    : (mediaAssets.images || payload.imageItems || []);
+  const sanitized = sanitizeReviewMediaItems(rawItems, kind);
+  const mapTime = (time) => mapDraftTimeAfterDeletes(time, deleteSegments);
+  return sanitized.map((item, index) => {
+    const filePath = getDraftAssetFilePath(item, kind);
+    if (!filePath || !fs.existsSync(filePath)) return null;
+    const originalStart = Number(item.start);
+    const originalEnd = Number(item.end);
+    if (!Number.isFinite(originalStart) || !Number.isFinite(originalEnd) || originalEnd <= originalStart) return null;
+    const mappedStart = mapTime(originalStart);
+    const mappedEnd = mapTime(originalEnd);
+    const duration = mappedEnd - mappedStart;
+    if (duration < (kind === 'video' ? 0.4 : 0.8)) return null;
+    return {
+      ref: `${kind}_${index + 1}`,
+      path: path.resolve(filePath),
+      start: Number(mappedStart.toFixed(3)),
+      duration: Number(duration.toFixed(3)),
+      type: kind === 'image' ? 'photo' : 'video',
+      title: item.title || '',
+    };
+  }).filter(Boolean);
+}
+
+function getJianyingSourceDuration(payload, sourceVideoPath, cues, deleteSegments) {
+  const explicit = Number(payload.sourceDurationSec || payload.durationSec || payload.originalDurationSec);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const probed = fs.existsSync(sourceVideoPath) ? probeDuration(sourceVideoPath) : NaN;
+  if (Number.isFinite(probed) && probed > 0) return probed;
+  const cueEnd = Math.max(0, ...cues.map((cue) => Number(cue.end) || 0));
+  const removed = sumDraftDeletedDuration(deleteSegments);
+  const mediaEnd = Math.max(
+    0,
+    ...['images', 'videos'].flatMap((key) => {
+      const list = payload.mediaAssets && Array.isArray(payload.mediaAssets[key]) ? payload.mediaAssets[key] : [];
+      return list.map((item) => Number(item?.end) || 0);
+    }),
+  );
+  return Math.max(cueEnd + removed, mediaEnd, 1);
+}
+
+function buildJianyingFullDraftSpec(payload = {}) {
+  const cues = normalizeCueList(payload.cues);
+  if (!cues.length) throw new Error('没有可导出的字幕，请检查是否全部内容都被标记删除。');
+  const sourceVideoPath = path.resolve(payload.sourceVideoPath || VIDEO_FILE);
+  if (!fs.existsSync(sourceVideoPath)) {
+    throw new Error(`原视频文件不存在，无法生成完整剪映草稿：${sourceVideoPath}`);
+  }
+  const rawDeletes = normalizeDraftDeleteSegments(payload.deleteSegments || payload.segments || []);
+  const sourceDurationSec = getJianyingSourceDuration(payload, sourceVideoPath, cues, rawDeletes);
+  const deleteSegments = normalizeDraftDeleteSegments(rawDeletes, sourceDurationSec);
+  const keepSegments = buildDraftKeepSegments(deleteSegments, sourceDurationSec);
+  if (!keepSegments.length) {
+    throw new Error('删除范围覆盖了全部视频，无法生成完整剪映草稿。');
+  }
+  const canvas = inferJianyingCanvas(payload);
+  const textStyle = textStyleForJianyingPreset(payload.preset);
+  const mainVideoItems = keepSegments.map((seg, index) => ({
+    ref: `main_${index + 1}`,
+    path: sourceVideoPath,
+    start: Number(seg.start.toFixed(3)),
+    duration: Number(seg.duration.toFixed(3)),
+    sourceStart: Number(seg.sourceStart.toFixed(3)),
+    type: 'video',
+  }));
+  const imageItems = collectJianyingMediaItems(payload, 'image', deleteSegments);
+  const videoItems = collectJianyingMediaItems(payload, 'video', deleteSegments).map((item) => ({
+    ...item,
+    volume: 0,
+    sourceStart: 0,
+  }));
+  const textItems = cues.map((cue, index) => ({
+    ref: `subtitle_${index + 1}`,
+    text: String(cue.text || '').trim(),
+    start: Number(Number(cue.start).toFixed(3)),
+    duration: Number(Math.max(0.35, Number(cue.end) - Number(cue.start)).toFixed(3)),
+    ...textStyle,
+  }));
+  const tracks = [
+    { type: 'video', name: 'Jaygo Cut 主视频', items: mainVideoItems },
+  ];
+  if (imageItems.length) tracks.push({ type: 'video', name: 'Jaygo Cut 图片素材', items: imageItems });
+  if (videoItems.length) tracks.push({ type: 'video', name: 'Jaygo Cut 视频素材', items: videoItems });
+  tracks.push({ type: 'text', name: 'Jaygo Cut 字幕', items: textItems });
+  return {
+    spec: {
+      name: sanitizeDraftName(payload.draftName || `JaygoCut_${new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14)}`),
+      width: canvas.width,
+      height: canvas.height,
+      fps: canvas.fps,
+      ratio: canvas.ratio,
+      tracks,
+    },
+    stats: {
+      cues: textItems.length,
+      deleteSegments: deleteSegments.length,
+      keepSegments: mainVideoItems.length,
+      imageAssets: imageItems.length,
+      videoAssets: videoItems.length,
+      sourceDurationSec: Number(sourceDurationSec.toFixed(3)),
+      outputDurationSec: Number((sourceDurationSec - sumDraftDeletedDuration(deleteSegments)).toFixed(3)),
+    },
+  };
+}
+
+function runCapcutCliCompile(specPath, draftDir, templateDir = '') {
+  const cliPath = resolveCapcutCliPath();
+  const runner = getNodeRunner();
+  const args = [cliPath, 'compile', specPath, '--out', draftDir, '--force-write', '--quiet'];
+  if (templateDir && looksLikeJianyingDraftDir(templateDir)) {
+    args.push('--template', templateDir);
+  }
+  const result = spawnSync(
+    runner.command,
+    args,
+    {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: { ...process.env, ...runner.extraEnv },
+      windowsHide: true,
+      timeout: 120000,
+    },
+  );
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    const detail = [result.stderr, result.stdout].filter(Boolean).join('\n').trim();
+    throw new Error(`capcut-cli exited with code ${result.status}${detail ? `: ${detail.slice(0, 1200)}` : ''}`);
+  }
+  return {
+    stdout: String(result.stdout || '').trim(),
+    stderr: String(result.stderr || '').trim(),
+  };
+}
+
+function writeJianyingFullDraft(payload = {}) {
+  const { spec, stats } = buildJianyingFullDraftSpec(payload);
+  const templateDir = resolveJianyingTemplateDir(payload.templatePath);
+  const target = resolveJianyingExportTarget(payload, templateDir);
+  const exportRoot = path.resolve(target.exportRoot);
+  fs.mkdirSync(exportRoot, { recursive: true });
+  const draftName = uniqueDraftName(spec.name, exportRoot);
+  spec.name = draftName;
+  const draftDir = path.join(exportRoot, draftName);
+  const specDir = path.join(path.resolve(process.cwd(), JIANYING_DRAFT_EXPORT_DIR_NAME), '_specs');
+  const specPath = path.join(specDir, `${draftName}.json`);
+  fs.mkdirSync(specDir, { recursive: true });
+  fs.writeFileSync(specPath, `${JSON.stringify(spec, null, 2)}\n`, 'utf8');
+  const cliResult = runCapcutCliCompile(specPath, draftDir, target.templateDir);
+  fs.copyFileSync(specPath, path.join(draftDir, 'jaygo_cut_full_draft_spec.json'));
+  fs.writeFileSync(path.join(draftDir, 'README_JaygoCut.txt'), [
+    'Jaygo Cut 完整剪映草稿导出说明',
+    '',
+    '1. 这个文件夹包含主视频轨、字幕轨，以及已生成的图片/视频素材轨。',
+    target.autoPlaced
+      ? '2. 草稿已直接写入剪映/CapCut 草稿目录，打开剪映即可在项目列表中看到；如果剪映已打开，必要时请重启剪映刷新列表。'
+      : '2. 草稿已导出到当前项目目录，请将整个草稿文件夹复制到剪映草稿目录后打开。',
+    target.templateDir
+      ? '3. 本草稿基于你选择的模板草稿生成了一个新草稿，原模板不会被覆盖。'
+      : '3. 未选择模板草稿，已使用 Jaygo Cut 默认草稿结构。',
+    '4. 视频素材轨已默认静音，避免和主视频口播音频叠音。',
+    '5. 备用规格文件：jaygo_cut_full_draft_spec.json，可用于排查或重新生成草稿。',
+    '',
+    `字幕条数：${stats.cues}`,
+    `主视频保留片段：${stats.keepSegments}`,
+    `图片素材：${stats.imageAssets}`,
+    `视频素材：${stats.videoAssets}`,
+    `导出根目录：${exportRoot}`,
+    `导出方式：${target.exportRootSource}`,
+  ].join('\r\n'), 'utf8');
+  return {
+    fullDraft: true,
+    engine: 'capcut-cli',
+    draftDir,
+    draftName,
+    specPath,
+    exportRoot,
+    exportRootSource: target.exportRootSource,
+    autoPlaced: target.autoPlaced,
+    templateUsed: Boolean(target.templateDir),
+    templatePath: target.templateDir,
+    compatibilityNote: target.autoPlaced
+      ? '完整草稿已写入剪映/CapCut 草稿目录；若项目列表未刷新，请重启剪映。'
+      : '完整草稿依赖剪映/CapCut 草稿格式兼容性；如新版剪映无法识别，请使用 SRT 或字幕草稿兜底。',
+    cliStdout: cliResult.stdout,
+    cliStderr: cliResult.stderr,
+    ...stats,
+  };
+}
+
+function writeJianyingDraftExport(payload = {}) {
+  if (payload.fullDraft) {
+    try {
+      return writeJianyingFullDraft(payload);
+    } catch (err) {
+      const fallback = writeJianyingDraft({ ...payload, fullDraft: false });
+      return {
+        ...fallback,
+        fullDraft: false,
+        fallbackUsed: true,
+        fallbackReason: err.message || String(err),
+      };
+    }
+  }
+  return writeJianyingDraft(payload);
+}
+
 function writeJianyingDraft(payload = {}) {
   const cues = normalizeCueList(payload.cues);
   if (!cues.length) throw new Error('没有可导出的字幕，请检查是否全部内容都被删除。');
@@ -2408,7 +3126,7 @@ function buildHeuristicChatRemoveIds(units, selectedUnitIds, intent, maxAllowed)
   return Array.from(new Set(out));
 }
 
-async function runLlmChatAdjust(words, config, selectedIndices, userMessage, history, inputAnalysis) {
+async function runLlmChatAdjust(words, config, selectedIndices, userMessage, history, inputAnalysis, mediaAssets = {}) {
   const units = buildTranscriptUnits(words);
   if (!units.length) {
     throw new Error('转录内容为空，无法调整标记');
@@ -2421,7 +3139,7 @@ async function runLlmChatAdjust(words, config, selectedIndices, userMessage, his
 
   const analysis = await resolveAnalysis(units, config, inputAnalysis);
   const selectedUnitIds = selectedUnitIdsFromIndices(words, units, selectedIndices);
-  const prompt = buildChatAdjustPrompt(units, selectedUnitIds, message, history, analysis);
+  const prompt = buildChatAdjustPrompt(units, selectedUnitIds, message, history, analysis, mediaAssets);
   let raw = '';
   let parsed = {};
   let llmError = '';
@@ -2438,6 +3156,7 @@ async function runLlmChatAdjust(words, config, selectedIndices, userMessage, his
 
   let addIds = parseIdArray(parsed.add_ids || parsed.addIds, validIdSet);
   let removeIds = parseIdArray(parsed.remove_ids || parsed.removeIds, validIdSet);
+  const mediaActions = sanitizeMediaActions(parsed.media_actions || parsed.mediaActions || parsed.actions);
   const fromMarkDelete = parseLlmDeleteItems(parsed, validIdSet).map((item) => item.id);
   if (!addIds.length && fromMarkDelete.length) {
     addIds = parseIdArray(fromMarkDelete, validIdSet);
@@ -2494,6 +3213,7 @@ async function runLlmChatAdjust(words, config, selectedIndices, userMessage, his
     removeIds,
     addIndices,
     removeIndices,
+    mediaActions,
     reason: trimByChars(String(parsed.reason || '').trim(), 60) || (llmError ? 'LLM异常，已采用规则兜底' : ''),
     summary: trimByChars(String(parsed.summary || parsed.note || '').trim(), 120) || llmError,
     analysis,
@@ -2555,6 +3275,118 @@ function parseIdArray(values, validIds) {
         .filter((id) => Number.isInteger(id) && validIds.has(id)),
     ),
   );
+}
+
+function normalizeMediaActionType(rawType) {
+  const value = String(rawType || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  const aliases = {
+    image_add: 'add_image',
+    picture_add: 'add_image',
+    add_picture: 'add_image',
+    add_pic: 'add_image',
+    add_photo: 'add_image',
+    add_visual: 'add_image',
+    image_update: 'update_image',
+    edit_image: 'update_image',
+    modify_image: 'update_image',
+    change_image: 'update_image',
+    replace_image: 'update_image',
+    update_picture: 'update_image',
+    replace_picture: 'update_image',
+    image_move: 'move_image',
+    shift_image: 'move_image',
+    retime_image: 'move_image',
+    image_delete: 'delete_image',
+    remove_image: 'delete_image',
+    delete_picture: 'delete_image',
+    remove_picture: 'delete_image',
+    image_regenerate: 'regenerate_image',
+    retry_image: 'regenerate_image',
+    reroll_image: 'regenerate_image',
+    regenerate_picture: 'regenerate_image',
+    video_add: 'add_video',
+    add_broll: 'add_video',
+    add_b_roll: 'add_video',
+    video_update: 'update_video',
+    edit_video: 'update_video',
+    modify_video: 'update_video',
+    change_video: 'update_video',
+    replace_video: 'update_video',
+    video_move: 'move_video',
+    shift_video: 'move_video',
+    retime_video: 'move_video',
+    video_delete: 'delete_video',
+    remove_video: 'delete_video',
+    video_regenerate: 'regenerate_video',
+    retry_video: 'regenerate_video',
+    reroll_video: 'regenerate_video',
+  };
+  return aliases[value] || value;
+}
+
+function sanitizeMediaActions(actions) {
+  if (!Array.isArray(actions)) return [];
+  const allowed = new Set([
+    'add_image',
+    'update_image',
+    'move_image',
+    'delete_image',
+    'regenerate_image',
+    'add_video',
+    'update_video',
+    'move_video',
+    'delete_video',
+    'regenerate_video',
+  ]);
+  const out = [];
+  for (const raw of actions.slice(0, 40)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const type = normalizeMediaActionType(raw.type || raw.action || raw.operation || raw.op);
+    if (!allowed.has(type)) continue;
+    const kind = type.includes('video') ? 'video' : 'image';
+    const minDuration = kind === 'video' ? 3 : 5;
+    const maxDuration = kind === 'video' ? 8 : 10;
+    const fallbackDuration = kind === 'video' ? 5 : 7;
+    const rawStart = raw.start ?? raw.startSec ?? raw.time ?? raw.begin;
+    const rawEnd = raw.end ?? raw.endSec;
+    const start = Number(rawStart);
+    const end = Number(rawEnd);
+    const hasStart = Number.isFinite(start) && start >= 0;
+    const durationSec = clampDurationSec(
+      raw.durationSec ?? raw.duration ?? (Number.isFinite(end) && hasStart ? end - start : undefined),
+      minDuration,
+      maxDuration,
+      fallbackDuration,
+    );
+    const item = {
+      type,
+      id: String(raw.id || raw.mediaId || '').replace(/[^\w-]/g, '_').slice(0, 48),
+      index: Number.isFinite(Number(raw.index ?? raw.ordinal ?? raw.no)) ? Math.max(1, Math.floor(Number(raw.index ?? raw.ordinal ?? raw.no))) : undefined,
+      title: String(raw.title || '').trim().slice(0, 80),
+      purpose: String(raw.purpose || raw.reason || '').trim().slice(0, 140),
+      textBasis: String(raw.textBasis || raw.text || '').trim().slice(0, 160),
+      directorIntent: String(raw.directorIntent || raw.intent || '').trim().slice(0, 240),
+      sceneStory: String(raw.sceneStory || raw.scene || '').trim().slice(0, 420),
+      camera: String(raw.camera || raw.lens || '').trim().slice(0, 260),
+      prompt: String(raw.prompt || raw.imagePrompt || '').trim().slice(0, 1800),
+      videoPrompt: String(raw.videoPrompt || '').trim().slice(0, 1800),
+      negativePrompt: String(raw.negativePrompt || '').trim().slice(0, 600),
+      aspectRatio: String(raw.aspectRatio || raw.ratio || '').trim().slice(0, 20),
+      motionEffect: String(raw.motionEffect || raw.motion || '').trim().slice(0, 20),
+      regenerate: !!raw.regenerate || type.startsWith('regenerate_'),
+    };
+    if (hasStart) {
+      item.start = Number(start.toFixed(3));
+      item.durationSec = Number(durationSec.toFixed(2));
+      item.end = Number((item.start + durationSec).toFixed(3));
+    } else if (type.startsWith('add_')) {
+      item.start = 0;
+      item.durationSec = Number(durationSec.toFixed(2));
+      item.end = Number(durationSec.toFixed(3));
+    }
+    out.push(item);
+  }
+  return out;
 }
 
 async function runLlmMarking(words, config) {
@@ -2668,14 +3500,21 @@ async function runLlmMarking(words, config) {
 
   const rawCandidates = Array.from(selectedMap.values())
     .sort((a, b) => b.confidence - a.confidence);
+  const unitById = new Map(units.map((u) => [u.id, u]));
   let selectedItems = rawCandidates
-    .filter((item) => item.confidence >= LLM_MIN_CONFIDENCE);
+    .filter((item) => shouldKeepLlmDeleteCandidate(unitById.get(item.id), item));
   let confidenceFilteredCount = Math.max(0, rawCandidates.length - selectedItems.length);
 
-  const maxAllowed = Math.min(140, Math.max(4, Math.floor(units.length * 0.16)));
+  const maxAllowed = Math.min(120, Math.max(3, Math.floor(units.length * LLM_MAX_DELETE_RATIO)));
   if (!selectedItems.length && rawCandidates.length) {
-    const fallbackCount = Math.min(maxAllowed, Math.max(2, Math.ceil(rawCandidates.length * 0.18)));
-    selectedItems = rawCandidates.slice(0, fallbackCount);
+    const recoverableCandidates = rawCandidates.filter((item) => {
+      const unit = unitById.get(item.id);
+      if (!unit) return false;
+      if ((Number(item.confidence) || 0) < LLM_MIN_CONFIDENCE) return false;
+      return !isProtectedSemanticText(unit.text);
+    });
+    const fallbackCount = Math.min(maxAllowed, Math.max(2, Math.ceil(recoverableCandidates.length * 0.18)));
+    selectedItems = recoverableCandidates.slice(0, fallbackCount);
     confidenceFilteredCount = Math.max(0, rawCandidates.length - selectedItems.length);
   }
   const heuristicFallbackItems = (!selectedItems.length)
@@ -2690,7 +3529,6 @@ async function runLlmMarking(words, config) {
     selectedItems = selectedItems.slice(0, maxAllowed);
   }
 
-  const unitById = new Map(units.map((u) => [u.id, u]));
   const hardKeepSet = new Set(structure.mustKeepIds || []);
   for (const u of units) {
     if (isInfoDenseTextForFallback(u.text)) {
@@ -2883,7 +3721,14 @@ function normalizeMediaOverlays(overlays) {
     const type = String(item?.type || '').toLowerCase() === 'video' ? 'video' : 'image';
     const filePath = String(item?.filePath || '').trim();
     const start = Number(item?.start);
-    const end = Number(item?.end);
+    const rawEnd = Number(item?.end);
+    const durationSec = clampDurationSec(
+      item?.durationSec || item?.duration || (Number.isFinite(rawEnd) && Number.isFinite(start) ? rawEnd - start : 0),
+      type === 'video' ? 3 : 5,
+      type === 'video' ? 8 : 10,
+      type === 'video' ? 5 : 7,
+    );
+    const end = Number.isFinite(start) ? start + durationSec : rawEnd;
     const motionEffect = type === 'image' && allowedMotionEffects.has(String(item?.motionEffect || ''))
       ? String(item.motionEffect)
       : 'none';
@@ -2894,6 +3739,7 @@ function normalizeMediaOverlays(overlays) {
       filePath: path.resolve(filePath),
       start,
       end,
+      durationSec,
       title: String(item?.title || '').slice(0, 80),
       fit: String(item?.fit || 'cover').slice(0, 20),
       motionEffect,
@@ -2957,6 +3803,13 @@ function sanitizeReviewMediaItems(items, kind) {
   return items.map((item) => {
     const start = Number(item?.start);
     const end = Number(item?.end);
+    const safeStart = Number.isFinite(start) && start >= 0 ? start : 0;
+    const durationSec = clampDurationSec(
+      item?.durationSec || item?.duration || (Number.isFinite(end) && Number.isFinite(start) ? end - start : 0),
+      kind === 'video' ? 3 : 5,
+      kind === 'video' ? 8 : 10,
+      kind === 'video' ? 5 : 7,
+    );
     const assetKey = kind === 'video' ? 'video' : 'image';
     const asset = item?.[assetKey] && typeof item[assetKey] === 'object' ? item[assetKey] : null;
     const sanitizedAsset = asset ? {
@@ -2972,9 +3825,11 @@ function sanitizeReviewMediaItems(items, kind) {
       id: String(item?.id || '').replace(/[^\w-]/g, '_').slice(0, 48),
       type: kind,
       timeRange: String(item?.timeRange || '').slice(0, 40),
-      start: Number.isFinite(start) && start >= 0 ? start : 0,
-      end: Number.isFinite(end) && end > start ? end : Math.max(0, start) + 3,
+      start: safeStart,
+      end: safeStart + durationSec,
+      durationSec,
       aspectRatio: String(item?.aspectRatio || '').slice(0, 20),
+      motionEffect: String(item?.motionEffect || '').slice(0, 20),
       title: String(item?.title || '').slice(0, 80),
       purpose: String(item?.purpose || '').slice(0, 80),
       textBasis: String(item?.textBasis || '').slice(0, 140),
@@ -3126,7 +3981,7 @@ function readBody(req) {
     let body = '';
     req.on('data', (chunk) => {
       body += chunk;
-      if (body.length > 10 * 1024 * 1024) {
+      if (body.length > 30 * 1024 * 1024) {
         reject(new Error('Request body too large'));
       }
     });
@@ -3226,6 +4081,18 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       serveFile(req, res, VIDEO_FILE);
+      return;
+    }
+
+    if (req.method === 'GET' && pathname.startsWith('/image_assets/')) {
+      const relative = decodeURIComponent(pathname.replace(/^\/image_assets\/+/, ''));
+      const resolved = path.resolve(IMAGE_ASSET_DIR, relative);
+      if (!resolved.startsWith(path.resolve(IMAGE_ASSET_DIR))) {
+        res.writeHead(403);
+        res.end('Forbidden');
+        return;
+      }
+      serveFile(req, res, resolved);
       return;
     }
 
@@ -3375,6 +4242,11 @@ const server = http.createServer(async (req, res) => {
       const message = String(payload.message || '').trim();
       const history = Array.isArray(payload.history) ? payload.history : [];
       const analysis = sanitizeAnalysisInput(payload.analysis);
+      const mediaPayload = payload.mediaAssets && typeof payload.mediaAssets === 'object' ? payload.mediaAssets : {};
+      const mediaAssets = {
+        images: sanitizeReviewMediaItems(mediaPayload.images || payload.imageItems, 'image'),
+        videos: sanitizeReviewMediaItems(mediaPayload.videos || payload.videoItems, 'video'),
+      };
 
       if (!words.length) {
         throw new Error('words 为空，无法执行对话调标记');
@@ -3384,7 +4256,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       appendCutLog(`LLM 对话调标记开始：provider=${config.provider}, model=${config.model}`);
-      const result = await runLlmChatAdjust(words, config, selectedIndices, message, history, analysis);
+      const result = await runLlmChatAdjust(words, config, selectedIndices, message, history, analysis, mediaAssets);
       appendCutLog(`LLM 对话调标记完成：新增 ${result.addIds.length} 段，取消 ${result.removeIds.length} 段`);
       writeJson(res, 200, { success: true, ...result });
       return;
@@ -3448,10 +4320,45 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'POST' && pathname === '/api/import-image') {
+      const body = await readBody(req);
+      const payload = JSON.parse(body || '{}');
+      const item = payload.item && typeof payload.item === 'object' ? payload.item : {};
+      const filename = String(payload.filename || item.id || 'local-image');
+      const dataUrl = String(payload.dataUrl || '');
+      const match = dataUrl.match(/^data:(image\/(?:png|jpeg|jpg|webp|gif));base64,([A-Za-z0-9+/=]+)$/i);
+      if (!match) {
+        throw new Error('Invalid image data. Please upload a png, jpg, webp, or gif image.');
+      }
+      const buffer = Buffer.from(match[2], 'base64');
+      if (!buffer.length || buffer.length > 20 * 1024 * 1024) {
+        throw new Error('Image file is empty or larger than 20MB.');
+      }
+      const ext = imageExtFromContentType(match[1]);
+      const saved = await saveImageBuffer(buffer, item.id || path.basename(filename, path.extname(filename)) || 'local-image', ext);
+      const nextItem = {
+        ...item,
+        source: 'local-upload',
+        prompt: item.prompt || `Local uploaded image: ${filename}`,
+      };
+      appendCutLog(`Local image imported: ${saved.fileName}`);
+      writeJson(res, 200, {
+        success: true,
+        item: nextItem,
+        image: {
+          ...saved,
+          model: 'local-upload',
+          size: normalizeImageSize(payload.aspectRatio || item.aspectRatio || '16:9'),
+          sourceFileName: filename,
+        },
+      });
+      return;
+    }
+
     if (req.method === 'POST' && pathname === '/api/llm-video-plan') {
       const config = getLlmConfig();
       if (!config.ready) {
-        throw new Error(`LLM 閰嶇疆涓嶅畬鏁达細缂哄皯 ${config.missing.join(', ')}`);
+        throw new Error(`LLM 配置不完整：缺少 ${config.missing.join(', ')}`);
       }
 
       const body = await readBody(req);
@@ -3495,6 +4402,7 @@ const server = http.createServer(async (req, res) => {
       appendCutLog(`Video material generation started: ${String(nextItem.title || nextItem.id || 'video')}`);
       const saved = await callVideoGenerationApi(videoConfig, nextItem, {
         aspectRatio: payload.aspectRatio || nextItem.aspectRatio,
+        durationSec: payload.durationSec || nextItem.durationSec,
         numFrames: payload.numFrames || nextItem.numFrames,
         frameRate: payload.frameRate || nextItem.frameRate,
       });
@@ -3507,11 +4415,24 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'GET' && pathname === '/api/jianying-draft-targets') {
+      const roots = findJianyingDraftRoots();
+      const detectedRoot = roots[0]?.path || '';
+      const drafts = detectedRoot ? listJianyingDrafts(detectedRoot).slice(0, 80) : [];
+      writeJson(res, 200, {
+        success: true,
+        detectedRoot,
+        roots,
+        drafts,
+      });
+      return;
+    }
+
     if (req.method === 'POST' && pathname === '/api/export-jianying-draft') {
       const body = await readBody(req);
       const payload = JSON.parse(body || '{}');
-      const result = writeJianyingDraft(payload);
-      appendCutLog(`剪映草稿已导出：${result.draftDir}`);
+      const result = writeJianyingDraftExport(payload);
+      appendCutLog(`Jianying draft exported: ${result.draftDir}${result.autoPlaced ? ' (auto placed)' : ''}${result.fallbackUsed ? ` (fallback: ${result.fallbackReason})` : ''}`);
       writeJson(res, 200, { success: true, ...result });
       return;
     }
@@ -3609,6 +4530,7 @@ if (process.env.JAYGO_CUT_TEST_EXPORTS === '1') {
   module.exports = {
     buildImagePlanPrompt,
     buildVideoPlanPrompt,
+    formatExistingRangesForPrompt,
     sanitizeImagePlanItems,
     sanitizeVideoPlanItems,
     buildFallbackImagePlan,
@@ -3619,8 +4541,17 @@ if (process.env.JAYGO_CUT_TEST_EXPORTS === '1') {
     getVideoConfig,
     imageSizeToMiniMaxAspectRatio,
     imageSizeToOpenAiSize,
+    imageSizeToAgnesSize,
+    videoDurationToGenerationParams,
+    autoImageCountForUnits,
     buildLlmPrompt,
     buildChatAdjustPrompt,
+    buildJianyingFullDraftSpec,
+    findJianyingDraftRoots,
+    listJianyingDrafts,
+    resolveJianyingExportTarget,
+    writeJianyingFullDraft,
+    writeJianyingDraftExport,
     writeJianyingDraft,
     writeReviewStateBackup,
     getCutPreflight,

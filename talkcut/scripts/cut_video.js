@@ -198,7 +198,52 @@ function parseFraction(value) {
   return num / den;
 }
 
-function validateOutputFile(outputPath, expectedDurationSec) {
+function normalizeFrameRate(value, fallback = 30) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  return Math.max(1, Math.min(120, parsed));
+}
+
+function formatFpsForFilter(frameRate) {
+  const fps = normalizeFrameRate(frameRate, 30);
+  return Number.isInteger(fps) ? String(fps) : fps.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function detectSourceFrameRate(inputPath, fallback = 30) {
+  try {
+    const info = probeMediaInfo(inputPath);
+    const video = info.streams.find(stream => stream.codec_type === 'video') || {};
+    const fps = parseFraction(video.avg_frame_rate) || parseFraction(video.r_frame_rate);
+    return normalizeFrameRate(fps, fallback);
+  } catch (e) {
+    return fallback;
+  }
+}
+
+function snapTimeToFrameGrid(value, frameRate, mode = 'nearest') {
+  const fps = normalizeFrameRate(frameRate, 30);
+  const frames = Number(value) * fps;
+  const snapped = mode === 'floor'
+    ? Math.floor(frames)
+    : mode === 'ceil'
+      ? Math.ceil(frames)
+      : Math.round(frames);
+  return Math.max(0, snapped / fps);
+}
+
+function snapSegmentsToFrameGrid(segments, frameRate, duration, minKeepSec = 0.04) {
+  const snapped = [];
+  for (const seg of segments) {
+    const start = snapTimeToFrameGrid(seg.start, frameRate, 'nearest');
+    const end = Math.min(duration, snapTimeToFrameGrid(seg.end, frameRate, 'nearest'));
+    if (end - start >= minKeepSec) {
+      snapped.push({ start, end });
+    }
+  }
+  return snapped;
+}
+
+function validateOutputFile(outputPath, expectedDurationSec, expectedFrameRate = 30) {
   if (!fs.existsSync(outputPath)) {
     throw new Error(`导出文件不存在: ${outputPath}`);
   }
@@ -252,10 +297,9 @@ function validateOutputFile(outputPath, expectedDurationSec) {
   }
 
   const frameRate = parseFraction(video.avg_frame_rate) || parseFraction(video.r_frame_rate);
-  if (frameRate > 0 && Math.abs(frameRate - 30) > 0.05) {
-    warnings.push(`导出帧率为 ${frameRate.toFixed(3)}fps（期望 30fps）`);
+  if (frameRate > 0 && expectedFrameRate > 0 && Math.abs(frameRate - expectedFrameRate) > 0.08) {
+    warnings.push(`导出帧率为 ${frameRate.toFixed(3)}fps（期望 ${expectedFrameRate.toFixed(3)}fps）`);
   }
-
   try {
     execSync(`${shellQuote(FFMPEG_BIN)} -v error -i ${shellQuote(fileArg(outputPath))} -f null -`, { stdio: 'pipe' });
   } catch (err) {
@@ -441,14 +485,15 @@ function loadMediaOverlays(overlayJson, deletedSegments, timelineOffsetSec, expe
   return overlays.slice(0, 50);
 }
 
-function buildOverlayVisualFilter(inputLabel, overlay, width, height, duration) {
+function buildOverlayVisualFilter(inputLabel, overlay, width, height, duration, frameRate = 30) {
   const base = `[${inputLabel}:v]`;
   const effect = overlay.type === 'image' ? sanitizeMotionEffect(overlay.motionEffect) : 'none';
   const safeDuration = Math.max(0.2, Number(duration) || 0.2).toFixed(3);
   const w = evenDimension(width);
   const h = evenDimension(height);
+  const fpsFilter = `fps=${formatFpsForFilter(frameRate)}`;
   if (overlay.type !== 'image' || effect === 'none') {
-    return `${base}scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setsar=1,format=rgba`;
+    return `${base}${fpsFilter},scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setsar=1,format=rgba`;
   }
 
   if (effect === 'zoom-in' || effect === 'zoom-out') {
@@ -456,6 +501,7 @@ function buildOverlayVisualFilter(inputLabel, overlay, width, height, duration) 
       ? `(1+0.06*t/${safeDuration})`
       : `(1.06-0.06*t/${safeDuration})`;
     return base + [
+      fpsFilter,
       `scale=w='ceil(${w}*${scaleExpr}/2)*2':h='ceil(${h}*${scaleExpr}/2)*2':eval=frame:force_original_aspect_ratio=increase`,
       `crop=${w}:${h}:x='(iw-ow)/2':y='(ih-oh)/2'`,
       'setsar=1',
@@ -476,6 +522,7 @@ function buildOverlayVisualFilter(inputLabel, overlay, width, height, duration) 
       ? `(ih-oh)*(1-t/${safeDuration})`
       : '(ih-oh)/2';
   return base + [
+    fpsFilter,
     `scale=${panW}:${panH}:force_original_aspect_ratio=increase`,
     `crop=${w}:${h}:x='${xExpr}':y='${yExpr}'`,
     'setsar=1',
@@ -490,6 +537,7 @@ function runFfmpegOverlay(baseInputPath, overlays, tempOutputPath) {
   const video = info.streams.find(stream => stream.codec_type === 'video') || {};
   const width = Math.max(2, Number(video.width) || 1920);
   const height = Math.max(2, Number(video.height) || 1080);
+  const frameRate = normalizeFrameRate(parseFraction(video.avg_frame_rate) || parseFraction(video.r_frame_rate), 30);
   const exportConfig = readEnvConfig();
   const exportCrf = parseNumberInRange(configValue(exportConfig, 'CUT_EXPORT_CRF', '16'), 16, 0, 35);
   const exportPreset = parseEncoderPreset(configValue(exportConfig, 'CUT_EXPORT_PRESET', 'slow'), 'slow');
@@ -509,7 +557,7 @@ function runFfmpegOverlay(baseInputPath, overlays, tempOutputPath) {
     const fade = Math.min(0.18, Math.max(0, duration / 4));
     const outLabel = index === overlays.length - 1 ? 'vout' : `base${index + 1}`;
     const fadeOutStart = Math.max(0, duration - fade);
-    let overlayFilter = buildOverlayVisualFilter(inputIndex, overlay, width, height, duration);
+    let overlayFilter = buildOverlayVisualFilter(inputIndex, overlay, width, height, duration, frameRate);
     if (fade > 0.02) {
       overlayFilter += `,fade=t=in:st=0:d=${fade.toFixed(3)}:alpha=1,fade=t=out:st=${fadeOutStart.toFixed(3)}:d=${fade.toFixed(3)}:alpha=1`;
     }
@@ -705,10 +753,17 @@ const CUT_EXPAND_MS = parseMs(configValue(envConfig, 'CUT_EXPAND_MS', '0'), 0);
 const CUT_KEEP_PADDING_MS = parseMs(configValue(envConfig, 'CUT_KEEP_PADDING_MS', '0'), 0);
 const CUT_MIN_DELETE_MS = parseMs(configValue(envConfig, 'CUT_MIN_DELETE_MS', '200'), 200);
 const CROSSFADE_MS = parseMs(configValue(envConfig, 'CROSSFADE_MS', '30'), 30);
+const sourceFrameRate = detectSourceFrameRate(INPUT, 30);
+const configuredExportFps = configValue(envConfig, 'CUT_EXPORT_FPS', '');
+const outputFrameRate = configuredExportFps
+  ? normalizeFrameRate(configuredExportFps, sourceFrameRate)
+  : sourceFrameRate;
+const outputFpsFilter = formatFpsForFilter(outputFrameRate);
 const expandSec = CUT_EXPAND_MS / 1000;
 const keepPaddingSec = CUT_KEEP_PADDING_MS / 1000;
 const minDeleteSec = CUT_MIN_DELETE_MS / 1000;
 const crossfadeSec = CROSSFADE_MS / 1000;
+console.log(`导出帧率: ${outputFpsFilter}fps（源视频 ${formatFpsForFilter(sourceFrameRate)}fps）`);
 
 console.log(`⚙️ 优化参数: 边界保留=${CUT_KEEP_PADDING_MS}ms, 最小删除=${CUT_MIN_DELETE_MS}ms, 额外扩展=${CUT_EXPAND_MS}ms, 音频接缝淡化=${CROSSFADE_MS}ms`);
 
@@ -777,7 +832,7 @@ if (cursor < duration) {
   keepSegs.push({ start: cursor, end: duration });
 }
 
-const refinedKeepSegs = refineKeepSegments(INPUT, keepSegs, {
+let refinedKeepSegs = refineKeepSegments(INPUT, keepSegs, {
   duration,
   keepPaddingSec,
   detectSilenceSec: 0.15,
@@ -786,6 +841,7 @@ const refinedKeepSegs = refineKeepSegments(INPUT, keepSegs, {
   silenceNoiseDb: '-35dB',
   minKeepSec: 0.12,
 });
+refinedKeepSegs = snapSegmentsToFrameGrid(refinedKeepSegs, outputFrameRate, duration, 1 / outputFrameRate);
 
 if (!refinedKeepSegs.length) {
   throw new Error('删除片段覆盖了全部内容，无法导出空视频。请至少保留一段内容。');
@@ -811,7 +867,7 @@ for (let i = 0; i < refinedKeepSegs.length; i++) {
 
 filters.push(`${concatInputs}concat=n=${refinedKeepSegs.length}:v=1:a=1[outv][outa]`);
 
-filters.push('[outv]fps=30,setsar=1,format=yuv420p[vfinal]');
+filters.push(`[outv]fps=${outputFpsFilter},setsar=1,format=yuv420p[vfinal]`);
 // 不使用 async 拉伸，避免长视频多段拼接后产生累计音画漂移
 filters.push('[outa]aresample=48000:first_pts=0,pan=stereo|c0=c0|c1=c0[afinal]');
 
@@ -827,7 +883,7 @@ console.log('\n✂️ 执行 FFmpeg 精确剪辑...');
 try {
   runFfmpegWithFilterScript(INPUT, filterCmd, tempOutput);
 
-  validateOutputFile(tempOutput, expectedDuration);
+  validateOutputFile(tempOutput, expectedDuration, outputFrameRate);
   let finalTempOutput = tempOutput;
   const overlays = loadMediaOverlays(OVERLAY_JSON, mergedSegs, timelineOffsetSec, expectedDuration);
   if (overlays.length) {
@@ -838,7 +894,7 @@ try {
     finalTempOutput = overlayOutput;
   }
 
-  const validated = validateOutputFile(finalTempOutput, expectedDuration);
+  const validated = validateOutputFile(finalTempOutput, expectedDuration, outputFrameRate);
   fs.renameSync(finalTempOutput, path.resolve(OUTPUT));
   ensureVisibleInFinder(OUTPUT);
   console.log(`✅ 已保存: ${OUTPUT}`);

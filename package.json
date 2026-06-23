@@ -1,6 +1,6 @@
 {
   "name": "jaygo-cut",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "private": true,
   "description": "Jaygo Cut desktop app",
   "author": "Jaygo Team",
@@ -24,7 +24,8 @@
     "productName": "Jaygo Cut",
     "asarUnpack": [
       "electron/bin/**/*",
-      "electron/assets/**/*"
+      "electron/assets/**/*",
+      "node_modules/capcut-cli/**/*"
     ],
     "directories": {
       "output": "dist"
@@ -71,6 +72,7 @@
     ]
   },
   "dependencies": {
+    "capcut-cli": "^0.11.3",
     "electron-updater": "^6.8.3"
   }
 }

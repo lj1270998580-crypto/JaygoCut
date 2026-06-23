@@ -99,6 +99,7 @@ const DEFAULT_OUTPUT_ROOT = app.isPackaged
 const AGNES_API_BASE_URL = 'https://apihub.agnes-ai.com/v1';
 const AGNES_IMAGE_MODEL = 'agnes-image-2.1-flash';
 const AGNES_VIDEO_MODEL = 'agnes-video-v2.0';
+const REVIEW_TEMPLATE_VERSION = 'jaygo-review-template-20260622-compact-review-layout';
 
 const DEFAULT_SETTINGS = {
   asrEngine: 'volcengine',
@@ -525,6 +526,7 @@ function buildRuntimeEnv(settings) {
   const exportQuality = normalizeExportQuality(settings.exportQuality);
   const exportPreset = EXPORT_QUALITY_PRESETS[exportQuality] || EXPORT_QUALITY_PRESETS[DEFAULT_EXPORT_QUALITY];
   return {
+    JAYGO_ENV_FILE: getEnvFilePath(),
     VOLCENGINE_API_KEY: settings.volcengineApiKey || '',
     DASHSCOPE_API_KEY: settings.dashscopeApiKey || '',
     MIMO_API_KEY: settings.mimoApiKey || '',
@@ -550,10 +552,19 @@ function buildRuntimeEnv(settings) {
     LLM_TEMPERATURE: String(Number.isFinite(Number(settings.llmTemperature)) ? Number(settings.llmTemperature) : 0.2),
     LLM_PROVIDER: normalizeLlmProviderKey(settings.llmProvider),
     IMAGE_API_BASE_URL: String(settings.imageApiBaseUrl || '').trim(),
-    IMAGE_API_KEY: String(settings.imageApiKey || settings.llmApiKey || '').trim(),
+    IMAGE_API_KEY: String(
+      settings.imageApiKey
+      || ((String(settings.imageApiBaseUrl || '').toLowerCase().includes('agnes') && !String(llmBase || '').toLowerCase().includes('agnes')) ? '' : settings.llmApiKey)
+      || '',
+    ).trim(),
     IMAGE_MODEL: String(settings.imageModel || '').trim(),
     VIDEO_API_BASE_URL: String(settings.videoApiBaseUrl || settings.imageApiBaseUrl || '').trim(),
-    VIDEO_API_KEY: String(settings.videoApiKey || settings.imageApiKey || settings.llmApiKey || '').trim(),
+    VIDEO_API_KEY: String(
+      settings.videoApiKey
+      || settings.imageApiKey
+      || ((String(settings.videoApiBaseUrl || settings.imageApiBaseUrl || '').toLowerCase().includes('agnes') && !String(llmBase || '').toLowerCase().includes('agnes')) ? '' : settings.llmApiKey)
+      || '',
+    ).trim(),
     VIDEO_MODEL: String(settings.videoModel || '').trim(),
     TERM_GLOSSARY: String(settings.termGlossary || ''),
   };
@@ -1193,10 +1204,12 @@ async function syncSkillEnv(settings) {
       Number.isFinite(Number(settings.llmTemperature)) ? Number(settings.llmTemperature) : DEFAULT_SETTINGS.llmTemperature,
     );
     current.IMAGE_API_BASE_URL = String(settings.imageApiBaseUrl || '');
-    current.IMAGE_API_KEY = String(settings.imageApiKey || settings.llmApiKey || '');
+    const imageCanReuseLlm = !(String(settings.imageApiBaseUrl || '').toLowerCase().includes('agnes') && !String(settings.llmApiBaseUrl || '').toLowerCase().includes('agnes'));
+    const videoCanReuseLlm = !(String(settings.videoApiBaseUrl || settings.imageApiBaseUrl || '').toLowerCase().includes('agnes') && !String(settings.llmApiBaseUrl || '').toLowerCase().includes('agnes'));
+    current.IMAGE_API_KEY = String(settings.imageApiKey || (imageCanReuseLlm ? settings.llmApiKey : '') || '');
     current.IMAGE_MODEL = String(settings.imageModel || '');
     current.VIDEO_API_BASE_URL = String(settings.videoApiBaseUrl || settings.imageApiBaseUrl || '');
-    current.VIDEO_API_KEY = String(settings.videoApiKey || settings.imageApiKey || settings.llmApiKey || '');
+    current.VIDEO_API_KEY = String(settings.videoApiKey || settings.imageApiKey || (videoCanReuseLlm ? settings.llmApiKey : '') || '');
     current.VIDEO_MODEL = String(settings.videoModel || '');
     current.TERM_GLOSSARY = encodeMultilineEnvValue(settings.termGlossary || '');
 
@@ -2234,6 +2247,16 @@ async function rebuildReviewHtml(reviewDir, runtimeEnv) {
   );
 }
 
+async function reviewHtmlNeedsRebuild(reviewDir) {
+  const htmlPath = path.join(reviewDir || '', 'review.html');
+  try {
+    const html = await fsp.readFile(htmlPath, 'utf8');
+    return !html.includes(REVIEW_TEMPLATE_VERSION);
+  } catch {
+    return true;
+  }
+}
+
 async function waitForReviewServerReady(port) {
   const url = `http://localhost:${port}/api/runtime-info`;
   const started = Date.now();
@@ -2270,7 +2293,8 @@ async function ensureActiveReviewServer() {
     throw new Error('审核服务上下文不完整，请重新执行完整流程');
   }
 
-  if (await isUrlReady(activeTask.reviewUrl)) {
+  const needsTemplateRefresh = await reviewHtmlNeedsRebuild(activeTask.reviewDir);
+  if (!needsTemplateRefresh && await isUrlReady(activeTask.reviewUrl)) {
     return activeTask.reviewUrl;
   }
 

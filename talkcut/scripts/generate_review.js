@@ -6,6 +6,8 @@ const { normalizeSelectedIndices } = require('./auto_selected_utils');
 const { analyzeTranscriptQuality } = require('./transcript_quality');
 const { parseTermGlossary } = require('./term_glossary');
 
+const REVIEW_TEMPLATE_VERSION = 'jaygo-review-template-20260622-compact-review-layout';
+
 let subtitlesFile = process.argv[2] || 'subtitles_words.json';
 const autoSelectedFile = process.argv[3] || 'auto_selected.json';
 const inputAudio = process.argv[4] || 'audio.wav';
@@ -240,7 +242,8 @@ const html = `<!doctype html>
     .toolbar-card > #audio,
     .toolbar-card > .wave-wrap,
     .toolbar-card > .wave-toolbar,
-    .toolbar-card > .primary-actions {
+    .toolbar-card > .primary-actions,
+    .toolbar-card > .toolbar-status-grid {
       grid-column: 1;
       min-width: 0;
     }
@@ -267,6 +270,11 @@ const html = `<!doctype html>
       background: #020617;
       box-shadow: 0 14px 36px rgba(0, 0, 0, 0.26);
     }
+    .video-preview-frame {
+      position: relative;
+      background: #000;
+      overflow: hidden;
+    }
     .video-preview-panel[hidden] {
       display: none;
     }
@@ -277,6 +285,81 @@ const html = `<!doctype html>
       max-height: 242px;
       object-fit: contain;
       background: #000;
+    }
+    .composite-preview-overlay {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      background: rgba(0, 0, 0, 0.02);
+    }
+    .composite-preview-overlay[hidden] {
+      display: none;
+    }
+    .composite-preview-overlay img,
+    .composite-preview-overlay video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform-origin: center center;
+    }
+    #sourceVideo,
+    .composite-preview-overlay video {
+      transform: none !important;
+    }
+    .preview-action-stack {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      justify-content: flex-end;
+      z-index: 2;
+      pointer-events: auto;
+    }
+    .preview-action-stack button,
+    .image-card-actions .secondary-action {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: color-mix(in oklab, var(--card-bg) 82%, transparent);
+      color: var(--text-main);
+      padding: 5px 10px;
+      font-size: 12px;
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+    }
+    .media-card-controls {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 6px;
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+    .media-card-controls input {
+      width: 84px;
+      min-width: 0;
+      padding: 5px 7px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--input-bg);
+      color: var(--text-main);
+    }
+    .preview-retry-button {
+      pointer-events: auto;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: color-mix(in oklab, var(--btn-primary-bg) 82%, transparent);
+      color: var(--btn-primary-text);
+      padding: 6px 12px;
+      font-size: 12px;
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.24);
     }
     .video-preview-meta {
       display: flex;
@@ -296,6 +379,7 @@ const html = `<!doctype html>
     }
     body.review-focus-mode .wave-wrap,
     body.review-focus-mode .wave-toolbar,
+    body.review-focus-mode .wave-zoom-control,
     body.review-focus-mode .video-preview-panel,
     body.review-focus-mode .tool-fold,
     body.review-focus-mode .floating-toggle,
@@ -344,9 +428,10 @@ const html = `<!doctype html>
     }
     .floating-side {
       position: fixed;
-      top: 96px;
+      top: 72px;
       width: clamp(300px, 19vw, 380px);
-      max-height: calc(100vh - 116px);
+      height: calc(100vh - 88px);
+      max-height: calc(100vh - 88px);
       z-index: 1200;
       display: flex;
       opacity: 0;
@@ -357,14 +442,21 @@ const html = `<!doctype html>
       overflow-y: auto;
       overscroll-behavior: contain;
       scrollbar-gutter: stable;
+      scrollbar-width: thin;
     }
     .floating-side.left {
       left: max(8px, calc((100vw - 1240px) / 2 - 410px));
       transform: translateX(-8px);
     }
     .floating-side.image-side {
-      width: clamp(340px, 24vw, 460px);
-      padding-right: 12px;
+      width: clamp(440px, 27vw, 540px);
+      padding-right: 10px;
+      overflow-y: scroll;
+      scrollbar-gutter: stable both-edges;
+      scrollbar-color: color-mix(in oklab, var(--text-muted) 62%, transparent) color-mix(in oklab, var(--log-bg) 64%, transparent);
+    }
+    .floating-side.left.image-side {
+      left: max(10px, calc((100vw - 1240px) / 2 - 550px));
     }
     .floating-side.right {
       right: max(8px, calc((100vw - 1240px) / 2 - 410px));
@@ -401,10 +493,30 @@ const html = `<!doctype html>
     .floating-toggle.right {
       right: max(8px, calc((100vw - 1240px) / 2 - 410px));
     }
+    .floating-toggle.right.log-toggle {
+      top: calc(var(--floating-toggle-top) + 62px);
+    }
     .floating-toggle.active {
       background: var(--btn-primary-bg);
       color: var(--btn-primary-text);
       border-color: color-mix(in oklab, var(--btn-primary-bg) 66%, var(--border));
+    }
+    .floating-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 18px;
+      height: 18px;
+      margin-left: 6px;
+      padding: 0 5px;
+      border-radius: 999px;
+      background: var(--btn-warn-bg);
+      color: var(--btn-warn-text);
+      font-size: 11px;
+      line-height: 1;
+    }
+    .floating-badge[hidden] {
+      display: none;
     }
     .floating-toggle.hidden {
       opacity: 0;
@@ -415,6 +527,8 @@ const html = `<!doctype html>
       display: flex;
       align-items: center;
       gap: 6px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
     }
     .panel-close {
       padding: 4px 8px;
@@ -444,6 +558,98 @@ const html = `<!doctype html>
     }
     .compact-row .meta {
       white-space: nowrap;
+    }
+    .media-mode-tabs {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin: 2px 0 8px;
+      padding: 4px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: color-mix(in oklab, var(--log-bg) 72%, transparent);
+    }
+    .media-mode-tab {
+      min-height: 34px;
+      padding: 6px 10px;
+      border-radius: 9px;
+      font-size: 13px;
+      background: transparent;
+      color: var(--text-muted);
+    }
+    .media-mode-tab.active {
+      background: var(--btn-primary-bg);
+      color: var(--btn-primary-text);
+      box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
+    }
+    .media-mode-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      min-height: 0;
+    }
+    .media-mode-panel[hidden] {
+      display: none !important;
+    }
+    .media-panel-actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+    }
+    .media-panel-actions.single {
+      grid-template-columns: 1fr;
+    }
+    .media-panel-actions button {
+      width: 100%;
+      min-height: 30px;
+      padding: 4px 8px;
+      font-size: 12px;
+      border-radius: 8px;
+    }
+    .media-control-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px 8px;
+    }
+    .media-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+    .media-field .meta {
+      font-size: 12px;
+      line-height: 1.15;
+    }
+    .media-field select,
+    .image-side .compact-row select {
+      width: 100%;
+      min-width: 0;
+    }
+    .image-side .compact-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: center;
+    }
+    .image-side select {
+      width: 100%;
+      min-width: 0;
+    }
+    .image-side > .panel-header {
+      align-items: flex-start;
+    }
+    .image-side > .panel-header .panel-actions {
+      flex: 1 1 auto;
+      justify-content: flex-end;
+      gap: 4px;
+    }
+    .image-side > .panel-header .panel-actions button {
+      flex: 0 0 auto;
+      padding: 4px 8px;
+      min-height: 26px;
+      min-width: 0;
+      border-radius: 7px;
+      font-size: 12px;
     }
     #publishStyle {
       border: 1px solid var(--border);
@@ -491,27 +697,84 @@ const html = `<!doctype html>
       display: flex;
       flex-direction: column;
       gap: 10px;
-      overflow-y: auto;
-      min-height: 260px;
+      overflow-y: visible;
+      min-height: 0;
       padding-right: 2px;
+      scrollbar-width: thin;
+      overscroll-behavior: contain;
+    }
+    #imageCardList {
+      margin-bottom: 14px;
+    }
+    .floating-side,
+    #imageCardList,
+    #videoAssetList,
+    #publishTitlesList,
+    #publishKeywords,
+    #llmChatHistory {
+      scrollbar-color: color-mix(in oklab, var(--text-muted) 38%, transparent) transparent;
+    }
+    .floating-side::-webkit-scrollbar,
+    #imageCardList::-webkit-scrollbar,
+    #videoAssetList::-webkit-scrollbar,
+    #publishTitlesList::-webkit-scrollbar,
+    #publishKeywords::-webkit-scrollbar,
+    #llmChatHistory::-webkit-scrollbar {
+      width: 7px;
+      height: 7px;
+    }
+    .floating-side::-webkit-scrollbar-track,
+    #imageCardList::-webkit-scrollbar-track,
+    #videoAssetList::-webkit-scrollbar-track,
+    #publishTitlesList::-webkit-scrollbar-track,
+    #publishKeywords::-webkit-scrollbar-track,
+    #llmChatHistory::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .floating-side::-webkit-scrollbar-thumb,
+    #imageCardList::-webkit-scrollbar-thumb,
+    #videoAssetList::-webkit-scrollbar-thumb,
+    #publishTitlesList::-webkit-scrollbar-thumb,
+    #publishKeywords::-webkit-scrollbar-thumb,
+    #llmChatHistory::-webkit-scrollbar-thumb {
+      border-radius: 999px;
+      background: color-mix(in oklab, var(--text-muted) 32%, transparent);
     }
     .media-video-section {
-      border-top: 1px dashed var(--border);
-      margin-top: 14px;
-      padding-top: 12px;
+      border: 1px solid color-mix(in oklab, var(--accent) 32%, var(--border));
+      border-radius: 12px;
+      margin-top: 2px;
+      margin-bottom: 8px;
+      padding: 8px;
+      clear: both;
+      position: relative;
+      background: color-mix(in oklab, var(--card-bg) 84%, var(--accent) 7%);
     }
     .image-card {
       border: 1px solid var(--border);
       border-radius: 10px;
-      padding: 8px;
+      padding: 10px;
       background: color-mix(in oklab, var(--card-bg) 88%, var(--token-gap-bg) 12%);
       display: flex;
       flex-direction: column;
-      gap: 7px;
+      gap: 8px;
+      overflow: visible;
+      position: relative;
+    }
+    .video-asset-card {
+      border-color: color-mix(in oklab, var(--accent) 42%, var(--border));
+      background: color-mix(in oklab, var(--card-bg) 82%, var(--accent) 10%);
+    }
+    .video-asset-card .image-preview {
+      aspect-ratio: 16 / 9;
     }
     .image-preview {
+      position: relative;
       width: 100%;
       aspect-ratio: 1 / 1;
+      height: clamp(220px, 30vh, 320px);
+      max-height: none;
+      min-height: 220px;
       border-radius: 8px;
       border: 1px dashed var(--border);
       background: var(--log-bg);
@@ -522,13 +785,44 @@ const html = `<!doctype html>
       color: var(--text-muted);
       font-size: 12px;
       text-align: center;
-      padding: 8px;
+      padding: 6px;
+    }
+    .floating-side.image-side::-webkit-scrollbar {
+      width: 10px;
+    }
+    .floating-side.image-side::-webkit-scrollbar-track {
+      border-radius: 999px;
+      background: color-mix(in oklab, var(--log-bg) 64%, transparent);
+    }
+    .floating-side.image-side::-webkit-scrollbar-thumb {
+      border-radius: 999px;
+      background: color-mix(in oklab, var(--text-muted) 58%, transparent);
     }
     .image-preview img {
       width: 100%;
       height: 100%;
-      object-fit: cover;
+      object-fit: contain;
       display: block;
+    }
+    .image-preview video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+    .media-dimension-badge {
+      position: absolute;
+      right: 8px;
+      bottom: 8px;
+      z-index: 1;
+      border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+      border-radius: 999px;
+      background: rgba(2, 6, 23, 0.72);
+      color: #f8fafc;
+      font-size: 11px;
+      line-height: 1;
+      padding: 5px 7px;
+      backdrop-filter: blur(4px);
     }
     .image-card-title {
       font-weight: 700;
@@ -536,25 +830,83 @@ const html = `<!doctype html>
       line-height: 1.35;
       color: var(--text-main);
     }
+    .media-card-meta-line {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 10px;
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .media-card-meta-line span {
+      white-space: nowrap;
+    }
     .image-card-prompt {
       font-size: 12px;
       line-height: 1.45;
       color: var(--text-muted);
-      max-height: 72px;
+      max-height: 54px;
       overflow-y: auto;
       white-space: pre-wrap;
       word-break: break-word;
     }
+    .media-details {
+      border: 1px dashed color-mix(in oklab, var(--border) 78%, transparent);
+      border-radius: 8px;
+      background: color-mix(in oklab, var(--log-bg) 72%, transparent);
+      overflow: hidden;
+    }
+    .media-details summary {
+      cursor: pointer;
+      list-style: none;
+      padding: 6px 8px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-muted);
+      user-select: none;
+    }
+    .media-details summary::-webkit-details-marker {
+      display: none;
+    }
+    .media-details summary::before {
+      content: "\\25B6";
+      display: inline-block;
+      margin-right: 5px;
+      font-size: 10px;
+      transform: translateY(-1px);
+    }
+    .media-details[open] summary::before {
+      content: "\\25BE";
+    }
+    .media-details-body {
+      border-top: 1px dashed color-mix(in oklab, var(--border) 65%, transparent);
+      padding: 7px 8px;
+      max-height: 150px;
+      overflow-y: auto;
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
     .image-card-actions {
-      display: flex;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 6px;
-      flex-wrap: wrap;
+      align-items: stretch;
     }
     .image-card-actions button,
     .image-card-actions a {
-      padding: 5px 8px;
+      padding: 4px 7px;
       font-size: 12px;
       border-radius: 8px;
+      min-height: 28px;
+      min-width: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      white-space: nowrap;
     }
     .keyword-chip {
       border: 1px solid var(--border);
@@ -615,54 +967,86 @@ const html = `<!doctype html>
       flex-direction: column;
       min-height: 120px;
     }
+    .log-side {
+      height: min(62vh, 560px);
+      max-height: calc(100vh - 168px);
+      top: 150px;
+    }
+    .log-side #logs {
+      max-height: none;
+      min-height: 220px;
+    }
     .fold-panel {
       border: 1px dashed var(--border);
       border-radius: 10px;
-      padding: 8px 10px;
+      padding: 6px 8px;
       background: color-mix(in oklab, var(--card-bg) 94%, var(--token-gap-bg) 6%);
     }
     .fold-panel summary {
       cursor: pointer;
-      font-size: 13px;
+      font-size: 12.5px;
       font-weight: 600;
       color: var(--text-main);
       user-select: none;
       outline: none;
+      line-height: 1.35;
     }
     .fold-panel[open] summary {
-      margin-bottom: 8px;
+      margin-bottom: 6px;
     }
     .tool-fold {
-      margin-top: 8px;
+      margin-top: 6px;
+      scrollbar-width: thin;
+    }
+    .tool-fold[open] {
+      max-height: min(235px, 32vh);
+      overflow-y: auto;
+      scrollbar-gutter: stable;
     }
     .tool-actions {
-      margin-bottom: 8px;
+      margin-bottom: 4px;
     }
-    .export-actions select,
-    .export-actions input {
-      height: 34px;
+    .filler-word-input {
+      flex: 1 1 180px;
+      min-width: 140px;
+      height: 30px;
       border: 1px solid var(--border);
       border-radius: 8px;
       background: var(--input-bg);
       color: var(--text-main);
-      padding: 5px 8px;
-      font-size: 13px;
+      padding: 4px 7px;
+      font-size: 12.5px;
     }
+    .export-actions select,
+    .export-actions input {
+      height: 30px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--input-bg);
+      color: var(--text-main);
+      padding: 4px 7px;
+      font-size: 12.5px;
+    }
+    .export-actions #jianyingDraftRoot,
     .export-actions #jianyingTemplatePath {
-      flex: 1 1 260px;
-      min-width: 220px;
+      flex: 1 1 245px;
+      min-width: 210px;
+    }
+    .export-actions #jianyingExportMode {
+      flex: 0 1 185px;
+      min-width: 160px;
     }
     .replace-actions {
       align-items: stretch;
     }
     .replace-actions input {
-      height: 34px;
+      height: 30px;
       border: 1px solid var(--border);
       border-radius: 8px;
       background: var(--input-bg);
       color: var(--text-main);
-      padding: 5px 8px;
-      font-size: 13px;
+      padding: 4px 7px;
+      font-size: 12.5px;
     }
     .replace-actions #replaceFindText,
     .replace-actions #replaceWithText {
@@ -739,17 +1123,87 @@ const html = `<!doctype html>
       opacity: 0.35;
     }
     .primary-actions {
-      margin-top: 10px;
+      margin-top: 8px;
+      gap: 7px;
+      align-items: center;
     }
-    .primary-actions #selectionStats {
-      flex: 1 1 520px;
-      min-width: 260px;
+    .primary-actions button {
+      padding: 6px 9px;
+      border-radius: 8px;
+      font-size: 12.5px;
+      white-space: nowrap;
+    }
+    .primary-actions .always-on-toggles {
+      display: inline-flex;
+      gap: 5px;
+      align-items: center;
+      padding-left: 4px;
+      border-left: 1px solid var(--border);
+    }
+    .primary-actions .toggle-pill {
+      min-width: 0;
+      padding: 5px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      color: var(--text-muted);
+      background: color-mix(in oklab, var(--card-bg) 82%, var(--btn-bg) 18%);
+      border: 1px solid var(--border);
+    }
+    .primary-actions .toggle-pill[aria-pressed="true"] {
+      color: var(--btn-primary-text);
+      background: var(--btn-primary-bg);
+      border-color: color-mix(in oklab, var(--btn-primary-bg) 70%, var(--border));
+    }
+    .primary-actions .compact-select,
+    .compact-select {
+      height: 31px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--input-bg);
+      color: var(--text-main);
+      padding: 4px 7px;
+      font-size: 12.5px;
     }
     .primary-actions #status {
-      flex: 0 1 auto;
+      flex: 1 1 140px;
+      min-width: 120px;
+      max-width: 260px;
       margin-top: 0;
       min-height: 0;
       white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      border-left: 1px solid var(--border);
+      padding-left: 8px;
+    }
+    .toolbar-status-grid {
+      display: flex;
+      gap: 7px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: -2px;
+    }
+    .status-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      min-height: 25px;
+      padding: 3px 8px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: color-mix(in oklab, var(--card-bg) 88%, var(--token-gap-bg) 12%);
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.2;
+    }
+    .status-chip strong {
+      color: var(--text-main);
+      font-size: 12.5px;
+      font-weight: 700;
+    }
+    .status-chip.status-chip-accent {
+      border-color: color-mix(in oklab, var(--accent) 36%, var(--border));
+      background: color-mix(in oklab, var(--accent) 12%, var(--card-bg));
     }
     .compact-status {
       display: flex;
@@ -763,9 +1217,77 @@ const html = `<!doctype html>
       margin-top: 0;
       min-height: 0;
     }
+    .tool-tabs {
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+      margin: 0 0 7px;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      padding-bottom: 3px;
+      background: color-mix(in oklab, var(--card-bg) 92%, var(--token-gap-bg) 8%);
+    }
+    .tool-tab {
+      padding: 4px 8px;
+      border: 1px solid var(--border);
+      background: color-mix(in oklab, var(--card-bg) 88%, var(--btn-bg) 12%);
+      color: var(--text-muted);
+      font-size: 12px;
+      border-radius: 999px;
+    }
+    .tool-tab.active {
+      border-color: color-mix(in oklab, var(--accent) 54%, var(--border));
+      background: color-mix(in oklab, var(--accent) 18%, var(--card-bg));
+      color: var(--text-main);
+    }
+    .tool-panel {
+      display: grid;
+      gap: 5px;
+    }
+    .tool-panel[hidden] {
+      display: none !important;
+    }
+    .tool-section-title {
+      display: inline-flex;
+      align-items: center;
+      min-width: 56px;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+    .utility-actions {
+      align-items: center;
+    }
+    .tool-fold button {
+      padding: 5px 8px;
+      border-radius: 7px;
+      font-size: 12px;
+    }
+    .tool-fold .meta,
+    .tool-fold label {
+      font-size: 12.5px;
+      line-height: 1.35;
+    }
+    .tool-fold input[type="number"] {
+      height: 30px;
+      padding: 4px 7px;
+      font-size: 12.5px;
+    }
+    .tool-fold .legend {
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .tool-fold .legend-item {
+      font-size: 11.5px;
+    }
+    .tool-fold .quality-warnings {
+      margin-top: 4px;
+      padding: 6px 8px;
+      font-size: 12px;
+    }
     .row {
       display: flex;
-      gap: 8px;
+      gap: 6px;
       align-items: center;
       flex-wrap: wrap;
     }
@@ -802,8 +1324,8 @@ const html = `<!doctype html>
       outline: none;
     }
     .boundary-row {
-      margin-top: 8px;
-      gap: 8px;
+      margin-top: 4px;
+      gap: 6px;
       align-items: center;
     }
     .boundary-row label {
@@ -812,8 +1334,8 @@ const html = `<!doctype html>
       gap: 5px;
     }
     .boundary-row input[type="number"] {
-      width: 72px;
-      padding: 6px 7px;
+      width: 64px;
+      padding: 5px 6px;
     }
     .quality-warnings {
       margin-top: 8px;
@@ -843,7 +1365,8 @@ const html = `<!doctype html>
       padding: 8px;
       position: relative;
       cursor: pointer;
-      overflow: hidden;
+      overflow: visible;
+      z-index: 4;
     }
     #waveCanvas {
       width: 100%;
@@ -867,6 +1390,53 @@ const html = `<!doctype html>
       gap: 8px;
       margin-top: 8px;
       flex-wrap: wrap;
+    }
+    .wave-zoom-control {
+      position: absolute;
+      right: 10px;
+      bottom: 8px;
+      z-index: 30;
+    }
+    .wave-zoom-button {
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: color-mix(in oklab, var(--card-bg) 78%, transparent);
+      color: var(--text-main);
+      font-size: 11.5px;
+      box-shadow: 0 8px 18px rgba(15, 23, 42, 0.16);
+      backdrop-filter: blur(5px);
+    }
+    .wave-zoom-popover {
+      position: absolute;
+      right: 0;
+      bottom: calc(100% + 8px);
+      width: 230px;
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: color-mix(in oklab, var(--card-bg) 94%, var(--token-gap-bg) 6%);
+      box-shadow: 0 16px 36px rgba(15, 23, 42, 0.26);
+      cursor: default;
+      z-index: 40;
+    }
+    .wave-zoom-popover[hidden] {
+      display: none;
+    }
+    .wave-zoom-popover-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .wave-zoom-popover-title button {
+      min-width: 28px;
+      padding: 3px 7px;
+      border-radius: 999px;
+      font-size: 12px;
     }
     #waveZoom {
       width: 180px;
@@ -1044,7 +1614,7 @@ const html = `<!doctype html>
         width: 300px;
       }
       .floating-side.image-side {
-        width: 340px;
+        width: min(46vw, 500px);
       }
       .floating-toggle.left {
         left: 10px;
@@ -1054,6 +1624,9 @@ const html = `<!doctype html>
       }
       .floating-toggle.right {
         right: 10px;
+      }
+      .floating-toggle.right.log-toggle {
+        top: calc(var(--floating-toggle-top) + 62px);
       }
     }
     @media (max-width: 1320px) {
@@ -1067,7 +1640,7 @@ const html = `<!doctype html>
         bottom: 10px;
       }
       .floating-side.image-side {
-        width: min(62vw, 430px);
+        width: min(86vw, 520px);
       }
       .floating-side.left {
         left: 10px;
@@ -1088,16 +1661,23 @@ const html = `<!doctype html>
       .floating-toggle.right {
         right: 10px;
       }
+      .floating-toggle.right.log-toggle {
+        top: calc(var(--floating-toggle-top) + 62px);
+      }
     }
   </style>
 </head>
   <body>
+  <input id="localImageUploadInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
   <div class="wrap">
     <div class="card toolbar-card">
         <div id="videoPreviewPanel" class="video-preview-panel" hidden>
-          <video id="sourceVideo" preload="metadata" src="/source-video" playsinline muted disablepictureinpicture></video>
+          <div class="video-preview-frame">
+            <video id="sourceVideo" preload="metadata" src="/source-video" playsinline muted disablepictureinpicture></video>
+            <div id="compositePreviewOverlay" class="composite-preview-overlay" hidden></div>
+          </div>
           <div class="video-preview-meta">
-            <span>视频预览：画面跟随审核音频，默认静音避免双声道回音。</span>
+            <span>视频预览：画面跟随审核音频；如命中素材，会叠加显示合成预览。</span>
             <span id="videoPreviewStatus">未加载</span>
           </div>
         </div>
@@ -1105,95 +1685,146 @@ const html = `<!doctype html>
         <div id="waveWrap" class="wave-wrap" title="点击波形可跳转播放位置">
           <canvas id="waveCanvas"></canvas>
           <div id="waveHint" class="wave-hint">波形加载中...</div>
-        </div>
-        <div class="wave-toolbar">
-          <span class="meta">波形缩放</span>
-          <input id="waveZoom" type="range" min="1" max="8" step="0.5" value="1" />
-          <span id="waveZoomText">1.0x</span>
+          <div id="waveZoomControl" class="wave-zoom-control">
+            <button id="btnWaveZoom" class="wave-zoom-button" type="button" title="点击展开波形缩放；也可以在波形上滚轮缩放">缩放 <span id="waveZoomText">1.0x</span></button>
+            <div id="waveZoomPopover" class="wave-zoom-popover" hidden>
+              <div class="wave-zoom-popover-title">
+                <span>波形缩放</span>
+                <button id="btnCloseWaveZoom" type="button" aria-label="收起波形缩放">×</button>
+              </div>
+              <input id="waveZoom" type="range" min="1" max="8" step="0.5" value="1" />
+              <div class="meta">提示：鼠标滚轮也可以缩放波形。</div>
+            </div>
+          </div>
         </div>
       <div class="row primary-actions">
         <button id="btnPlay" class="primary">播放/暂停</button>
         <button id="btnClear">清空选择</button>
-        <button id="btnPreviewDelete" type="button">预听当前删除点</button>
-        <button id="btnToggleVideoPreview" type="button">视频预览</button>
+        <button id="btnPreviewDelete" type="button">预听删除点</button>
         <button id="btnCut" class="warn">执行裁剪</button>
-        <button id="btnFocusReview" type="button">专注审核</button>
-        <select id="cutPrecisionMode" title="只影响最终裁剪边界，不改变审核文本时间戳">
+        <select id="cutPrecisionMode" class="compact-select" title="只影响最终裁剪边界，不改变审核文本时间戳">
           <option value="conservative">保守</option>
           <option value="standard" selected>标准</option>
           <option value="clean">干净</option>
         </select>
-        <button id="btnShowDeleteDiagnostics" type="button">删除诊断</button>
-        <button id="btnCopyDiagnostics" type="button">复制诊断信息</button>
-        <button id="btnShortcutHelp" type="button">快捷键指南</button>
+        <span class="always-on-toggles" aria-label="常用显示开关">
+          <button id="btnToggleVideoPreview" class="toggle-pill" type="button" aria-pressed="false" title="显示或隐藏右上角视频预览">视频</button>
+          <button id="btnFocusReview" class="toggle-pill" type="button" aria-pressed="false" title="进入或退出专注审核模式">专注</button>
+        </span>
         <span id="status" class="status">就绪</span>
-        <span class="meta" id="selectionStats"></span>
+      </div>
+      <div id="selectionStats" class="toolbar-status-grid" aria-live="polite" aria-label="审核统计">
+        <span class="status-chip status-chip-accent"><span>已删</span><strong id="statDeletedCount">0 段</strong></span>
+        <span class="status-chip"><span>删除时长</span><strong id="statDeletedDuration">0.00 秒</strong></span>
+        <span class="status-chip"><span>预计成片</span><strong id="statOutputDuration">0.00 秒</strong></span>
+        <span class="status-chip"><span>原时长</span><strong id="statTotalDuration">0.00 秒</strong></span>
+        <span class="status-chip"><span>模式</span><strong id="statCutMode">标准</strong></span>
       </div>
       <div id="deletePreviewInfo" class="delete-preview-info" hidden></div>
       <div id="deleteDiagnosticsPanel" class="delete-diagnostics" hidden></div>
-      <details class="fold-panel tool-fold">
-        <summary>审核工具与状态（点击展开）</summary>
-        <div class="row tool-actions">
-          <span class="meta">静音阈值(秒) >=</span>
-          <input id="silenceThreshold" type="number" min="0.2" step="0.05" value="0.2" />
-          <button id="btnSelectSilence">按阈值选择静音</button>
-          <button id="btnLlmMark">LLM标记</button>
-          <button id="btnApplyLlm">应用LLM建议</button>
-          <button id="btnClearLlm">清除LLM标记</button>
+      <details class="fold-panel tool-fold" id="reviewToolFold">
+        <summary>审核工具面板（点击展开）</summary>
+        <div class="tool-tabs" role="tablist" aria-label="审核工具分组">
+          <button class="tool-tab active" type="button" data-tool-tab="marking" aria-selected="true">智能标记</button>
+          <button class="tool-tab" type="button" data-tool-tab="export" aria-selected="false">字幕导出</button>
+          <button class="tool-tab" type="button" data-tool-tab="correction" aria-selected="false">文本纠错</button>
+          <button class="tool-tab" type="button" data-tool-tab="advanced" aria-selected="false">高级参数</button>
+          <button class="tool-tab" type="button" data-tool-tab="more" aria-selected="false">更多状态</button>
         </div>
-        <div class="row tool-actions export-actions">
-          <span class="meta">导出字幕</span>
-          <button id="btnExportSrt" type="button">导出 SRT（剪映）</button>
-          <button id="btnExportTxt" type="button">导出 TXT 文案</button>
-          <select id="jianyingSubtitlePreset" title="剪映草稿内置字幕样式">
-            <option value="clean" selected>清爽白字</option>
-            <option value="blackgold">黑金大字</option>
-            <option value="variety">综艺描边</option>
-            <option value="soft">柔和橙底</option>
-          </select>
-          <input id="jianyingTemplatePath" type="text" placeholder="自己的字幕模板草稿目录（可选）" title="填写一个剪映草稿文件夹路径，Jaygo Cut 会读取其中第一条字幕样式" />
-          <button id="btnExportJianyingDraft" type="button">导出剪映草稿</button>
-          <span id="exportStatus" class="meta"></span>
+        <div class="tool-panel" data-tool-panel="marking">
+          <div class="row tool-actions">
+            <span class="meta tool-section-title">静音</span>
+            <span class="meta">阈值(秒) &gt;=</span>
+            <input id="silenceThreshold" type="number" min="0.2" step="0.05" value="0.2" />
+            <button id="btnSelectSilence">按阈值选择静音</button>
+            <label class="meta"><input id="toggleAutoFiller" type="checkbox" checked /> 自动标记语气词</label>
+            <input id="fillerWordAllowList" class="filler-word-input" type="text" value="嗯,啊,呢,额,哦,呃,哎,哈哈" title="只自动标记这些语气词；删掉某个字后，该字不会被规则自动选中" />
+            <label class="meta"><input id="toggleAutoRepeat" type="checkbox" checked /> 自动标记重复句</label>
+          </div>
+          <div class="row tool-actions">
+            <span class="meta tool-section-title">LLM</span>
+            <button id="btnLlmMark">LLM标记</button>
+            <button id="btnApplyLlm">应用LLM建议</button>
+            <button id="btnClearLlm">清除LLM标记</button>
+          </div>
+          <div id="qualityWarnings" class="quality-warnings" hidden></div>
         </div>
-        <div class="row tool-actions replace-actions">
-          <span class="meta">文本纠错</span>
-          <input id="replaceFindText" type="text" placeholder="搜索错词/人称，如 他" autocomplete="off" />
-          <input id="replaceWithText" type="text" placeholder="替换为，如 她" autocomplete="off" />
-          <button id="btnFindPrev" type="button">上一个</button>
-          <button id="btnFindNext" type="button">下一个</button>
-          <button id="btnReplaceOne" type="button">替换当前</button>
-          <button id="btnReplaceAll" type="button">全部替换</button>
-          <button id="btnApplyGlossary" type="button">应用词库纠错</button>
-          <span id="glossarySummary" class="meta"></span>
-          <span id="replaceStatus" class="meta replace-status"></span>
+        <div class="tool-panel" data-tool-panel="export" hidden>
+          <div class="row tool-actions export-actions">
+            <span class="meta tool-section-title">字幕</span>
+            <button id="btnExportSrt" type="button">导出 SRT（剪映）</button>
+            <button id="btnExportTxt" type="button">导出 TXT 文案</button>
+            <span class="meta tool-section-title">剪映</span>
+            <select id="jianyingExportMode" title="完整草稿导出位置">
+              <option value="auto" selected>自动放入剪映草稿目录</option>
+              <option value="project">导出到当前项目目录</option>
+              <option value="custom">自定义剪映草稿根目录</option>
+            </select>
+            <input id="jianyingDraftRoot" type="text" placeholder="剪映草稿根目录（自动识别，可选）" title="通常是 com.lveditor.draft 目录；留空会自动识别剪映/CapCut 默认目录" list="jianyingDraftRootList" />
+            <datalist id="jianyingDraftRootList"></datalist>
+            <button id="btnDetectJianyingDraftRoot" type="button">识别剪映目录</button>
+            <select id="jianyingSubtitlePreset" title="剪映草稿内置字幕样式">
+              <option value="clean" selected>清爽白字</option>
+              <option value="blackgold">黑金大字</option>
+              <option value="variety">综艺描边</option>
+              <option value="soft">柔和橙底</option>
+            </select>
+            <input id="jianyingTemplatePath" type="text" placeholder="基于某个剪映模板草稿导出（可选，不覆盖原草稿）" title="填写一个剪映草稿文件夹路径，Jaygo Cut 会基于它新建草稿，不会覆盖原模板" list="jianyingTemplateDraftList" />
+            <datalist id="jianyingTemplateDraftList"></datalist>
+            <button id="btnExportJianyingDraft" type="button">导出完整剪映草稿</button>
+            <span id="exportStatus" class="meta"></span>
+          </div>
         </div>
-        <div class="row compact-row boundary-row">
-          <span class="meta">边界精修</span>
-          <label class="meta">字头提前(ms)
-            <input id="speechLeadMs" type="number" min="0" max="180" step="5" value="45" />
-          </label>
-          <label class="meta">字尾延后(ms)
-            <input id="speechTailMs" type="number" min="0" max="220" step="5" value="90" />
-          </label>
-          <label class="meta">语气词加强(ms)
-            <input id="fillerBoostMs" type="number" min="0" max="120" step="5" value="30" />
-          </label>
-          <label class="meta">静音保护(ms)
-            <input id="silenceGuardMs" type="number" min="0" max="120" step="5" value="45" />
-          </label>
-          <button id="btnResetBoundary" type="button">恢复默认</button>
+        <div class="tool-panel" data-tool-panel="correction" hidden>
+          <div class="row tool-actions replace-actions">
+            <span class="meta tool-section-title">纠错</span>
+            <input id="replaceFindText" type="text" placeholder="搜索错词/人称，如 他" autocomplete="off" />
+            <input id="replaceWithText" type="text" placeholder="替换为，如 她" autocomplete="off" />
+            <button id="btnFindPrev" type="button">上一个</button>
+            <button id="btnFindNext" type="button">下一个</button>
+            <button id="btnReplaceOne" type="button">替换当前</button>
+            <button id="btnReplaceAll" type="button">全部替换</button>
+            <button id="btnApplyGlossary" type="button">应用词库纠错</button>
+            <span id="glossarySummary" class="meta"></span>
+            <span id="replaceStatus" class="meta replace-status"></span>
+          </div>
         </div>
-        <div id="qualityWarnings" class="quality-warnings" hidden></div>
-        <div class="legend" aria-label="标记颜色说明">
-          <span class="legend-item"><span class="legend-dot silence"></span>停顿规则（自动）</span>
-          <span class="legend-item"><span class="legend-dot filler"></span>语气词规则（自动）</span>
-          <span class="legend-item"><span class="legend-dot repeat"></span>重复句规则（自动）</span>
-          <span class="legend-item"><span class="legend-dot llm"></span>LLM建议</span>
+        <div class="tool-panel" data-tool-panel="advanced" hidden>
+          <div class="row compact-row boundary-row">
+            <span class="meta tool-section-title">边界精修</span>
+            <label class="meta">字头提前(ms)
+              <input id="speechLeadMs" type="number" min="0" max="180" step="5" value="45" />
+            </label>
+            <label class="meta">字尾延后(ms)
+              <input id="speechTailMs" type="number" min="0" max="220" step="5" value="90" />
+            </label>
+            <label class="meta">语气词加强(ms)
+              <input id="fillerBoostMs" type="number" min="0" max="120" step="5" value="30" />
+            </label>
+            <label class="meta">静音保护(ms)
+              <input id="silenceGuardMs" type="number" min="0" max="120" step="5" value="45" />
+            </label>
+            <button id="btnResetBoundary" type="button">恢复默认</button>
+          </div>
         </div>
-        <div class="meta">操作提示：单击定位播放点；双击切换删除/取消；拖过文本可连续标记；Ctrl+Z 撤回上一步标记；空格键播放/暂停；鼠标滚轮可缩放波形；播放时自动跳过已选段。</div>
-        <div class="meta" id="llmSummary" style="margin-top:4px"></div>
-        <div class="meta" id="runtime" style="margin-top:4px"></div>
-        <div class="meta" id="draftState" style="margin-top:4px">草稿状态：未保存</div>
+        <div class="tool-panel" data-tool-panel="more" hidden>
+          <div class="row tool-actions utility-actions">
+            <span class="meta tool-section-title">工具</span>
+            <button id="btnShowDeleteDiagnostics" type="button">删除诊断</button>
+            <button id="btnCopyDiagnostics" type="button">复制诊断信息</button>
+            <button id="btnShortcutHelp" type="button">快捷键指南</button>
+          </div>
+          <div class="legend" aria-label="标记颜色说明">
+            <span class="legend-item"><span class="legend-dot silence"></span>停顿规则（自动）</span>
+            <span class="legend-item"><span class="legend-dot filler"></span>语气词规则（自动）</span>
+            <span class="legend-item"><span class="legend-dot repeat"></span>重复句规则（自动）</span>
+            <span class="legend-item"><span class="legend-dot llm"></span>LLM建议</span>
+          </div>
+          <div class="meta">操作提示：单击定位播放点；双击切换删除/取消；拖过文本可连续标记；Ctrl+Z 撤回上一步标记；空格键播放/暂停；鼠标滚轮可缩放波形；播放时自动跳过已选段。</div>
+          <div class="meta" id="llmSummary" style="margin-top:4px"></div>
+          <div class="meta" id="runtime" style="margin-top:4px"></div>
+          <div class="meta" id="draftState" style="margin-top:4px">草稿状态：未保存</div>
+        </div>
       </details>
     </div>
 
@@ -1225,15 +1856,12 @@ const html = `<!doctype html>
       </div>
     </div>
 
-    <details class="card logs-card">
-      <summary class="meta" style="font-weight:700; cursor:pointer;">裁剪任务日志（点击展开）</summary>
-      <div id="logs" style="margin-top:8px"></div>
-    </details>
   </div>
 
   <button id="btnToggleLeftPanel" class="floating-toggle left" type="button">发布建议</button>
   <button id="btnToggleImagePanel" class="floating-toggle left image-toggle" type="button">视频配图</button>
   <button id="btnToggleRightPanel" class="floating-toggle right" type="button">LLM对话</button>
+  <button id="btnToggleLogPanel" class="floating-toggle right log-toggle" type="button">裁剪日志<span id="cutLogBadge" class="floating-badge" hidden></span></button>
 
   <aside class="side-panel floating-side left">
     <div class="panel-header">
@@ -1268,109 +1896,124 @@ const html = `<!doctype html>
 
   <aside class="side-panel floating-side left image-side">
     <div class="panel-header">
-      <span>插入素材</span>
+      <span>\u63d2\u5165\u7d20\u6750</span>
       <div class="panel-actions">
-        <button id="btnGenerateImages">生成配图</button>
-        <button id="btnDownloadImages" disabled>批量下载</button>
-        <button id="btnCloseImagePanel" class="panel-close" type="button">收起</button>
+        <button id="btnCloseImagePanel" class="panel-close" type="button">\u6536\u8d77</button>
       </div>
     </div>
-    <div class="row compact-row">
-      <span class="meta">数量</span>
-      <select id="imageCount">
-        <option value="6">6 张</option>
-        <option value="8" selected>8 张</option>
-        <option value="10">10 张</option>
-        <option value="12">12 张</option>
-      </select>
+    <div class="media-mode-tabs" role="tablist" aria-label="\u63d2\u5165\u7d20\u6750\u7c7b\u578b">
+      <button id="btnMediaModeImage" class="media-mode-tab active" type="button" aria-selected="true">\u56fe\u7247\u914d\u56fe</button>
+      <button id="btnMediaModeVideo" class="media-mode-tab" type="button" aria-selected="false">\u89c6\u9891\u7d20\u6750</button>
     </div>
-    <div class="row compact-row">
-      <span class="meta">比例</span>
-      <select id="imageAspect">
-        <option value="1:1" selected>1:1 正方形，头像</option>
-        <option value="2:3">2:3 社交媒体，自拍</option>
-        <option value="3:4">3:4 经典比例，拍照</option>
-        <option value="4:3">4:3 文章配图，插画</option>
-        <option value="9:16">9:16 手机壁纸，人像</option>
-        <option value="16:9">16:9 桌面壁纸，风景</option>
-      </select>
-    </div>
-    <div class="row compact-row">
-      <span class="meta">风格</span>
-      <select id="imageStyle">
-        <option value="人像摄影，真实镜头，高级布光，统一人物服饰和场景质感">人像摄影</option>
-        <option value="电影写真，电影级光影，浅景深，统一角色造型和环境氛围">电影写真</option>
-        <option value="中国风，东方审美，国风色彩，统一人物服饰与中式场景">中国风</option>
-        <option value="动漫，清晰线稿，赛璐璐上色，统一角色设定和分镜节奏">动漫</option>
-        <option value="3D渲染，柔和材质，精致角色模型，统一场景和光线">3D渲染</option>
-        <option value="赛博朋克，霓虹光影，未来城市，统一高对比色彩系统">赛博朋克</option>
-        <option value="CG 动画，电影动画质感，统一角色设计，清晰动作表演">CG 动画</option>
-        <option value="水墨画，留白构图，墨色层次，东方场景和人物气韵">水墨画</option>
-        <option value="油画，厚涂笔触，古典光影，统一色调和人物服饰">油画</option>
-        <option value="古典，古典肖像与场景，柔和光线，复古服饰和空间">古典</option>
-        <option value="水彩画，透明水彩，轻盈纸张肌理，统一柔和色彩">水彩画</option>
-        <option value="卡通，明快造型，统一可爱角色，干净背景">卡通</option>
-        <option value="平面插画，简洁几何，统一色板，适合知识视频">平面插画</option>
-        <option value="风景，环境叙事，统一自然光线和场景气氛">风景</option>
-        <option value="港风动漫，复古港片色彩，漫画线条，统一人物造型">港风动漫</option>
-        <option value="像素风格，复古像素艺术，统一色板和人物轮廓">像素风格</option>
-        <option value="荧光绘画，霓虹色彩，发光边缘，统一暗背景">荧光绘画</option>
-        <option value="彩铅画，纸张纹理，温暖克制色彩，统一人物和服饰" selected>彩铅画</option>
-        <option value="手办，精致玩具质感，微缩场景，统一角色模型">手办</option>
-        <option value="儿童绘画，童趣线条，柔和色彩，统一简单场景">儿童绘画</option>
-        <option value="抽象，形状与色块表达主题，统一视觉符号">抽象</option>
-        <option value="锐笔插画，锋利线条，高级构图，统一角色与场景">锐笔插画</option>
-        <option value="二次元，日系角色，细腻线条，统一发型服饰">二次元</option>
-        <option value="油墨印刷，粗颗粒印刷肌理，复古色彩，统一版画感">油墨印刷</option>
-        <option value="版画，木刻线条，高对比黑白或套色，统一纹理">版画</option>
-        <option value="莫奈，印象派光影，柔和笔触，统一色彩空气感">莫奈</option>
-        <option value="毕加索，立体主义构成，统一几何人物和空间">毕加索</option>
-        <option value="伦勃朗，古典明暗对照，深色背景，统一肖像光线">伦勃朗</option>
-        <option value="马蒂斯，鲜明色块，装饰性构图，统一平面色彩">马蒂斯</option>
-        <option value="巴洛克，戏剧化光影，华丽服饰，统一古典空间">巴洛克</option>
-        <option value="复古动漫，胶片颗粒，老动画色彩，统一角色造型">复古动漫</option>
-        <option value="绘本，温暖故事插画，纸张肌理，统一人物和场景">绘本</option>
-      </select>
-    </div>
-    <div class="row compact-row">
-      <span class="meta">图片动效</span>
-      <select id="imageMotionEffect">
-        <option value="none" selected>无动效</option>
-        <option value="zoom-in">缓慢推进</option>
-        <option value="zoom-out">缓慢拉远</option>
-        <option value="pan-left">缓慢左移</option>
-        <option value="pan-right">缓慢右移</option>
-        <option value="pan-up">缓慢上移</option>
-        <option value="pan-down">缓慢下移</option>
-      </select>
-    </div>
-    <div id="imageStatus" class="meta">点击“生成配图”后，会先规划配图点，再逐张调用图片 API 生成预览。</div>
-    <div id="imageCardList"></div>
-    <div class="panel-section media-video-section">
-      <div class="panel-title">视频素材（Agnes）</div>
-      <div class="row compact-row">
-        <span class="meta">数量</span>
-        <select id="videoAssetCount">
-          <option value="1">1 段</option>
-          <option value="2">2 段</option>
-          <option value="3" selected>3 段</option>
-          <option value="4">4 段</option>
-        </select>
+
+    <section id="imageMediaPanel" class="media-mode-panel">
+      <div class="media-panel-actions">
+        <button id="btnGenerateImages" type="button">\u751f\u6210\u914d\u56fe</button>
+        <button id="btnDownloadImages" type="button" disabled>\u6279\u91cf\u4e0b\u8f7d</button>
       </div>
-      <div class="row compact-row">
-        <span class="meta">比例</span>
-        <select id="videoAssetAspect">
-          <option value="16:9" selected>16:9 横屏</option>
-          <option value="9:16">9:16 竖屏</option>
-          <option value="1:1">1:1 方形</option>
-        </select>
+      <div class="media-control-grid">
+        <label class="media-field">
+          <span class="meta">\u6570\u91cf</span>
+          <select id="imageCount">
+            <option value="auto" selected>\u81ea\u52a8\u5339\u914d</option>
+            <option value="6">6 \u5f20</option>
+            <option value="8">8 \u5f20</option>
+            <option value="10">10 \u5f20</option>
+            <option value="12">12 \u5f20</option>
+          </select>
+        </label>
+        <label class="media-field">
+          <span class="meta">\u6bd4\u4f8b</span>
+          <select id="imageAspect">
+            <option value="1:1" selected>1:1 \u6b63\u65b9\u5f62\uff0c\u5934\u50cf</option>
+            <option value="2:3">2:3 \u793e\u4ea4\u5a92\u4f53\uff0c\u81ea\u62cd</option>
+            <option value="3:4">3:4 \u7ecf\u5178\u6bd4\u4f8b\uff0c\u62cd\u7167</option>
+            <option value="4:3">4:3 \u6587\u7ae0\u914d\u56fe\uff0c\u63d2\u753b</option>
+            <option value="9:16">9:16 \u624b\u673a\u58c1\u7eb8\uff0c\u4eba\u50cf</option>
+            <option value="16:9">16:9 \u684c\u9762\u58c1\u7eb8\uff0c\u98ce\u666f</option>
+          </select>
+        </label>
+        <label class="media-field">
+          <span class="meta">\u98ce\u683c</span>
+          <select id="imageStyle">
+            <option value="portrait photography, realistic lens, premium lighting, consistent character clothing and scene texture">\u4eba\u50cf\u6444\u5f71</option>
+            <option value="cinematic photo, film lighting, shallow depth of field, consistent character styling and atmosphere">\u7535\u5f71\u5199\u771f</option>
+            <option value="Chinese aesthetic, oriental color palette, consistent costume and Chinese setting">\u4e2d\u56fd\u98ce</option>
+            <option value="anime, clean line art, cel shading, consistent character design and storyboard rhythm">\u52a8\u6f2b</option>
+            <option value="3D render, soft materials, refined character model, consistent scene and lighting">3D\u6e32\u67d3</option>
+            <option value="cyberpunk, neon lighting, futuristic city, consistent high contrast color system">\u8d5b\u535a\u670b\u514b</option>
+            <option value="CG animation, cinematic animation feel, consistent character design and clear action">CG \u52a8\u753b</option>
+            <option value="ink wash painting, negative space composition, layered ink tones, oriental atmosphere">\u6c34\u58a8\u753b</option>
+            <option value="oil painting, thick brush strokes, classical lighting, consistent tone and costume">\u6cb9\u753b</option>
+            <option value="classical portrait and scene, soft light, vintage costume and space">\u53e4\u5178</option>
+            <option value="watercolor painting, transparent watercolor, light paper texture, unified soft colors">\u6c34\u5f69\u753b</option>
+            <option value="cartoon, bright shapes, consistent cute character, clean background">\u5361\u901a</option>
+            <option value="flat illustration, clean geometry, unified palette, suitable for knowledge videos">\u5e73\u9762\u63d2\u753b</option>
+            <option value="landscape, environmental storytelling, consistent natural light and atmosphere">\u98ce\u666f</option>
+            <option value="Hong Kong style anime, retro film colors, manga line work, consistent character styling">\u6e2f\u98ce\u52a8\u6f2b</option>
+            <option value="pixel art, retro pixel style, consistent palette and character silhouette">\u50cf\u7d20\u98ce\u683c</option>
+            <option value="fluorescent painting, neon colors, glowing edges, consistent dark background">\u8367\u5149\u7ed8\u753b</option>
+            <option value="colored pencil illustration, paper texture, warm restrained colors, consistent characters and clothing" selected>\u5f69\u94c5\u753b</option>
+            <option value="designer toy figure, refined collectible texture, miniature scene, consistent character model">\u624b\u529e</option>
+            <option value="children illustration, playful lines, soft colors, consistent simple scene">\u513f\u7ae5\u7ed8\u753b</option>
+            <option value="abstract shapes and color blocks expressing the theme, unified visual symbols">\u62bd\u8c61</option>
+            <option value="sharp pen illustration, crisp linework, premium composition, consistent character and scene">\u9510\u7b14\u63d2\u753b</option>
+            <option value="Japanese anime style, delicate line art, consistent hair and clothing">\u4e8c\u6b21\u5143</option>
+            <option value="ink print, coarse print texture, vintage colors, unified printmaking feel">\u6cb9\u58a8\u5370\u5237</option>
+            <option value="woodcut print, high contrast black white or spot colors, unified texture">\u7248\u753b</option>
+            <option value="Monet impressionist light, soft brushwork, unified atmospheric colors">\u83ab\u5948</option>
+            <option value="Picasso cubist composition, unified geometric character and space">\u6bd5\u52a0\u7d22</option>
+            <option value="Rembrandt classical chiaroscuro, dark background, unified portrait lighting">\u4f26\u52c3\u6717</option>
+            <option value="Matisse bold color blocks, decorative composition, unified flat colors">\u9a6c\u8482\u65af</option>
+            <option value="Baroque dramatic lighting, ornate costume, unified classical space">\u5df4\u6d1b\u514b</option>
+            <option value="retro anime, film grain, old animation colors, consistent character design">\u590d\u53e4\u52a8\u6f2b</option>
+            <option value="storybook illustration, warm narrative image, paper texture, consistent characters and scene">\u7ed8\u672c</option>
+          </select>
+        </label>
+        <label class="media-field">
+          <span class="meta">\u56fe\u7247\u52a8\u6548</span>
+          <select id="imageMotionEffect">
+            <option value="none" selected>\u65e0\u52a8\u6548</option>
+            <option value="zoom-in">\u7f13\u6162\u63a8\u8fdb</option>
+            <option value="zoom-out">\u7f13\u6162\u62c9\u8fdc</option>
+            <option value="pan-left">\u7f13\u6162\u5de6\u79fb</option>
+            <option value="pan-right">\u7f13\u6162\u53f3\u79fb</option>
+            <option value="pan-up">\u7f13\u6162\u4e0a\u79fb</option>
+            <option value="pan-down">\u7f13\u6162\u4e0b\u79fb</option>
+          </select>
+        </label>
       </div>
-      <div class="panel-actions">
-        <button id="btnGenerateVideos" type="button">生成视频素材</button>
+      <div id="imageStatus" class="meta">\u70b9\u51fb\u201c\u751f\u6210\u914d\u56fe\u201d\u540e\uff0c\u4f1a\u5148\u89c4\u5212\u914d\u56fe\u70b9\uff0c\u518d\u9010\u5f20\u8c03\u7528\u56fe\u7247 API \u751f\u6210\u9884\u89c8\u3002</div>
+      <div id="imageCardList"></div>
+    </section>
+
+    <section id="videoMediaPanel" class="media-mode-panel media-video-section" hidden>
+      <div class="panel-title">\u89c6\u9891\u7d20\u6750\uff08Agnes\uff09</div>
+      <div class="media-control-grid">
+        <label class="media-field">
+          <span class="meta">\u6570\u91cf</span>
+          <select id="videoAssetCount">
+            <option value="1">1 \u6bb5</option>
+            <option value="2">2 \u6bb5</option>
+            <option value="3" selected>3 \u6bb5</option>
+            <option value="4">4 \u6bb5</option>
+          </select>
+        </label>
+        <label class="media-field">
+          <span class="meta">\u6bd4\u4f8b</span>
+          <select id="videoAssetAspect">
+            <option value="16:9" selected>16:9 \u6a2a\u5c4f</option>
+            <option value="9:16">9:16 \u7ad6\u5c4f</option>
+            <option value="1:1">1:1 \u65b9\u5f62</option>
+          </select>
+        </label>
       </div>
-      <div id="videoAssetStatus" class="meta">点击后会先由 LLM 规划插入位置，再调用 Agnes 生成视频素材。</div>
+      <div class="media-panel-actions single">
+        <button id="btnGenerateVideos" type="button">\u751f\u6210\u89c6\u9891\u7d20\u6750</button>
+      </div>
+      <div id="videoAssetStatus" class="meta">\u70b9\u51fb\u540e\u4f1a\u5148\u7531 LLM \u89c4\u5212\u63d2\u5165\u4f4d\u7f6e\uff0c\u518d\u8c03\u7528 Agnes \u751f\u6210\u89c6\u9891\u7d20\u6750\u3002</div>
       <div id="videoAssetList"></div>
-    </div>
+    </section>
   </aside>
 
   <aside class="side-panel floating-side right">
@@ -1382,11 +2025,22 @@ const html = `<!doctype html>
       </div>
     </div>
     <div id="llmChatHistory"></div>
-    <textarea id="llmChatInput" placeholder="例如：保留开头铺垫，删除后半段重复表达；把过度口头禅都标记出来。"></textarea>
+    <textarea id="llmChatInput" placeholder="例如：保留开头铺垫，删除后半段重复表达；把第2张图换成漫画风格；把视频素材提前2秒；减少插图。"></textarea>
     <div class="row compact-row">
       <button id="btnLlmChatSend">发送并调整</button>
     </div>
-    <div id="llmChatStatus" class="meta">可通过对话追加或撤销标记，不满意可撤回。</div>
+    <div id="llmChatStatus" class="meta">可通过对话调整删除标记、插图和视频素材规划，不满意可撤回。</div>
+  </aside>
+
+  <aside class="side-panel floating-side right log-side">
+    <div class="panel-header">
+      <span>裁剪任务日志</span>
+      <div class="panel-actions">
+        <button id="btnCloseLogPanel" class="panel-close" type="button">收起</button>
+      </div>
+    </div>
+    <div id="cutLogStatus" class="meta">暂无裁剪日志。执行裁剪后，这里会显示进度和错误详情。</div>
+    <div id="logs"></div>
   </aside>
 
   <script>
@@ -1401,11 +2055,18 @@ const html = `<!doctype html>
     const toolbarCardEl = document.querySelector('.toolbar-card');
     const videoPreviewPanelEl = document.getElementById('videoPreviewPanel');
     const sourceVideoEl = document.getElementById('sourceVideo');
+    const videoPreviewFrameEl = document.querySelector('.video-preview-frame');
+    const compositePreviewOverlayEl = document.getElementById('compositePreviewOverlay');
     const videoPreviewStatusEl = document.getElementById('videoPreviewStatus');
     const content = document.getElementById('content');
     const contentViewportEl = document.getElementById('contentViewport');
     const statusEl = document.getElementById('status');
     const selectionStatsEl = document.getElementById('selectionStats');
+    const statDeletedCountEl = document.getElementById('statDeletedCount');
+    const statDeletedDurationEl = document.getElementById('statDeletedDuration');
+    const statOutputDurationEl = document.getElementById('statOutputDuration');
+    const statTotalDurationEl = document.getElementById('statTotalDuration');
+    const statCutModeEl = document.getElementById('statCutMode');
     const runtimeEl = document.getElementById('runtime');
     const draftStateEl = document.getElementById('draftState');
     const logsEl = document.getElementById('logs');
@@ -1421,9 +2082,15 @@ const html = `<!doctype html>
     const waveHintEl = document.getElementById('waveHint');
     const waveZoomEl = document.getElementById('waveZoom');
     const waveZoomTextEl = document.getElementById('waveZoomText');
+    const btnWaveZoom = document.getElementById('btnWaveZoom');
+    const btnCloseWaveZoom = document.getElementById('btnCloseWaveZoom');
+    const waveZoomPopoverEl = document.getElementById('waveZoomPopover');
     const btnLlmMark = document.getElementById('btnLlmMark');
     const btnApplyLlm = document.getElementById('btnApplyLlm');
     const btnClearLlm = document.getElementById('btnClearLlm');
+    const toggleAutoFillerEl = document.getElementById('toggleAutoFiller');
+    const toggleAutoRepeatEl = document.getElementById('toggleAutoRepeat');
+    const fillerWordAllowListEl = document.getElementById('fillerWordAllowList');
     const btnPreviewDelete = document.getElementById('btnPreviewDelete');
     const btnToggleVideoPreview = document.getElementById('btnToggleVideoPreview');
     const btnFocusReview = document.getElementById('btnFocusReview');
@@ -1437,7 +2104,12 @@ const html = `<!doctype html>
     const btnExportTxt = document.getElementById('btnExportTxt');
     const btnExportJianyingDraft = document.getElementById('btnExportJianyingDraft');
     const jianyingSubtitlePresetEl = document.getElementById('jianyingSubtitlePreset');
+    const jianyingExportModeEl = document.getElementById('jianyingExportMode');
+    const jianyingDraftRootEl = document.getElementById('jianyingDraftRoot');
+    const jianyingDraftRootListEl = document.getElementById('jianyingDraftRootList');
+    const jianyingTemplateDraftListEl = document.getElementById('jianyingTemplateDraftList');
     const jianyingTemplatePathEl = document.getElementById('jianyingTemplatePath');
+    const btnDetectJianyingDraftRoot = document.getElementById('btnDetectJianyingDraftRoot');
     const exportStatusEl = document.getElementById('exportStatus');
     const replaceFindTextEl = document.getElementById('replaceFindText');
     const replaceWithTextEl = document.getElementById('replaceWithText');
@@ -1451,16 +2123,27 @@ const html = `<!doctype html>
     const btnShortcutHelp = document.getElementById('btnShortcutHelp');
     const shortcutHelpEl = document.getElementById('shortcutHelp');
     const btnCloseShortcutHelp = document.getElementById('btnCloseShortcutHelp');
+    const toolTabEls = Array.from(document.querySelectorAll('[data-tool-tab]'));
+    const toolPanelEls = Array.from(document.querySelectorAll('[data-tool-panel]'));
     const leftPanelEl = document.querySelector('.floating-side.left');
     const rightPanelEl = document.querySelector('.floating-side.right');
     const imagePanelEl = document.querySelector('.floating-side.image-side');
+    const logPanelEl = document.querySelector('.floating-side.log-side');
     const btnToggleLeftPanel = document.getElementById('btnToggleLeftPanel');
     const btnToggleImagePanel = document.getElementById('btnToggleImagePanel');
     const btnToggleRightPanel = document.getElementById('btnToggleRightPanel');
+    const btnToggleLogPanel = document.getElementById('btnToggleLogPanel');
     const btnCloseLeftPanel = document.getElementById('btnCloseLeftPanel');
     const btnCloseImagePanel = document.getElementById('btnCloseImagePanel');
     const btnCloseRightPanel = document.getElementById('btnCloseRightPanel');
+    const btnCloseLogPanel = document.getElementById('btnCloseLogPanel');
+    const cutLogBadgeEl = document.getElementById('cutLogBadge');
+    const cutLogStatusEl = document.getElementById('cutLogStatus');
     const btnGeneratePublish = document.getElementById('btnGeneratePublish');
+    const btnMediaModeImage = document.getElementById('btnMediaModeImage');
+    const btnMediaModeVideo = document.getElementById('btnMediaModeVideo');
+    const imageMediaPanelEl = document.getElementById('imageMediaPanel');
+    const videoMediaPanelEl = document.getElementById('videoMediaPanel');
     const btnGenerateImages = document.getElementById('btnGenerateImages');
     const btnGenerateVideos = document.getElementById('btnGenerateVideos');
     const btnDownloadImages = document.getElementById('btnDownloadImages');
@@ -1475,6 +2158,7 @@ const html = `<!doctype html>
     const imageMotionEffectEl = document.getElementById('imageMotionEffect');
     const imageStatusEl = document.getElementById('imageStatus');
     const imageCardListEl = document.getElementById('imageCardList');
+    const localImageUploadInputEl = document.getElementById('localImageUploadInput');
     const videoAssetCountEl = document.getElementById('videoAssetCount');
     const videoAssetAspectEl = document.getElementById('videoAssetAspect');
     const videoAssetStatusEl = document.getElementById('videoAssetStatus');
@@ -1559,6 +2243,50 @@ const html = `<!doctype html>
       if (lower.includes('silence') || lower.includes('静音') || lower.includes('bridge') || lower.includes('gap')) return 'silence';
       return isGap ? 'silence' : null;
     }
+
+    function getEnabledFillerWords() {
+      const raw = fillerWordAllowListEl ? String(fillerWordAllowListEl.value || '') : '';
+      return new Set(raw
+        .split(/[\s,，、;；|]+/)
+        .map((item) => item.trim())
+        .filter(Boolean));
+    }
+
+    function isAutoRuleCategoryEnabled(category, wordText) {
+      if (category === 'filler' && toggleAutoFillerEl) {
+        if (!toggleAutoFillerEl.checked) return false;
+        const words = getEnabledFillerWords();
+        if (!words.size) return false;
+        const normalized = String(wordText || '').trim();
+        return words.has(normalized);
+      }
+      if (category === 'repeat' && toggleAutoRepeatEl) return !!toggleAutoRepeatEl.checked;
+      return true;
+    }
+
+    function applyAutoRulePreferences(addEnabledRules) {
+      let changed = 0;
+      autoSet.forEach((idx) => {
+        const w = WORDS[idx] || {};
+        const cat = reasonCategory(autoReasonByIndex.get(idx), !!w.isGap) || 'silence';
+        const enabled = isAutoRuleCategoryEnabled(cat, w.text);
+        if (!enabled) {
+          if (selected.delete(idx)) changed += 1;
+          return;
+        }
+        if (addEnabledRules && !selected.has(idx)) {
+          selected.add(idx);
+          changed += 1;
+        }
+      });
+      if (changed) {
+        autoSet.forEach((idx) => refreshToken(idx));
+        refreshIdleStatus();
+        scheduleReviewStateSave(180);
+      }
+      return changed;
+    }
+
     const autoReasonByIndex = new Map(
       Object.entries(AUTO_REASONS || {})
         .map(([k, v]) => [Number(k), toZhReason(v)])
@@ -1654,6 +2382,7 @@ const html = `<!doctype html>
     let previewStopTime = null;
     let skipFadeRaf = null;
     let skipFadeTimer = null;
+    let skipFadeRestoreVolume = null;
     let latestCutLogTail = [];
     let runtimeInfoCache = null;
     let publishLoading = false;
@@ -1662,6 +2391,16 @@ const html = `<!doctype html>
     let videoGenerating = false;
     let imageItems = [];
     let videoItems = [];
+    let activeCompositePreviewKey = '';
+    let compositePreviewRaf = null;
+    let lastVideoPreviewSeekAt = 0;
+    const VIDEO_PREVIEW_PLAYING_SEEK_TOLERANCE = 1.25;
+    const VIDEO_PREVIEW_FORCE_SEEK_INTERVAL_MS = 1400;
+    const VIDEO_PREVIEW_SOFT_SYNC_TOLERANCE = 0.18;
+    let pendingImageUploadIndex = -1;
+    let imageAspectUserChanged = false;
+    let videoAspectUserChanged = false;
+    let sourceVideoMetaLabel = '';
     let isProgrammaticScroll = false;
     let programmaticScrollTimer = null;
     let lastUserScrollAt = 0;
@@ -1672,9 +2411,28 @@ const html = `<!doctype html>
     let leftPanelOpen = false;
     let imagePanelOpen = false;
     let rightPanelOpen = false;
+    let logPanelOpen = false;
 
     function setStatus(msg) {
       statusEl.textContent = msg;
+    }
+
+    function setWaveZoomPopoverOpen(open) {
+      if (!waveZoomPopoverEl) return;
+      waveZoomPopoverEl.hidden = !open;
+      if (btnWaveZoom) btnWaveZoom.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+
+    function setToolPanel(name) {
+      const activeName = String(name || 'marking');
+      toolTabEls.forEach((tab) => {
+        const isActive = tab.dataset.toolTab === activeName;
+        tab.classList.toggle('active', isActive);
+        tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      });
+      toolPanelEls.forEach((panel) => {
+        panel.hidden = panel.dataset.toolPanel !== activeName;
+      });
     }
 
     function renderQualityWarnings() {
@@ -1698,6 +2456,7 @@ const html = `<!doctype html>
 
     function syncFloatingToggles() {
       const anyLeftPanelOpen = leftPanelOpen || imagePanelOpen;
+      const anyRightPanelOpen = rightPanelOpen || logPanelOpen;
       if (btnToggleLeftPanel) {
         btnToggleLeftPanel.classList.toggle('active', leftPanelOpen);
         btnToggleLeftPanel.classList.toggle('hidden', anyLeftPanelOpen);
@@ -1710,8 +2469,12 @@ const html = `<!doctype html>
       }
       if (btnToggleRightPanel) {
         btnToggleRightPanel.classList.toggle('active', rightPanelOpen);
-        btnToggleRightPanel.classList.toggle('hidden', rightPanelOpen);
+        btnToggleRightPanel.classList.toggle('hidden', anyRightPanelOpen);
         btnToggleRightPanel.textContent = 'LLM对话';
+      }
+      if (btnToggleLogPanel) {
+        btnToggleLogPanel.classList.toggle('active', logPanelOpen);
+        btnToggleLogPanel.classList.toggle('hidden', anyRightPanelOpen);
       }
     }
 
@@ -1721,10 +2484,19 @@ const html = `<!doctype html>
         if (imagePanelOpen) {
           leftPanelOpen = false;
           rightPanelOpen = false;
+          logPanelOpen = false;
         }
       } else if (side === 'left') {
         leftPanelOpen = !!open;
         if (leftPanelOpen) {
+          imagePanelOpen = false;
+          rightPanelOpen = false;
+          logPanelOpen = false;
+        }
+      } else if (side === 'log') {
+        logPanelOpen = !!open;
+        if (logPanelOpen) {
+          leftPanelOpen = false;
           imagePanelOpen = false;
           rightPanelOpen = false;
         }
@@ -1733,11 +2505,13 @@ const html = `<!doctype html>
         if (rightPanelOpen) {
           leftPanelOpen = false;
           imagePanelOpen = false;
+          logPanelOpen = false;
         }
       }
       if (leftPanelEl) leftPanelEl.classList.toggle('open', leftPanelOpen);
       if (imagePanelEl) imagePanelEl.classList.toggle('open', imagePanelOpen);
       if (rightPanelEl) rightPanelEl.classList.toggle('open', rightPanelOpen);
+      if (logPanelEl) logPanelEl.classList.toggle('open', logPanelOpen);
       syncFloatingToggles();
     }
 
@@ -1745,6 +2519,7 @@ const html = `<!doctype html>
       setPanelOpen('left', false);
       setPanelOpen('image', false);
       setPanelOpen('right', false);
+      setPanelOpen('log', false);
     }
 
     function setDraftState(msg) {
@@ -1814,7 +2589,363 @@ const html = `<!doctype html>
 
     function currentImageMotionEffect() {
       const value = String(imageMotionEffectEl ? imageMotionEffectEl.value : 'none');
-      return ['none', 'zoom-in', 'zoom-out', 'pan-left', 'pan-right', 'pan-up', 'pan-down'].includes(value) ? value : 'none';
+      return sanitizeImageMotionEffect(value);
+    }
+
+    function sanitizeImageMotionEffect(value) {
+      const next = String(value || 'none');
+      return ['none', 'zoom-in', 'zoom-out', 'pan-left', 'pan-right', 'pan-up', 'pan-down'].includes(next) ? next : 'none';
+    }
+
+    function clampDuration(value, min, max, fallback) {
+      const parsed = Number(value);
+      const next = Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+      return Math.max(min, Math.min(max, next));
+    }
+
+    function aspectRatioToCss(value, fallback = '1:1') {
+      const raw = String(value || fallback || '').trim();
+      const match = raw.match(/(\\d+(?:\\.\\d+)?)\\s*(?::|\\/)\\s*(\\d+(?:\\.\\d+)?)/);
+      if (match) {
+        const width = Number(match[1]);
+        const height = Number(match[2]);
+        if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+          return width + ' / ' + height;
+        }
+      }
+      const fallbackMatch = String(fallback || '1:1').match(/(\\d+(?:\\.\\d+)?)\\s*(?::|\\/)\\s*(\\d+(?:\\.\\d+)?)/);
+      return fallbackMatch ? (fallbackMatch[1] + ' / ' + fallbackMatch[2]) : '1 / 1';
+    }
+
+    function setMediaMode(mode) {
+      const next = mode === 'video' ? 'video' : 'image';
+      if (imageMediaPanelEl) imageMediaPanelEl.hidden = next !== 'image';
+      if (videoMediaPanelEl) videoMediaPanelEl.hidden = next !== 'video';
+      if (btnMediaModeImage) {
+        btnMediaModeImage.classList.toggle('active', next === 'image');
+        btnMediaModeImage.setAttribute('aria-selected', next === 'image' ? 'true' : 'false');
+      }
+      if (btnMediaModeVideo) {
+        btnMediaModeVideo.classList.toggle('active', next === 'video');
+        btnMediaModeVideo.setAttribute('aria-selected', next === 'video' ? 'true' : 'false');
+      }
+    }
+
+    function formatTimeRange(start, end) {
+      const fmt = (sec) => {
+        const n = Math.max(0, Number(sec) || 0);
+        const m = Math.floor(n / 60);
+        const s = Math.floor(n % 60);
+        return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+      };
+      return fmt(start) + '-' + fmt(end);
+    }
+
+    function normalizeImageItemTiming(item) {
+      if (!item) return item;
+      const start = Math.max(0, Number(item.start) || 0);
+      const durationSec = clampDuration(item.durationSec || item.duration || ((Number(item.end) || 0) - start), 5, 10, 7);
+      item.start = start;
+      item.durationSec = Number(durationSec.toFixed(2));
+      item.end = Number((start + durationSec).toFixed(3));
+      item.timeRange = formatTimeRange(item.start, item.end);
+      item.motionEffect = sanitizeImageMotionEffect(item.motionEffect);
+      return item;
+    }
+
+    function normalizeVideoItemTiming(item) {
+      if (!item) return item;
+      const start = Math.max(0, Number(item.start) || 0);
+      const durationSec = clampDuration(item.durationSec || item.duration || ((Number(item.end) || 0) - start), 3, 8, 5);
+      item.start = start;
+      item.durationSec = Number(durationSec.toFixed(2));
+      item.end = Number((start + durationSec).toFixed(3));
+      item.timeRange = formatTimeRange(item.start, item.end);
+      return item;
+    }
+
+    function normalizeMediaItemTiming() {
+      imageItems.forEach(normalizeImageItemTiming);
+      videoItems.forEach(normalizeVideoItemTiming);
+    }
+
+    function isValidMediaRange(item) {
+      const start = Number(item?.start);
+      const end = Number(item?.end);
+      return Number.isFinite(start) && Number.isFinite(end) && end > start;
+    }
+
+    function collectMediaRanges(excludeType = '') {
+      const ranges = [];
+      if (excludeType !== 'image') {
+        imageItems.forEach((item) => {
+          normalizeImageItemTiming(item);
+          if (isValidMediaRange(item)) ranges.push({ type: 'image', start: item.start, end: item.end, title: item.title || '' });
+        });
+      }
+      if (excludeType !== 'video') {
+        videoItems.forEach((item) => {
+          normalizeVideoItemTiming(item);
+          if (isValidMediaRange(item)) ranges.push({ type: 'video', start: item.start, end: item.end, title: item.title || '' });
+        });
+      }
+      return ranges.sort((a, b) => a.start - b.start || a.end - b.end);
+    }
+
+    function rangesOverlap(aStart, aEnd, bStart, bEnd, gap = 0.12) {
+      return aStart < (bEnd + gap) && aEnd > (bStart - gap);
+    }
+
+    function findNonOverlappingStart(preferredStart, durationSec, blockedRanges, totalDuration) {
+      const duration = Math.max(0.5, Number(durationSec) || 1);
+      const total = Math.max(duration, Number(totalDuration) || getAudioTotalDuration() || duration + 1);
+      const maxStart = Math.max(0, total - duration);
+      const clampStart = (value) => Math.max(0, Math.min(maxStart, Number(value) || 0));
+      const sorted = (Array.isArray(blockedRanges) ? blockedRanges : [])
+        .filter(isValidMediaRange)
+        .sort((a, b) => a.start - b.start || a.end - b.end);
+      const fits = (start) => !sorted.some((range) => rangesOverlap(start, start + duration, range.start, range.end));
+      const preferred = clampStart(preferredStart);
+      if (fits(preferred)) return preferred;
+      const candidates = [];
+      sorted.forEach((range) => {
+        candidates.push(clampStart((Number(range.end) || 0) + 0.18));
+        candidates.push(clampStart((Number(range.start) || 0) - duration - 0.18));
+      });
+      candidates.push(0, maxStart);
+      candidates.sort((a, b) => Math.abs(a - preferred) - Math.abs(b - preferred));
+      const found = candidates.find(fits);
+      return Number.isFinite(found) ? found : preferred;
+    }
+
+    function collectMediaRangesExcept(kind, id) {
+      const skipKind = String(kind || '');
+      const skipId = String(id || '');
+      const ranges = [];
+      imageItems.forEach((item) => {
+        normalizeImageItemTiming(item);
+        if (skipKind === 'image' && String(item.id || '') === skipId) return;
+        if (isValidMediaRange(item)) ranges.push({ type: 'image', start: item.start, end: item.end, title: item.title || '' });
+      });
+      videoItems.forEach((item) => {
+        normalizeVideoItemTiming(item);
+        if (skipKind === 'video' && String(item.id || '') === skipId) return;
+        if (isValidMediaRange(item)) ranges.push({ type: 'video', start: item.start, end: item.end, title: item.title || '' });
+      });
+      return ranges.sort((a, b) => a.start - b.start || a.end - b.end);
+    }
+
+    function nextMediaId(kind) {
+      const prefix = kind === 'video' ? 'vid_chat_' : 'img_chat_';
+      const items = kind === 'video' ? videoItems : imageItems;
+      const used = new Set(items.map((item) => String(item.id || '')));
+      let index = items.length + 1;
+      let id = prefix + String(index).padStart(2, '0');
+      while (used.has(id)) {
+        index += 1;
+        id = prefix + String(index).padStart(2, '0');
+      }
+      return id;
+    }
+
+    function safeMediaText(value, maxLen) {
+      return String(value || '').trim().slice(0, Number(maxLen) || 200);
+    }
+
+    function normalizeMediaActionType(rawType) {
+      const value = String(rawType || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+      const aliases = {
+        image_add: 'add_image',
+        picture_add: 'add_image',
+        add_picture: 'add_image',
+        add_pic: 'add_image',
+        add_photo: 'add_image',
+        add_visual: 'add_image',
+        image_update: 'update_image',
+        edit_image: 'update_image',
+        modify_image: 'update_image',
+        change_image: 'update_image',
+        replace_image: 'update_image',
+        update_picture: 'update_image',
+        replace_picture: 'update_image',
+        image_move: 'move_image',
+        shift_image: 'move_image',
+        retime_image: 'move_image',
+        image_delete: 'delete_image',
+        remove_image: 'delete_image',
+        delete_picture: 'delete_image',
+        remove_picture: 'delete_image',
+        image_regenerate: 'regenerate_image',
+        retry_image: 'regenerate_image',
+        reroll_image: 'regenerate_image',
+        regenerate_picture: 'regenerate_image',
+        video_add: 'add_video',
+        add_broll: 'add_video',
+        add_b_roll: 'add_video',
+        video_update: 'update_video',
+        edit_video: 'update_video',
+        modify_video: 'update_video',
+        change_video: 'update_video',
+        replace_video: 'update_video',
+        video_move: 'move_video',
+        shift_video: 'move_video',
+        retime_video: 'move_video',
+        video_delete: 'delete_video',
+        remove_video: 'delete_video',
+        video_regenerate: 'regenerate_video',
+        retry_video: 'regenerate_video',
+        reroll_video: 'regenerate_video',
+      };
+      return aliases[value] || value;
+    }
+
+    function applyMediaTimingFromAction(item, action, kind) {
+      const minDuration = kind === 'video' ? 3 : 5;
+      const maxDuration = kind === 'video' ? 8 : 10;
+      const fallbackDuration = kind === 'video' ? 5 : 7;
+      const rawDuration = Number(action.durationSec || action.duration || ((Number(action.end) || 0) - (Number(action.start) || 0)));
+      const durationSec = clampDuration(rawDuration, minDuration, maxDuration, item.durationSec || fallbackDuration);
+      const hasStart = Number.isFinite(Number(action.start)) && Number(action.start) >= 0;
+      if (hasStart || !isValidMediaRange(item)) {
+        const preferredStart = hasStart ? Number(action.start) : Number(item.start || 0);
+        const start = findNonOverlappingStart(preferredStart, durationSec, collectMediaRangesExcept(kind, item.id), getAudioTotalDuration());
+        item.start = Number(start.toFixed(3));
+        item.durationSec = Number(durationSec.toFixed(2));
+        item.end = Number((item.start + durationSec).toFixed(3));
+      } else if (Number.isFinite(durationSec) && durationSec > 0) {
+        item.durationSec = Number(durationSec.toFixed(2));
+        item.end = Number((Number(item.start) + durationSec).toFixed(3));
+      }
+      if (kind === 'video') normalizeVideoItemTiming(item);
+      else normalizeImageItemTiming(item);
+    }
+
+    function applyMediaAction(action) {
+      if (!action || typeof action !== 'object') return false;
+      const type = normalizeMediaActionType(action.type || action.action || action.operation || action.op);
+      const isVideo = type.includes('video');
+      const kind = isVideo ? 'video' : 'image';
+      const items = isVideo ? videoItems : imageItems;
+      const id = safeMediaText(action.id || action.mediaId, 64).replace(/[^\w-]/g, '_');
+      const isAdd = type === 'add_image' || type === 'add_video';
+      const isDelete = type === 'delete_image' || type === 'delete_video';
+      const isMove = type === 'move_image' || type === 'move_video';
+      const isUpdate = type === 'update_image' || type === 'update_video';
+      const isRegenerate = type === 'regenerate_image' || type === 'regenerate_video' || !!action.regenerate;
+      if (!isAdd && !isDelete && !isMove && !isUpdate && !isRegenerate) return false;
+
+      let item = id ? items.find((entry) => String(entry.id || '') === id) : null;
+      if (!item && Number.isFinite(Number(action.index ?? action.ordinal ?? action.no))) {
+        const index = Math.max(0, Math.floor(Number(action.index ?? action.ordinal ?? action.no)) - 1);
+        item = items[index] || null;
+      }
+      if (isDelete) {
+        if (!item) return false;
+        const index = items.indexOf(item);
+        if (index >= 0) items.splice(index, 1);
+        return true;
+      }
+
+      if (!item && isAdd) {
+        item = {
+          id: id || nextMediaId(kind),
+          title: kind === 'video' ? 'LLM video asset' : 'LLM image asset',
+          purpose: '',
+          textBasis: '',
+          directorIntent: '',
+          sceneStory: '',
+          camera: '',
+          prompt: '',
+          videoPrompt: '',
+          negativePrompt: '',
+          aspectRatio: kind === 'video'
+            ? String(videoAssetAspectEl?.value || '16:9')
+            : String(imageAspectEl?.value || '1:1'),
+          motionEffect: kind === 'image' ? currentImageMotionEffect() : 'none',
+          status: 'queued',
+        };
+        items.push(item);
+      }
+      if (!item) return false;
+
+      const beforePrompt = kind === 'video' ? String(item.videoPrompt || item.prompt || '') : String(item.prompt || '');
+      const fields = [
+        ['title', 80],
+        ['purpose', 140],
+        ['textBasis', 160],
+        ['directorIntent', 240],
+        ['sceneStory', 420],
+        ['camera', 260],
+        ['negativePrompt', 600],
+        ['aspectRatio', 20],
+        ['motionEffect', 20],
+      ];
+      fields.forEach(([field, maxLen]) => {
+        if (action[field] !== undefined) item[field] = safeMediaText(action[field], maxLen);
+      });
+      if (kind === 'image') item.motionEffect = sanitizeImageMotionEffect(item.motionEffect);
+      if (action.prompt !== undefined || action.imagePrompt !== undefined) {
+        item.prompt = safeMediaText(action.prompt || action.imagePrompt, 1800);
+      }
+      if (action.videoPrompt !== undefined) {
+        item.videoPrompt = safeMediaText(action.videoPrompt, 1800);
+      }
+      if (kind === 'video' && !item.videoPrompt && item.prompt) item.videoPrompt = item.prompt;
+      if (kind === 'image' && !item.prompt && item.sceneStory) item.prompt = item.sceneStory;
+
+      if (action.start !== undefined || action.end !== undefined || action.durationSec !== undefined || action.duration !== undefined || !isValidMediaRange(item)) {
+        applyMediaTimingFromAction(item, action, kind);
+      } else if (kind === 'video') {
+        normalizeVideoItemTiming(item);
+      } else {
+        normalizeImageItemTiming(item);
+      }
+
+      const afterPrompt = kind === 'video' ? String(item.videoPrompt || item.prompt || '') : String(item.prompt || '');
+      if (isRegenerate || beforePrompt !== afterPrompt || isAdd) {
+        if (kind === 'video') delete item.video;
+        else delete item.image;
+        item.status = 'queued';
+        item.error = '';
+      }
+      return true;
+    }
+
+    function applyMediaActions(actions) {
+      if (!Array.isArray(actions) || !actions.length) return 0;
+      let changed = 0;
+      actions.forEach((action) => {
+        if (applyMediaAction(action)) changed += 1;
+      });
+      if (changed) {
+        normalizeMediaItemTiming();
+        renderImageCards();
+        renderVideoAssetCards();
+        syncCompositePreviewOverlay();
+        setImageStatus('LLM 已调整图片素材规划，可按需重新生成。');
+        setVideoAssetStatus('LLM 已调整视频素材规划，可按需重新生成。');
+      }
+      return changed;
+    }
+
+    function applyNonOverlappingSchedule(items, type, extraBlockedRanges = []) {
+      if (!Array.isArray(items) || !items.length) return items;
+      const total = getAudioTotalDuration();
+      const blocked = Array.isArray(extraBlockedRanges) ? [...extraBlockedRanges] : [];
+      const normalize = type === 'video' ? normalizeVideoItemTiming : normalizeImageItemTiming;
+      items.forEach((item) => {
+        normalize(item);
+        const duration = type === 'video'
+          ? clampDuration(item.durationSec, 3, 8, 5)
+          : clampDuration(item.durationSec, 5, 10, 7);
+        const nextStart = findNonOverlappingStart(item.start, duration, blocked, total);
+        item.start = Number(nextStart.toFixed(3));
+        item.durationSec = Number(duration.toFixed(2));
+        item.end = Number((item.start + duration).toFixed(3));
+        item.timeRange = formatTimeRange(item.start, item.end);
+        blocked.push({ type, start: item.start, end: item.end, title: item.title || '' });
+      });
+      return items;
     }
 
     function setVideoAssetStatus(text) {
@@ -1879,6 +3010,14 @@ const html = `<!doctype html>
       btnLlmChatUndo.disabled = selectionUndoStack.length === 0;
     }
 
+    function cloneMediaItems(items) {
+      try {
+        return JSON.parse(JSON.stringify(Array.isArray(items) ? items : []));
+      } catch (e) {
+        return [];
+      }
+    }
+
     function snapshotSelectionState() {
       return {
         selected: Array.from(selected),
@@ -1890,6 +3029,10 @@ const html = `<!doctype html>
         llmTopic,
         llmOutline,
         llmMultiSpeaker,
+        mediaAssets: {
+          images: cloneMediaItems(imageItems),
+          videos: cloneMediaItems(videoItems),
+        },
       };
     }
 
@@ -1942,7 +3085,14 @@ const html = `<!doctype html>
       llmTopic = String(snapshot.llmTopic || '').trim().slice(0, 80);
       llmOutline = String(snapshot.llmOutline || '').trim().slice(0, 120);
       llmMultiSpeaker = !!snapshot.llmMultiSpeaker;
+      if (snapshot.mediaAssets && typeof snapshot.mediaAssets === 'object') {
+        imageItems = cloneMediaItems(snapshot.mediaAssets.images);
+        videoItems = cloneMediaItems(snapshot.mediaAssets.videos);
+        normalizeMediaItemTiming();
+      }
       render();
+      renderImageCards();
+      renderVideoAssetCards();
       syncCurrentToken();
       updateSelectionStats();
       refreshLlmSummary();
@@ -2050,10 +3200,83 @@ const html = `<!doctype html>
       }
     }
 
+    function appendMediaDetails(card, label, blocks) {
+      const content = (blocks || [])
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)
+        .join('\\n\\n');
+      if (!content) return;
+      const details = document.createElement('details');
+      details.className = 'media-details';
+      const summary = document.createElement('summary');
+      summary.textContent = label || '\u63d0\u793a\u8bcd';
+      const body = document.createElement('div');
+      body.className = 'media-details-body';
+      body.textContent = content;
+      details.appendChild(summary);
+      details.appendChild(body);
+      card.appendChild(details);
+    }
+
+    function knownMediaSizeText(asset) {
+      const parseSize = (value) => {
+        const match = String(value || '').match(/(\\d+(?:\\.\\d+)?)\\D+(\\d+(?:\\.\\d+)?)/);
+        if (!match) return '';
+        const width = Number(match[1]);
+        const height = Number(match[2]);
+        if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return '';
+        return Math.round(width) + '\u00d7' + Math.round(height);
+      };
+      const direct = parseSize(asset?.dimensions || asset?.resolution);
+      if (direct) return direct;
+      const size = parseSize(asset?.size);
+      if (size) return size;
+      const width = Number(asset?.width || asset?.w);
+      const height = Number(asset?.height || asset?.h);
+      if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+        return Math.round(width) + '\u00d7' + Math.round(height);
+      }
+      return '';
+    }
+
+    function attachMediaDimensionBadge(preview, media, type, asset) {
+      if (!preview || !media) return;
+      const badge = document.createElement('span');
+      badge.className = 'media-dimension-badge';
+      badge.textContent = knownMediaSizeText(asset) || '\u8bfb\u53d6\u5c3a\u5bf8...';
+      preview.appendChild(badge);
+      const update = () => {
+        const width = type === 'video' ? media.videoWidth : media.naturalWidth;
+        const height = type === 'video' ? media.videoHeight : media.naturalHeight;
+        if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+          badge.textContent = Math.round(width) + '\u00d7' + Math.round(height);
+        }
+      };
+      media.addEventListener(type === 'video' ? 'loadedmetadata' : 'load', update, { once: true });
+      update();
+    }
+
+    function appendMediaMetaLine(card, item, type, asset) {
+      const line = document.createElement('div');
+      line.className = 'media-card-meta-line';
+      const parts = [
+        ['\u65f6\u95f4\u8303\u56f4', item?.timeRange || formatTimeRange(item?.start, item?.end)],
+        ['\u65f6\u957f', ((Number(item?.durationSec) || Math.max(0, (Number(item?.end) || 0) - (Number(item?.start) || 0))).toFixed(1) + 's')],
+        ['\u6bd4\u4f8b', String(item?.aspectRatio || asset?.size || (type === 'video' ? videoAssetAspectEl?.value : imageAspectEl?.value) || '-').trim() || '-'],
+        ['\u5c3a\u5bf8', knownMediaSizeText(asset) || '\u52a0\u8f7d\u540e\u663e\u793a'],
+      ];
+      parts.forEach(([label, value]) => {
+        const span = document.createElement('span');
+        span.textContent = label + '\uff1a' + value;
+        line.appendChild(span);
+      });
+      card.appendChild(line);
+    }
+
     function renderImageCards() {
       if (!imageCardListEl) return;
       imageCardListEl.innerHTML = '';
-      const previewRatio = String(imageAspectEl?.value || '1:1').replace(':', ' / ');
+      const selectedPreviewRatio = aspectRatioToCss(imageAspectEl?.value || '1:1', '1:1');
       if (!imageItems.length) {
         const empty = document.createElement('div');
         empty.className = 'meta';
@@ -2061,21 +3284,26 @@ const html = `<!doctype html>
         imageCardListEl.appendChild(empty);
       } else {
         imageItems.forEach((item, index) => {
+          normalizeImageItemTiming(item);
           const card = document.createElement('div');
           card.className = 'image-card';
           const preview = document.createElement('div');
           preview.className = 'image-preview';
-          preview.style.aspectRatio = previewRatio;
+          preview.style.aspectRatio = aspectRatioToCss(item?.image?.aspectRatio || item?.aspectRatio, selectedPreviewRatio);
           if (item.image && item.image.url) {
             const img = document.createElement('img');
             img.src = item.image.url;
             img.alt = item.title || '视频配图';
             preview.appendChild(img);
+            attachMediaDimensionBadge(preview, img, 'image', item.image);
           } else {
-            preview.textContent = item.status === 'error'
+            const message = document.createElement('div');
+            message.textContent = item.status === 'error'
               ? ('生成失败：' + (item.error || '未知错误'))
               : (item.status === 'generating' ? '正在生成图片...' : '等待生成');
+            preview.appendChild(message);
           }
+
 
           const title = document.createElement('div');
           title.className = 'image-card-title';
@@ -2084,6 +3312,20 @@ const html = `<!doctype html>
           const purpose = document.createElement('div');
           purpose.className = 'meta';
           purpose.textContent = (item.purpose || '视频配图') + (item.textBasis ? (' | 依据：' + item.textBasis) : '');
+
+          const controls = document.createElement('label');
+          controls.className = 'media-card-controls';
+          const controlText = document.createElement('span');
+          controlText.textContent = '显示时长（5-10秒）';
+          const durationInput = document.createElement('input');
+          durationInput.type = 'number';
+          durationInput.min = '5';
+          durationInput.max = '10';
+          durationInput.step = '0.5';
+          durationInput.value = String(item.durationSec || 7);
+          durationInput.dataset.imageDuration = String(index);
+          controls.appendChild(controlText);
+          controls.appendChild(durationInput);
 
           const scene = document.createElement('div');
           scene.className = 'image-card-prompt';
@@ -2101,10 +3343,17 @@ const html = `<!doctype html>
           actions.className = 'image-card-actions';
           const retryBtn = document.createElement('button');
           retryBtn.type = 'button';
-          retryBtn.textContent = item.status === 'generating' ? '生成中...' : '重试';
+          retryBtn.textContent = item.status === 'generating' ? '\u751f\u6210\u4e2d...' : '\u91cd\u65b0\u751f\u6210';
           retryBtn.disabled = item.status === 'generating' || imageGenerating;
           retryBtn.dataset.imageRetry = String(index);
           actions.appendChild(retryBtn);
+
+          const uploadBtn = document.createElement('button');
+          uploadBtn.type = 'button';
+          uploadBtn.textContent = '\u4e0a\u4f20\u66ff\u6362';
+          uploadBtn.disabled = item.status === 'generating' || imageGenerating;
+          uploadBtn.dataset.imageUpload = String(index);
+          actions.appendChild(uploadBtn);
 
           const copyBtn = document.createElement('button');
           copyBtn.type = 'button';
@@ -2122,14 +3371,16 @@ const html = `<!doctype html>
 
           card.appendChild(preview);
           card.appendChild(title);
+          appendMediaMetaLine(card, item, 'image', item.image);
           card.appendChild(purpose);
-          if (scene.textContent) card.appendChild(scene);
-          card.appendChild(prompt);
+          card.appendChild(controls);
+          appendMediaDetails(card, '\u753b\u9762\u8bf4\u660e / \u63d0\u793a\u8bcd', [scene.textContent, prompt.textContent]);
           card.appendChild(actions);
           imageCardListEl.appendChild(card);
         });
       }
       setImageGenerating(imageGenerating);
+      syncCompositePreviewOverlay();
     }
 
     function renderVideoAssetCards() {
@@ -2142,11 +3393,12 @@ const html = `<!doctype html>
         videoAssetListEl.appendChild(empty);
       } else {
         videoItems.forEach((item, index) => {
+          normalizeVideoItemTiming(item);
           const card = document.createElement('div');
           card.className = 'image-card video-asset-card';
           const preview = document.createElement('div');
           preview.className = 'image-preview';
-          preview.style.aspectRatio = String(item.aspectRatio || videoAssetAspectEl?.value || '16:9').replace(':', ' / ');
+          preview.style.aspectRatio = aspectRatioToCss(item.aspectRatio || videoAssetAspectEl?.value, '16:9');
           if (item.video && item.video.url) {
             const video = document.createElement('video');
             video.src = item.video.url;
@@ -2156,13 +3408,17 @@ const html = `<!doctype html>
             video.preload = 'metadata';
             video.style.width = '100%';
             video.style.height = '100%';
-            video.style.objectFit = 'cover';
+            video.style.objectFit = 'contain';
             preview.appendChild(video);
+            attachMediaDimensionBadge(preview, video, 'video', item.video);
           } else {
-            preview.textContent = item.status === 'error'
+            const message = document.createElement('div');
+            message.textContent = item.status === 'error'
               ? ('生成失败：' + (item.error || '未知错误'))
               : (item.status === 'generating' ? '正在生成视频素材...' : '等待生成');
+            preview.appendChild(message);
           }
+
 
           const title = document.createElement('div');
           title.className = 'image-card-title';
@@ -2170,7 +3426,7 @@ const html = `<!doctype html>
 
           const purpose = document.createElement('div');
           purpose.className = 'meta';
-          purpose.textContent = (item.purpose || 'B-roll') + (item.textBasis ? (' | 依据：' + item.textBasis) : '');
+          purpose.textContent = (item.purpose || 'B-roll') + ' | 时长：' + (item.durationSec || 5) + ' 秒' + (item.textBasis ? (' | 依据：' + item.textBasis) : '');
 
           const scene = document.createElement('div');
           scene.className = 'image-card-prompt';
@@ -2188,7 +3444,7 @@ const html = `<!doctype html>
           actions.className = 'image-card-actions';
           const retryBtn = document.createElement('button');
           retryBtn.type = 'button';
-          retryBtn.textContent = item.status === 'generating' ? '生成中...' : '重试';
+          retryBtn.textContent = item.status === 'generating' ? '\u751f\u6210\u4e2d...' : '\u91cd\u65b0\u751f\u6210';
           retryBtn.disabled = item.status === 'generating' || videoGenerating;
           retryBtn.dataset.videoRetry = String(index);
           actions.appendChild(retryBtn);
@@ -2209,14 +3465,15 @@ const html = `<!doctype html>
 
           card.appendChild(preview);
           card.appendChild(title);
+          appendMediaMetaLine(card, item, 'video', item.video);
           card.appendChild(purpose);
-          if (scene.textContent) card.appendChild(scene);
-          card.appendChild(prompt);
+          appendMediaDetails(card, '\u89c6\u9891\u5206\u955c / \u63d0\u793a\u8bcd', [scene.textContent, prompt.textContent]);
           card.appendChild(actions);
           videoAssetListEl.appendChild(card);
         });
       }
       setVideoGenerating(videoGenerating);
+      syncCompositePreviewOverlay();
     }
 
     function downloadGeneratedImages() {
@@ -2423,6 +3680,45 @@ const html = `<!doctype html>
       }
     }
 
+    function fillJianyingDraftOptions(targetEl, options, mapValue) {
+      if (!targetEl) return;
+      targetEl.innerHTML = '';
+      (options || []).forEach((item) => {
+        const option = document.createElement('option');
+        option.value = mapValue(item);
+        option.label = item.name ? (item.name + (item.modifiedText ? ' · ' + item.modifiedText : '')) : option.value;
+        targetEl.appendChild(option);
+      });
+    }
+
+    async function loadJianyingDraftTargets(showMessage) {
+      try {
+        const response = await fetch('/api/jianying-draft-targets');
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || ('HTTP ' + response.status));
+        }
+        const roots = Array.isArray(data.roots) ? data.roots : [];
+        const drafts = Array.isArray(data.drafts) ? data.drafts : [];
+        fillJianyingDraftOptions(jianyingDraftRootListEl, roots, (item) => item.path || '');
+        fillJianyingDraftOptions(jianyingTemplateDraftListEl, drafts, (item) => item.path || '');
+        if (data.detectedRoot && jianyingDraftRootEl && !jianyingDraftRootEl.value.trim()) {
+          jianyingDraftRootEl.value = data.detectedRoot;
+        }
+        if (showMessage) {
+          if (data.detectedRoot) {
+            setExportStatus('已识别剪映草稿目录：' + data.detectedRoot + (drafts.length ? '，可选模板草稿 ' + drafts.length + ' 个。' : '。'));
+          } else {
+            setExportStatus('暂未自动识别到剪映草稿目录，可选择“导出到当前项目目录”，或手动填写 com.lveditor.draft 目录。');
+          }
+        }
+        return data;
+      } catch (err) {
+        if (showMessage) setExportStatus('识别剪映目录失败：' + (err.message || String(err)));
+        return null;
+      }
+    }
+
     async function exportJianyingDraft() {
       const cues = buildExportCues();
       if (!cues.length) {
@@ -2430,21 +3726,40 @@ const html = `<!doctype html>
         return;
       }
       const templatePath = jianyingTemplatePathEl ? jianyingTemplatePathEl.value.trim() : '';
+      const exportMode = jianyingExportModeEl ? jianyingExportModeEl.value : 'auto';
+      const targetRoot = jianyingDraftRootEl ? jianyingDraftRootEl.value.trim() : '';
       const preset = jianyingSubtitlePresetEl ? jianyingSubtitlePresetEl.value : 'clean';
-      setExportStatus('正在生成剪映草稿...');
+      const deleteSegments = mergedSegmentsFromSelection();
+      const sourceDurationSec = getAudioTotalDuration();
+      const sourceVideoMeta = {
+        width: sourceVideoEl ? (Number(sourceVideoEl.videoWidth) || 0) : 0,
+        height: sourceVideoEl ? (Number(sourceVideoEl.videoHeight) || 0) : 0,
+      };
+      setExportStatus('正在生成完整剪映草稿（主视频轨 + 字幕轨 + 素材轨）...');
       if (btnExportJianyingDraft) btnExportJianyingDraft.disabled = true;
       try {
+        await saveReviewState('force');
         const response = await fetch('/api/export-jianying-draft', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            fullDraft: true,
             cues: cues.map((cue) => ({
               start: cue.start,
               end: Math.max(cue.end, cue.start + 0.35),
               text: String(cue.text || '').trim(),
             })),
+            deleteSegments,
+            sourceDurationSec,
+            sourceVideoMeta,
+            mediaAssets: {
+              images: cloneMediaItems(imageItems),
+              videos: cloneMediaItems(videoItems),
+            },
             preset,
             templatePath,
+            exportMode,
+            targetRoot,
             draftName: 'JaygoCut_' + new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14),
           }),
         });
@@ -2452,15 +3767,73 @@ const html = `<!doctype html>
         if (!response.ok || !data.success) {
           throw new Error(data.error || ('HTTP ' + response.status));
         }
-        const message = '已导出剪映草稿：' + data.draftDir + '（字幕 ' + data.cues + ' 条' + (data.templateUsed ? '，已套用自定义模板' : '，内置样式') + '）';
+        const draftKind = data.fullDraft ? '完整剪映草稿' : '字幕草稿';
+        const mediaText = data.fullDraft
+          ? ('，主视频片段 ' + (data.keepSegments || 0) + ' 段，图片 ' + (data.imageAssets || 0) + ' 张，视频素材 ' + (data.videoAssets || 0) + ' 段')
+          : '';
+        const fallbackText = data.fallbackUsed ? ('\\n\\n完整草稿生成失败，已自动导出字幕草稿。\\n原因：' + (data.fallbackReason || '未知')) : '';
+        const placementText = data.autoPlaced
+          ? '已放入剪映草稿目录，打开剪映即可看到'
+          : '已导出到项目目录，需要时可手动复制到剪映草稿目录';
+        const templateText = data.templateUsed ? '；已基于模板草稿生成新草稿，未覆盖原模板' : '';
+        const message = placementText + '：' + data.draftDir + '（' + draftKind + '，字幕 ' + data.cues + ' 条' + mediaText + '）' + templateText;
         setExportStatus(message);
-        alert(message + '\\n\\n提示：剪映 5.9 及以下通常可识别 JSON 草稿；剪映 6.x+ 可能因草稿加密无法直接打开。若无法打开，请使用 SRT 导入兜底。');
+        alert(message + fallbackText + (data.autoPlaced ? '\\n\\n提示：如果剪映已经打开但没有出现新项目，请重启剪映刷新项目列表。' : '\\n\\n提示：若新版剪映无法识别完整草稿，可使用导出的 SRT 或字幕草稿兜底。'));
       } catch (err) {
         setExportStatus('剪映草稿导出失败：' + (err.message || String(err)));
         alert('剪映草稿导出失败：' + (err.message || String(err)));
       } finally {
         if (btnExportJianyingDraft) btnExportJianyingDraft.disabled = false;
       }
+    }
+
+    function fileToDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(reader.error || new Error('\u8bfb\u53d6\u56fe\u7247\u5931\u8d25'));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function importLocalImageForItem(index, file) {
+      const item = imageItems[index];
+      if (!item || !file) return;
+      if (!/^image\//i.test(file.type || '')) {
+        throw new Error('\u8bf7\u9009\u62e9\u56fe\u7247\u6587\u4ef6');
+      }
+      if (file.size > 20 * 1024 * 1024) {
+        throw new Error('\u56fe\u7247\u6587\u4ef6\u8fc7\u5927\uff0c\u8bf7\u9009\u62e9 20MB \u4ee5\u5185\u7684\u56fe\u7247');
+      }
+      item.status = 'generating';
+      item.error = '';
+      renderImageCards();
+      const dataUrl = await fileToDataUrl(file);
+      const response = await fetch('/api/import-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: file.name || 'local-image',
+          dataUrl,
+          item,
+          aspectRatio: imageAspectEl ? imageAspectEl.value : item.aspectRatio,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || ('HTTP ' + response.status));
+      }
+      imageItems[index] = {
+        ...item,
+        ...(data.item || {}),
+        image: data.image,
+        status: 'done',
+        error: '',
+      };
+      normalizeImageItemTiming(imageItems[index]);
+      renderImageCards();
+      setImageStatus('\u5df2\u7528\u672c\u5730\u56fe\u7247\u66ff\u6362\u7b2c ' + (index + 1) + ' \u5f20');
+      scheduleReviewStateSave(200);
     }
 
     async function generateOneImage(index, retry = false) {
@@ -2489,6 +3862,7 @@ const html = `<!doctype html>
         status: 'done',
         error: '',
       };
+      normalizeImageItemTiming(imageItems[index]);
       renderImageCards();
       scheduleReviewStateSave(200);
     }
@@ -2498,6 +3872,7 @@ const html = `<!doctype html>
       setImageGenerating(true);
       try {
         setImageStatus('正在让 LLM 分析文本并规划配图点...');
+        const existingRanges = collectMediaRanges('image');
         imageItems = [];
         renderImageCards();
         const response = await fetch('/api/llm-image-plan', {
@@ -2506,12 +3881,17 @@ const html = `<!doctype html>
           body: JSON.stringify({
             words: WORDS,
             selectedIndices: Array.from(selected),
-            count: Number(imageCountEl ? imageCountEl.value : 8) || 8,
+            count: imageCountEl ? String(imageCountEl.value || 'auto') : 'auto',
             style: imageStyleEl ? imageStyleEl.value : '',
+            existingRanges,
             analysis: {
               topic: llmTopic,
               outline: llmOutline,
               multiSpeaker: llmMultiSpeaker,
+            },
+            mediaAssets: {
+              images: imageItems,
+              videos: videoItems,
             },
           }),
         });
@@ -2523,10 +3903,12 @@ const html = `<!doctype html>
         if (plan.outline && !llmOutline) llmOutline = String(plan.outline).slice(0, 120);
         imageItems = (Array.isArray(plan.items) ? plan.items : []).map((item) => ({
           ...item,
+          motionEffect: sanitizeImageMotionEffect(item.motionEffect || currentImageMotionEffect()),
           status: 'queued',
           image: null,
           error: '',
-        }));
+        })).map(normalizeImageItemTiming);
+        applyNonOverlappingSchedule(imageItems, 'image', existingRanges);
         renderImageCards();
         setImageStatus('已规划 ' + imageItems.length + ' 个配图点，开始逐张生成...');
 
@@ -2562,8 +3944,9 @@ const html = `<!doctype html>
           item,
           retry,
           aspectRatio: videoAssetAspectEl ? videoAssetAspectEl.value : item.aspectRatio,
-          numFrames: 121,
-          frameRate: 24,
+          durationSec: item.durationSec || 5,
+          numFrames: item.numFrames,
+          frameRate: item.frameRate,
         }),
       });
       const data = await response.json().catch(() => ({}));
@@ -2577,6 +3960,7 @@ const html = `<!doctype html>
         status: 'done',
         error: '',
       };
+      normalizeVideoItemTiming(videoItems[index]);
       renderVideoAssetCards();
       scheduleReviewStateSave(200);
     }
@@ -2586,6 +3970,7 @@ const html = `<!doctype html>
       setVideoGenerating(true);
       try {
         setVideoAssetStatus('正在让 LLM 规划视频素材插入点...');
+        const existingRanges = collectMediaRanges('video');
         videoItems = [];
         renderVideoAssetCards();
         const response = await fetch('/api/llm-video-plan', {
@@ -2597,10 +3982,15 @@ const html = `<!doctype html>
             count: Number(videoAssetCountEl ? videoAssetCountEl.value : 3) || 3,
             style: imageStyleEl ? imageStyleEl.value : '',
             aspectRatio: videoAssetAspectEl ? videoAssetAspectEl.value : '16:9',
+            existingRanges,
             analysis: {
               topic: llmTopic,
               outline: llmOutline,
               multiSpeaker: llmMultiSpeaker,
+            },
+            mediaAssets: {
+              images: imageItems,
+              videos: videoItems,
             },
           }),
         });
@@ -2615,7 +4005,8 @@ const html = `<!doctype html>
           status: 'queued',
           video: null,
           error: '',
-        }));
+        })).map(normalizeVideoItemTiming);
+        applyNonOverlappingSchedule(videoItems, 'video', existingRanges);
         renderVideoAssetCards();
         setVideoAssetStatus('已规划 ' + videoItems.length + ' 个视频素材点，开始逐段生成...');
 
@@ -2677,6 +4068,11 @@ const html = `<!doctype html>
         threshold: Math.max(0.2, Number(thresholdEl.value) || 0.2),
         boundarySettings: readBoundarySettings(),
         cutPrecisionMode: cutPrecisionModeEl ? String(cutPrecisionModeEl.value || 'standard') : 'standard',
+        autoRulePreferences: {
+          filler: toggleAutoFillerEl ? !!toggleAutoFillerEl.checked : true,
+          fillerWords: fillerWordAllowListEl ? String(fillerWordAllowListEl.value || '') : '',
+          repeat: toggleAutoRepeatEl ? !!toggleAutoRepeatEl.checked : true,
+        },
         imageMotionEffect: currentImageMotionEffect(),
         currentTimeSec: Math.max(0, Number(audio.currentTime) || 0),
         mediaAssets: {
@@ -2810,9 +4206,11 @@ const html = `<!doctype html>
         imageItems = Array.isArray(restoredMedia.images) ? restoredMedia.images : [];
         videoItems = Array.isArray(restoredMedia.videos) ? restoredMedia.videos : [];
         imageItems.forEach((item) => {
+          normalizeImageItemTiming(item);
           if (item && item.image && item.status !== 'error') item.status = item.image.url ? 'done' : (item.status || 'queued');
         });
         videoItems.forEach((item) => {
+          normalizeVideoItemTiming(item);
           if (item && item.video && item.status !== 'error') item.status = item.video.url ? 'done' : (item.status || 'queued');
         });
         renderImageCards();
@@ -2824,6 +4222,13 @@ const html = `<!doctype html>
         }
         if (state.boundarySettings && typeof state.boundarySettings === 'object') {
           applyBoundarySettings(state.boundarySettings);
+        }
+        if (state.autoRulePreferences && typeof state.autoRulePreferences === 'object') {
+          if (toggleAutoFillerEl) toggleAutoFillerEl.checked = state.autoRulePreferences.filler !== false;
+          if (fillerWordAllowListEl && typeof state.autoRulePreferences.fillerWords === 'string') {
+            fillerWordAllowListEl.value = state.autoRulePreferences.fillerWords;
+          }
+          if (toggleAutoRepeatEl) toggleAutoRepeatEl.checked = state.autoRulePreferences.repeat !== false;
         }
         if (cutPrecisionModeEl && ['conservative', 'standard', 'clean'].includes(String(state.cutPrecisionMode || ''))) {
           cutPrecisionModeEl.value = String(state.cutPrecisionMode);
@@ -2845,6 +4250,7 @@ const html = `<!doctype html>
         }
 
         render();
+        applyAutoRulePreferences(false);
         updateSelectionStats();
         refreshLlmSummary();
         setStatus('已恢复上次审核草稿');
@@ -2881,8 +4287,20 @@ const html = `<!doctype html>
 
     function setLogs(lines) {
       latestCutLogTail = Array.isArray(lines) ? lines.slice(-40) : [];
-      logsEl.textContent = (lines || []).join('\\n');
-      logsEl.scrollTop = logsEl.scrollHeight;
+      const safeLines = Array.isArray(lines) ? lines : [];
+      if (logsEl) {
+        logsEl.textContent = safeLines.join('\\n');
+        logsEl.scrollTop = logsEl.scrollHeight;
+      }
+      if (cutLogStatusEl) {
+        cutLogStatusEl.textContent = safeLines.length
+          ? ('最近 ' + safeLines.length + ' 行日志，裁剪异常时可在这里复制排查。')
+          : '暂无裁剪日志。执行裁剪后，这里会显示进度和错误详情。';
+      }
+      if (cutLogBadgeEl) {
+        cutLogBadgeEl.hidden = safeLines.length === 0;
+        cutLogBadgeEl.textContent = safeLines.length ? String(Math.min(99, safeLines.length)) : '';
+      }
     }
 
     function getAudioTotalDuration() {
@@ -2899,6 +4317,62 @@ const html = `<!doctype html>
       return !!(sourceVideoEl && runtimeInfoCache && runtimeInfoCache.videoExists !== false);
     }
 
+    function parseAspectRatioValue(value) {
+      const match = String(value || '').match(/(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)/);
+      if (!match) return 0;
+      const w = Number(match[1]);
+      const h = Number(match[2]);
+      return Number.isFinite(w) && Number.isFinite(h) && h > 0 ? w / h : 0;
+    }
+
+    function findClosestAspectOption(selectEl, sourceRatio) {
+      if (!selectEl || !(sourceRatio > 0)) return '';
+      const options = Array.from(selectEl.options || []);
+      let best = '';
+      let bestDiff = Number.POSITIVE_INFINITY;
+      options.forEach((option) => {
+        const ratio = parseAspectRatioValue(option.value);
+        if (!(ratio > 0)) return;
+        const diff = Math.abs(Math.log(ratio / sourceRatio));
+        if (diff < bestDiff) {
+          bestDiff = diff;
+          best = option.value;
+        }
+      });
+      return best;
+    }
+
+    function syncMediaAspectToSourceVideo() {
+      if (!sourceVideoEl) return;
+      const width = Number(sourceVideoEl.videoWidth) || 0;
+      const height = Number(sourceVideoEl.videoHeight) || 0;
+      if (!(width > 0 && height > 0)) return;
+      const ratio = width / height;
+      sourceVideoMetaLabel = width + 'x' + height;
+      if (videoPreviewFrameEl) {
+        videoPreviewFrameEl.style.setProperty('--source-video-aspect', width + ' / ' + height);
+      }
+      const imageAspect = findClosestAspectOption(imageAspectEl, ratio);
+      if (imageAspect && !imageAspectUserChanged && imageAspectEl.value !== imageAspect) {
+        imageAspectEl.value = imageAspect;
+        renderImageCards();
+      }
+      const videoAspect = findClosestAspectOption(videoAssetAspectEl, ratio);
+      if (videoAspect && !videoAspectUserChanged && videoAssetAspectEl.value !== videoAspect) {
+        videoAssetAspectEl.value = videoAspect;
+        renderVideoAssetCards();
+      }
+    }
+
+    function videoPreviewScaleLabel() {
+      if (!sourceVideoEl) return '';
+      const rect = getRenderedSourceVideoRect();
+      const width = Number(sourceVideoEl.videoWidth) || 0;
+      if (!rect || !(width > 0)) return sourceVideoMetaLabel;
+      const scale = Math.max(1, Math.round((rect.width / width) * 100));
+      return (sourceVideoMetaLabel || '') + (scale ? (' | 预览' + scale + '%') : '');
+    }
+
     function silenceVideoPreview() {
       if (!sourceVideoEl) return;
       try {
@@ -2910,26 +4384,207 @@ const html = `<!doctype html>
       }
     }
 
+    function buildPreviewMediaOverlays() {
+      const overlays = [];
+      const pushOverlay = (type, item, asset) => {
+        const url = String(asset?.url || '').trim();
+        if (!url) return;
+        const start = Math.max(0, Number(item?.start) || 0);
+        const durationSec = type === 'image'
+          ? clampDuration(item?.durationSec || ((Number(item?.end) || 0) - start), 5, 10, 7)
+          : clampDuration(item?.durationSec || ((Number(item?.end) || 0) - start), 3, 8, 5);
+        overlays.push({
+          type,
+          url,
+          start,
+          end: start + durationSec,
+          durationSec,
+          title: String(item?.title || (type === 'image' ? '图片素材' : '视频素材')),
+          motionEffect: type === 'image' ? currentImageMotionEffect() : 'none',
+        });
+      };
+      imageItems.forEach((item) => pushOverlay('image', item, item?.image));
+      videoItems.forEach((item) => pushOverlay('video', item, item?.video));
+      return overlays.sort((a, b) => a.start - b.start || (a.type === 'video' ? 1 : -1));
+    }
+
+    function applyImagePreviewMotion(el, overlay, currentTime) {
+      if (!el || !overlay) return;
+      const progress = Math.max(0, Math.min(1, (currentTime - overlay.start) / Math.max(0.2, overlay.durationSec || 1)));
+      const effect = String(overlay.motionEffect || 'none');
+      let scale = 1;
+      let x = 0;
+      let y = 0;
+      if (effect === 'zoom-in') scale = 1 + progress * 0.06;
+      if (effect === 'zoom-out') scale = 1.06 - progress * 0.06;
+      if (effect === 'pan-left') x = (0.5 - progress) * 4;
+      if (effect === 'pan-right') x = (progress - 0.5) * 4;
+      if (effect === 'pan-up') y = (0.5 - progress) * 4;
+      if (effect === 'pan-down') y = (progress - 0.5) * 4;
+      el.style.transform = 'translate(' + x.toFixed(2) + '%, ' + y.toFixed(2) + '%) scale(' + scale.toFixed(4) + ')';
+    }
+
+    function getRenderedSourceVideoRect() {
+      const frame = sourceVideoEl?.parentElement;
+      if (!frame || !sourceVideoEl) return null;
+      const frameRect = frame.getBoundingClientRect();
+      const videoRect = sourceVideoEl.getBoundingClientRect();
+      const videoWidth = Number(sourceVideoEl.videoWidth) || 0;
+      const videoHeight = Number(sourceVideoEl.videoHeight) || 0;
+      const boxWidth = videoRect.width || frameRect.width || 1;
+      const boxHeight = videoRect.height || frameRect.height || 1;
+      if (!videoWidth || !videoHeight || !boxWidth || !boxHeight) {
+        return {
+          left: Math.max(0, videoRect.left - frameRect.left),
+          top: Math.max(0, videoRect.top - frameRect.top),
+          width: Math.max(1, boxWidth),
+          height: Math.max(1, boxHeight),
+        };
+      }
+      const scale = Math.min(boxWidth / videoWidth, boxHeight / videoHeight);
+      const renderedWidth = Math.max(1, videoWidth * scale);
+      const renderedHeight = Math.max(1, videoHeight * scale);
+      return {
+        left: Math.max(0, videoRect.left - frameRect.left + (boxWidth - renderedWidth) / 2),
+        top: Math.max(0, videoRect.top - frameRect.top + (boxHeight - renderedHeight) / 2),
+        width: renderedWidth,
+        height: renderedHeight,
+      };
+    }
+
+    function syncCompositePreviewBounds() {
+      if (!compositePreviewOverlayEl) return;
+      const rect = getRenderedSourceVideoRect();
+      if (!rect) return;
+      compositePreviewOverlayEl.style.left = rect.left.toFixed(2) + 'px';
+      compositePreviewOverlayEl.style.top = rect.top.toFixed(2) + 'px';
+      compositePreviewOverlayEl.style.width = rect.width.toFixed(2) + 'px';
+      compositePreviewOverlayEl.style.height = rect.height.toFixed(2) + 'px';
+    }
+
+    function syncCompositePreviewOverlay(currentTime = Number(audio.currentTime) || 0) {
+      if (!compositePreviewOverlayEl) return '';
+      if (!videoPreviewEnabled) {
+        compositePreviewOverlayEl.hidden = true;
+        compositePreviewOverlayEl.innerHTML = '';
+        activeCompositePreviewKey = '';
+        stopCompositePreviewLoop();
+        return '';
+      }
+      const overlays = buildPreviewMediaOverlays();
+      const active = overlays.filter((item) => currentTime >= item.start && currentTime < item.end).pop();
+      if (!active) {
+        compositePreviewOverlayEl.hidden = true;
+        compositePreviewOverlayEl.innerHTML = '';
+        activeCompositePreviewKey = '';
+        return '';
+      }
+      syncCompositePreviewBounds();
+      const key = [active.type, active.url, active.start.toFixed(2), active.end.toFixed(2), active.motionEffect].join('|');
+      if (activeCompositePreviewKey !== key) {
+        activeCompositePreviewKey = key;
+        compositePreviewOverlayEl.innerHTML = '';
+        const media = document.createElement(active.type === 'video' ? 'video' : 'img');
+        media.dataset.compositePreviewMedia = '1';
+        media.src = active.url;
+        if (active.type === 'video') {
+          media.muted = true;
+          media.defaultMuted = true;
+          media.volume = 0;
+          media.loop = true;
+          media.playsInline = true;
+          media.preload = 'metadata';
+        } else {
+          media.alt = active.title || '合成预览素材';
+        }
+        compositePreviewOverlayEl.appendChild(media);
+      }
+      compositePreviewOverlayEl.hidden = false;
+      const media = compositePreviewOverlayEl.querySelector('[data-composite-preview-media]');
+      if (active.type === 'image') {
+        applyImagePreviewMotion(media, active, currentTime);
+      } else if (media) {
+        const localTime = Math.max(0, currentTime - active.start);
+        const duration = Number.isFinite(media.duration) && media.duration > 0 ? media.duration : active.durationSec;
+        const target = duration > 0 ? (localTime % duration) : localTime;
+        if (Math.abs((Number(media.currentTime) || 0) - target) > 0.45) {
+          try { media.currentTime = target; } catch {}
+        }
+        if (audio.paused) {
+          if (!media.paused) media.pause();
+        } else if (media.paused) {
+          media.play().catch(() => {});
+        }
+      }
+      return active.title || (active.type === 'image' ? '图片素材' : '视频素材');
+    }
+
+
+    function startCompositePreviewLoop() {
+      if (compositePreviewRaf !== null) return;
+      const tick = () => {
+        compositePreviewRaf = null;
+        if (!videoPreviewEnabled || audio.paused || audio.ended) return;
+        syncCompositePreviewOverlay(Number(audio.currentTime) || 0);
+        compositePreviewRaf = requestAnimationFrame(tick);
+      };
+      compositePreviewRaf = requestAnimationFrame(tick);
+    }
+
+    function stopCompositePreviewLoop() {
+      if (compositePreviewRaf === null) return;
+      cancelAnimationFrame(compositePreviewRaf);
+      compositePreviewRaf = null;
+    }
+
+    function syncVideoPreviewRate(driftSec) {
+      if (!sourceVideoEl) return;
+      const baseRate = Math.max(0.25, Math.min(4, Number(audio.playbackRate) || 1));
+      let nextRate = baseRate;
+      if (!audio.paused && Number.isFinite(driftSec)) {
+        const absDrift = Math.abs(driftSec);
+        if (absDrift > VIDEO_PREVIEW_SOFT_SYNC_TOLERANCE && absDrift <= VIDEO_PREVIEW_PLAYING_SEEK_TOLERANCE) {
+          nextRate = Math.max(0.96, Math.min(1.04, baseRate + driftSec * 0.035));
+        }
+      }
+      try {
+        if (Math.abs((Number(sourceVideoEl.playbackRate) || 1) - nextRate) > 0.005) {
+          sourceVideoEl.playbackRate = nextRate;
+        }
+      } catch {
+        // Playback-rate adjustment is best-effort; seeking remains the fallback.
+      }
+    }
+
     function syncVideoPreview(force = false) {
       if (!videoPreviewEnabled || !hasUsableVideoPreview()) return;
       if (syncingAudioFromVideo && !force) return;
       silenceVideoPreview();
       const target = Math.max(0, Number(audio.currentTime) || 0);
       const current = Number(sourceVideoEl.currentTime) || 0;
-      if (force || Math.abs(current - target) > 0.12) {
+      const now = performance.now();
+      const drift = target - current;
+      const seekTolerance = sourceVideoEl.paused || force ? 0.18 : VIDEO_PREVIEW_PLAYING_SEEK_TOLERANCE;
+      const canSeek = force || (now - lastVideoPreviewSeekAt) > VIDEO_PREVIEW_FORCE_SEEK_INTERVAL_MS;
+      if ((force || Math.abs(drift) > seekTolerance) && canSeek) {
+        lastVideoPreviewSeekAt = now;
         syncingVideoFromAudio = true;
         try {
           const maxTime = Number.isFinite(sourceVideoEl.duration) && sourceVideoEl.duration > 0
             ? Math.max(0, sourceVideoEl.duration - 0.01)
             : target;
           sourceVideoEl.currentTime = Math.max(0, Math.min(maxTime, target));
+          syncVideoPreviewRate(0);
         } catch {
           // Some codecs refuse seeking before metadata is ready; the next timeupdate will retry.
         }
         setTimeout(() => { syncingVideoFromAudio = false; }, 80);
+      } else {
+        syncVideoPreviewRate(drift);
       }
       if (audio.paused) {
         if (!sourceVideoEl.paused) sourceVideoEl.pause();
+        syncVideoPreviewRate(0);
       } else if (sourceVideoEl.paused) {
         syncingVideoFromAudio = true;
         sourceVideoEl.play().catch(() => {
@@ -2937,7 +4592,9 @@ const html = `<!doctype html>
         });
         setTimeout(() => { syncingVideoFromAudio = false; }, 80);
       }
-      setVideoPreviewStatus('跟随 ' + formatWaveClock(target));
+      const compositeTitle = syncCompositePreviewOverlay(target);
+      const scaleLabel = videoPreviewScaleLabel();
+      setVideoPreviewStatus((scaleLabel ? (scaleLabel + ' | ') : '') + '跟随 ' + formatWaveClock(target) + (compositeTitle ? (' | 合成预览：' + compositeTitle) : ''));
     }
 
     function setPlaybackTime(timeSec, options = {}) {
@@ -2958,6 +4615,10 @@ const html = `<!doctype html>
         clearTimeout(skipFadeTimer);
         skipFadeTimer = null;
       }
+      if (skipFadeRestoreVolume !== null) {
+        audio.volume = Math.max(0, Math.min(1, Number(skipFadeRestoreVolume)));
+        skipFadeRestoreVolume = null;
+      }
     }
 
     function smoothSkipTo(targetTime) {
@@ -2968,6 +4629,7 @@ const html = `<!doctype html>
       }
 
       cancelSkipFade();
+      skipFadeRestoreVolume = originalVolume;
       audio.volume = Math.max(0, originalVolume * 0.16);
       skipFadeTimer = setTimeout(() => {
         skipFadeTimer = null;
@@ -2983,6 +4645,7 @@ const html = `<!doctype html>
           } else {
             audio.volume = originalVolume;
             skipFadeRaf = null;
+            skipFadeRestoreVolume = null;
           }
         };
         skipFadeRaf = requestAnimationFrame(step);
@@ -2995,7 +4658,8 @@ const html = `<!doctype html>
       if (videoPreviewPanelEl) videoPreviewPanelEl.hidden = !videoPreviewEnabled;
       if (toolbarCardEl) toolbarCardEl.classList.toggle('video-preview-visible', videoPreviewEnabled);
       if (btnToggleVideoPreview) {
-        btnToggleVideoPreview.textContent = videoPreviewEnabled ? '隐藏视频' : '视频预览';
+        btnToggleVideoPreview.textContent = videoPreviewEnabled ? '视频开' : '视频';
+        btnToggleVideoPreview.setAttribute('aria-pressed', videoPreviewEnabled ? 'true' : 'false');
         btnToggleVideoPreview.disabled = runtimeInfoCache && runtimeInfoCache.videoExists === false;
       }
       try {
@@ -3005,9 +4669,13 @@ const html = `<!doctype html>
       }
       if (videoPreviewEnabled) {
         silenceVideoPreview();
+        syncCompositePreviewBounds();
         syncVideoPreview(true);
       } else if (sourceVideoEl && !sourceVideoEl.paused) {
         sourceVideoEl.pause();
+        syncCompositePreviewOverlay();
+      } else {
+        syncCompositePreviewOverlay();
       }
     }
 
@@ -3335,11 +5003,25 @@ const html = `<!doctype html>
       const deletedSec = mergedSelected.reduce((sum, seg) => sum + Math.max(0, seg.end - seg.start), 0);
       const totalSec = getAudioTotalDuration();
       const outputSec = Math.max(0, totalSec - deletedSec);
-      selectionStatsEl.textContent =
+      const modeLabel = cutPrecisionModeEl && cutPrecisionModeEl.selectedOptions && cutPrecisionModeEl.selectedOptions[0]
+        ? cutPrecisionModeEl.selectedOptions[0].textContent.trim()
+        : '标准';
+      const summaryText =
         '已选删除: ' + mergedSelected.length + ' 段'
         + ' | 删除时长: ' + deletedSec.toFixed(2) + ' 秒'
         + ' | 预计成片: ' + outputSec.toFixed(2) + ' 秒'
-        + ' | 原时长: ' + totalSec.toFixed(2) + ' 秒';
+        + ' | 原时长: ' + totalSec.toFixed(2) + ' 秒'
+        + ' | 模式: ' + modeLabel;
+      if (selectionStatsEl) {
+        selectionStatsEl.dataset.summary = summaryText;
+        selectionStatsEl.setAttribute('aria-label', summaryText);
+      }
+      if (statDeletedCountEl) statDeletedCountEl.textContent = mergedSelected.length + ' 段';
+      if (statDeletedDurationEl) statDeletedDurationEl.textContent = deletedSec.toFixed(2) + ' 秒';
+      if (statOutputDurationEl) statOutputDurationEl.textContent = outputSec.toFixed(2) + ' 秒';
+      if (statTotalDurationEl) statTotalDurationEl.textContent = totalSec.toFixed(2) + ' 秒';
+      if (statCutModeEl) statCutModeEl.textContent = modeLabel;
+      if (!statDeletedCountEl && selectionStatsEl) selectionStatsEl.textContent = summaryText;
       drawWaveform();
     }
 
@@ -3441,7 +5123,8 @@ const html = `<!doctype html>
       if (!autoSet.has(i)) return null;
       const reason = autoReasonByIndex.get(i);
       const w = WORDS[i] || {};
-      return reasonCategory(reason, !!w.isGap) || 'silence';
+      const cat = reasonCategory(reason, !!w.isGap) || 'silence';
+      return isAutoRuleCategoryEnabled(cat, w.text) ? cat : null;
     }
 
     function tokenAutoClass(i) {
@@ -3781,7 +5464,10 @@ const html = `<!doctype html>
     function applyFocusReviewMode(enabled) {
       const next = !!enabled;
       document.body.classList.toggle('review-focus-mode', next);
-      if (btnFocusReview) btnFocusReview.textContent = next ? '退出专注' : '专注审核';
+      if (btnFocusReview) {
+        btnFocusReview.textContent = next ? '退出专注' : '专注';
+        btnFocusReview.setAttribute('aria-pressed', next ? 'true' : 'false');
+      }
       try {
         localStorage.setItem(FOCUS_REVIEW_STORAGE_KEY, next ? '1' : '0');
       } catch {
@@ -4230,9 +5916,12 @@ const html = `<!doctype html>
     function applyChatAdjustResult(data) {
       const addIndices = Array.isArray(data?.addIndices) ? data.addIndices : [];
       const removeIndices = Array.isArray(data?.removeIndices) ? data.removeIndices : [];
+      const mediaActions = Array.isArray(data?.mediaActions)
+        ? data.mediaActions
+        : (Array.isArray(data?.media_actions) ? data.media_actions : []);
       let changed = 0;
 
-      if (addIndices.length || removeIndices.length) {
+      if (addIndices.length || removeIndices.length || mediaActions.length) {
         pushSelectionUndo();
       }
 
@@ -4260,6 +5949,9 @@ const html = `<!doctype html>
         llmReasonByIndex.delete(idx);
         refreshToken(idx);
       }
+
+      const mediaChanged = applyMediaActions(mediaActions);
+      changed += mediaChanged;
 
       updateSelectionStats();
       refreshIdleStatus();
@@ -4298,6 +5990,10 @@ const html = `<!doctype html>
               outline: llmOutline,
               multiSpeaker: llmMultiSpeaker,
             },
+            mediaAssets: {
+              images: imageItems,
+              videos: videoItems,
+            },
           }),
         });
         const data = await response.json().catch(() => ({}));
@@ -4318,6 +6014,7 @@ const html = `<!doctype html>
           '已完成调整',
           '新增 ' + Number((data.addIds || []).length) + ' 段',
           '取消 ' + Number((data.removeIds || []).length) + ' 段',
+          '\u7d20\u6750\u52a8\u4f5c ' + Number((data.mediaActions || data.media_actions || []).length) + ' \u9879',
           '实际变更 ' + changed + ' 项',
           reason ? ('说明: ' + reason) : '',
           summary ? ('摘要: ' + summary) : '',
@@ -4736,15 +6433,20 @@ const html = `<!doctype html>
     function buildMediaOverlaysForCut() {
       const overlays = [];
       const pushOverlay = (type, item, asset) => {
+        if (type === 'image') normalizeImageItemTiming(item);
+        if (type === 'video') normalizeVideoItemTiming(item);
         const start = Number(item?.start);
         const end = Number(item?.end);
         const filePath = String(asset?.filePath || '').trim();
         if (!filePath || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+        const durationSec = Math.max(0.2, end - start);
         overlays.push({
           type,
           filePath,
+          url: String(asset?.url || ''),
           start,
           end,
+          durationSec,
           title: String(item?.title || ''),
           fit: 'cover',
           motionEffect: type === 'image' ? currentImageMotionEffect() : 'none',
@@ -4793,13 +6495,25 @@ const html = `<!doctype html>
         await saveReviewState('force');
         await forceBackupReviewState();
         await runCutPreflight(segs);
+        let mediaOverlays = buildMediaOverlaysForCut();
+        if (mediaOverlays.length) {
+          const imageCount = mediaOverlays.filter((item) => item.type === 'image').length;
+          const videoCount = mediaOverlays.filter((item) => item.type === 'video').length;
+          const includeMedia = window.confirm(
+            '检测到已生成的素材：图片 ' + imageCount + ' 张，视频 ' + videoCount + ' 段。\\n\\n是否将这些图片和视频素材一起合成到最终成片？\\n\\n确定：合成素材\\n取消：只裁剪主视频，不合成素材'
+          );
+          if (!includeMedia) {
+            mediaOverlays = [];
+            setStatus('用户选择不合成图片/视频素材，仅提交主视频裁剪...');
+          }
+        }
         setStatus('正在提交裁剪任务...');
         const r = await fetch('/api/cut', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             segments: segs,
-            overlays: buildMediaOverlaysForCut(),
+            overlays: mediaOverlays,
           }),
         });
 
@@ -4916,10 +6630,11 @@ const html = `<!doctype html>
           e.preventDefault();
           return;
         }
-        if (leftPanelOpen || imagePanelOpen || rightPanelOpen) {
+        if (leftPanelOpen || imagePanelOpen || rightPanelOpen || logPanelOpen) {
           closePanels();
           e.preventDefault();
         }
+        setWaveZoomPopoverOpen(false);
         return;
       }
       if (!e.ctrlKey && !e.metaKey && !e.altKey && key === 's') {
@@ -4945,6 +6660,26 @@ const html = `<!doctype html>
     });
 
     document.getElementById('btnSelectSilence').addEventListener('click', selectSilenceByThreshold);
+    [toggleAutoFillerEl, toggleAutoRepeatEl].forEach((el) => {
+      if (!el) return;
+      el.addEventListener('change', () => {
+        pushSelectionUndo();
+        const changed = applyAutoRulePreferences(el.checked);
+        setStatus(changed ? '自动规则偏好已应用' : '自动规则偏好已保存');
+        scheduleReviewStateSave(180);
+      });
+    });
+    if (fillerWordAllowListEl) {
+      fillerWordAllowListEl.addEventListener('change', () => {
+        pushSelectionUndo();
+        const changed = applyAutoRulePreferences(true);
+        setStatus(changed ? '语气词标记范围已应用' : '语气词标记范围已保存');
+        scheduleReviewStateSave(180);
+      });
+    }
+    toolTabEls.forEach((tab) => {
+      tab.addEventListener('click', () => setToolPanel(tab.dataset.toolTab || 'marking'));
+    });
     if (btnPreviewDelete) btnPreviewDelete.addEventListener('click', previewCurrentDeletePoint);
     if (btnToggleVideoPreview) btnToggleVideoPreview.addEventListener('click', toggleVideoPreview);
     if (btnFocusReview) btnFocusReview.addEventListener('click', toggleFocusReviewMode);
@@ -5003,6 +6738,11 @@ const html = `<!doctype html>
         setPanelOpen('right', !rightPanelOpen);
       });
     }
+    if (btnToggleLogPanel) {
+      btnToggleLogPanel.addEventListener('click', () => {
+        setPanelOpen('log', !logPanelOpen);
+      });
+    }
     if (btnCloseLeftPanel) {
       btnCloseLeftPanel.addEventListener('click', () => {
         setPanelOpen('left', false);
@@ -5017,6 +6757,36 @@ const html = `<!doctype html>
       btnCloseRightPanel.addEventListener('click', () => {
         setPanelOpen('right', false);
       });
+    }
+    if (btnCloseLogPanel) {
+      btnCloseLogPanel.addEventListener('click', () => {
+        setPanelOpen('log', false);
+      });
+    }
+    if (btnWaveZoom) {
+      btnWaveZoom.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setWaveZoomPopoverOpen(!waveZoomPopoverEl || waveZoomPopoverEl.hidden);
+      });
+    }
+    if (btnCloseWaveZoom) {
+      btnCloseWaveZoom.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setWaveZoomPopoverOpen(false);
+      });
+    }
+    if (waveZoomPopoverEl) {
+      ['click', 'mousedown', 'wheel'].forEach((eventName) => {
+        waveZoomPopoverEl.addEventListener(eventName, (e) => {
+          e.stopPropagation();
+        }, { passive: eventName === 'wheel' });
+      });
+    }
+    if (btnMediaModeImage) {
+      btnMediaModeImage.addEventListener('click', () => setMediaMode('image'));
+    }
+    if (btnMediaModeVideo) {
+      btnMediaModeVideo.addEventListener('click', () => setMediaMode('video'));
     }
     if (btnGeneratePublish) {
       btnGeneratePublish.addEventListener('click', async () => {
@@ -5060,6 +6830,9 @@ const html = `<!doctype html>
     if (btnExportJianyingDraft) {
       btnExportJianyingDraft.addEventListener('click', exportJianyingDraft);
     }
+    if (btnDetectJianyingDraftRoot) {
+      btnDetectJianyingDraftRoot.addEventListener('click', () => loadJianyingDraftTargets(true));
+    }
     if (replaceFindTextEl) {
       replaceFindTextEl.addEventListener('input', () => refreshSearchMatches(false));
       replaceFindTextEl.addEventListener('keydown', (e) => {
@@ -5089,15 +6862,48 @@ const html = `<!doctype html>
       });
     }
     if (imageAspectEl) {
-      imageAspectEl.addEventListener('change', renderImageCards);
+      imageAspectEl.addEventListener('change', () => {
+        imageAspectUserChanged = true;
+        renderImageCards();
+      });
+    }
+    if (videoAssetAspectEl) {
+      videoAssetAspectEl.addEventListener('change', () => {
+        videoAspectUserChanged = true;
+        renderVideoAssetCards();
+      });
     }
     if (imageMotionEffectEl) {
       imageMotionEffectEl.addEventListener('change', () => scheduleReviewStateSave(100));
     }
     if (imageCardListEl) {
+      imageCardListEl.addEventListener('change', (e) => {
+        const durationInput = e.target.closest('[data-image-duration]');
+        if (durationInput) {
+          const index = Number(durationInput.dataset.imageDuration);
+          if (!Number.isInteger(index) || !imageItems[index]) return;
+          const durationSec = clampDuration(durationInput.value, 5, 10, 7);
+          imageItems[index].durationSec = durationSec;
+          imageItems[index].end = Number((Math.max(0, Number(imageItems[index].start) || 0) + durationSec).toFixed(3));
+          imageItems[index].timeRange = formatTimeRange(imageItems[index].start, imageItems[index].end);
+          renderImageCards();
+          scheduleReviewStateSave(120);
+          syncCompositePreviewOverlay();
+          return;
+        }
+      });
       imageCardListEl.addEventListener('click', async (e) => {
         const retryBtn = e.target.closest('[data-image-retry]');
+        const uploadBtn = e.target.closest('[data-image-upload]');
         const copyBtn = e.target.closest('[data-image-copy]');
+        if (uploadBtn) {
+          const index = Number(uploadBtn.dataset.imageUpload);
+          if (!Number.isInteger(index) || !imageItems[index] || !localImageUploadInputEl) return;
+          pendingImageUploadIndex = index;
+          localImageUploadInputEl.value = '';
+          localImageUploadInputEl.click();
+          return;
+        }
         if (retryBtn) {
           const index = Number(retryBtn.dataset.imageRetry);
           if (!Number.isInteger(index)) return;
@@ -5124,6 +6930,25 @@ const html = `<!doctype html>
           }).catch(() => {
             setImageStatus('复制失败，请手动选择提示词');
           });
+        }
+      });
+    }
+    if (localImageUploadInputEl) {
+      localImageUploadInputEl.addEventListener('change', async () => {
+        const index = pendingImageUploadIndex;
+        pendingImageUploadIndex = -1;
+        const file = localImageUploadInputEl.files && localImageUploadInputEl.files[0];
+        if (!file || !Number.isInteger(index) || !imageItems[index]) return;
+        try {
+          setImageStatus('\u6b63\u5728\u5bfc\u5165\u672c\u5730\u56fe\u7247...');
+          await importLocalImageForItem(index, file);
+        } catch (err) {
+          if (imageItems[index]) {
+            imageItems[index].status = 'error';
+            imageItems[index].error = err.message || String(err);
+            renderImageCards();
+          }
+          setImageStatus('\u5bfc\u5165\u672c\u5730\u56fe\u7247\u5931\u8d25: ' + (err.message || String(err)));
         }
       });
     }
@@ -5188,15 +7013,21 @@ const html = `<!doctype html>
       });
     }
     document.addEventListener('mousedown', (e) => {
-      if (!leftPanelOpen && !imagePanelOpen && !rightPanelOpen) return;
+      if (waveZoomPopoverEl && !waveZoomPopoverEl.hidden) {
+        const insideWaveZoom = !!(waveZoomPopoverEl.contains(e.target) || (btnWaveZoom && btnWaveZoom.contains(e.target)));
+        if (!insideWaveZoom) setWaveZoomPopoverOpen(false);
+      }
+      if (!leftPanelOpen && !imagePanelOpen && !rightPanelOpen && !logPanelOpen) return;
       const target = e.target;
       const insideLeft = !!(leftPanelEl && leftPanelEl.contains(target));
       const insideImage = !!(imagePanelEl && imagePanelEl.contains(target));
       const insideRight = !!(rightPanelEl && rightPanelEl.contains(target));
+      const insideLog = !!(logPanelEl && logPanelEl.contains(target));
       const onLeftToggle = !!(btnToggleLeftPanel && btnToggleLeftPanel.contains(target));
       const onImageToggle = !!(btnToggleImagePanel && btnToggleImagePanel.contains(target));
       const onRightToggle = !!(btnToggleRightPanel && btnToggleRightPanel.contains(target));
-      if (insideLeft || insideImage || insideRight || onLeftToggle || onImageToggle || onRightToggle) return;
+      const onLogToggle = !!(btnToggleLogPanel && btnToggleLogPanel.contains(target));
+      if (insideLeft || insideImage || insideRight || insideLog || onLeftToggle || onImageToggle || onRightToggle || onLogToggle) return;
       closePanels();
     });
     document.getElementById('btnCut').addEventListener('click', async () => {
@@ -5283,6 +7114,8 @@ const html = `<!doctype html>
       window.addEventListener('resize', () => {
         rebuildTokenRects();
         drawWaveform();
+        syncCompositePreviewBounds();
+        syncCompositePreviewOverlay();
       });
     }
 
@@ -5317,8 +7150,14 @@ const html = `<!doctype html>
       silenceVideoPreview();
       sourceVideoEl.addEventListener('loadedmetadata', () => {
         silenceVideoPreview();
+        syncMediaAspectToSourceVideo();
         setVideoPreviewStatus('已加载');
+        syncCompositePreviewBounds();
         syncVideoPreview(true);
+      });
+      sourceVideoEl.addEventListener('resize', () => {
+        syncCompositePreviewBounds();
+        syncCompositePreviewOverlay();
       });
       sourceVideoEl.addEventListener('volumechange', () => {
         if (!sourceVideoEl.muted || sourceVideoEl.volume !== 0) {
@@ -5330,24 +7169,13 @@ const html = `<!doctype html>
       });
       sourceVideoEl.addEventListener('play', () => {
         silenceVideoPreview();
-        if (!videoPreviewEnabled || syncingVideoFromAudio) return;
-        syncingAudioFromVideo = true;
-        setPlaybackTime(Number(sourceVideoEl.currentTime) || 0, { forceVideo: false });
-        syncingAudioFromVideo = false;
-        if (audio.paused) audio.play().catch(() => {});
+        // The source video is a visual preview only. Let the review audio drive playback to avoid double audio or jitter.
       });
       sourceVideoEl.addEventListener('pause', () => {
-        if (!videoPreviewEnabled || syncingVideoFromAudio) return;
-        if (!audio.paused) audio.pause();
+        // Visual preview should never pause the review audio.
       });
       sourceVideoEl.addEventListener('seeked', () => {
-        if (!videoPreviewEnabled || syncingVideoFromAudio) return;
-        syncingAudioFromVideo = true;
-        setPlaybackTime(Number(sourceVideoEl.currentTime) || 0, { forceVideo: false });
-        syncingAudioFromVideo = false;
-        syncCurrentToken();
-        drawWaveform();
-        scheduleReviewStateSave(120);
+        // Visual preview seeks are driven by audio timeupdate/syncVideoPreview.
       });
     }
 
@@ -5377,6 +7205,7 @@ const html = `<!doctype html>
     audio.addEventListener('pause', () => {
       stopSyncTimer();
       cancelSkipFade();
+      stopCompositePreviewLoop();
       if (videoPreviewEnabled && sourceVideoEl && !sourceVideoEl.paused) sourceVideoEl.pause();
       drawWaveform();
       scheduleReviewStateSave(200);
@@ -5384,6 +7213,7 @@ const html = `<!doctype html>
     audio.addEventListener('ended', () => {
       stopSyncTimer();
       cancelSkipFade();
+      stopCompositePreviewLoop();
       previewStopTime = null;
       if (sourceVideoEl && !sourceVideoEl.paused) sourceVideoEl.pause();
       drawWaveform();
@@ -5402,6 +7232,8 @@ const html = `<!doctype html>
 
     async function initPage() {
       closePanels();
+      setMediaMode('image');
+      setToolPanel('marking');
       setWaveZoom(1);
       applyBoundarySettings(DEFAULT_BOUNDARY);
       renderQualityWarnings();
@@ -5421,6 +7253,7 @@ const html = `<!doctype html>
       updateSelectionStats();
       refreshLlmSummary();
       await loadRuntime();
+      await loadJianyingDraftTargets(false);
       try {
         setVideoPreviewVisible(localStorage.getItem(VIDEO_PREVIEW_STORAGE_KEY) === '1');
       } catch {
@@ -5441,4 +7274,3 @@ const html = `<!doctype html>
 fs.writeFileSync('review.html', html, 'utf8');
 console.log('Generated review.html');
 console.log('Use review_server.js to start the review server.');
-
