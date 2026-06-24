@@ -18,6 +18,11 @@ const els = {
   videoApiKey: $('videoApiKey'),
   videoModel: $('videoModel'),
   termGlossary: $('termGlossary'),
+  jianyingDraftRootSetting: $('jianyingDraftRootSetting'),
+  jianyingTemplatePaths: $('jianyingTemplatePaths'),
+  pickJianyingDraftRoot: $('pickJianyingDraftRoot'),
+  addJianyingTemplatePath: $('addJianyingTemplatePath'),
+  clearJianyingTemplatePaths: $('clearJianyingTemplatePaths'),
   testLlm: $('testLlm'),
   llmConnState: $('llmConnState'),
   testAsr: $('testAsr'),
@@ -366,6 +371,10 @@ function getSettingsFromForm() {
     videoApiKey: els.videoApiKey ? els.videoApiKey.value.trim() : '',
     videoModel: els.videoModel ? els.videoModel.value.trim() : '',
     termGlossary: els.termGlossary ? els.termGlossary.value : '',
+    jianyingDraftRoot: els.jianyingDraftRootSetting ? els.jianyingDraftRootSetting.value.trim() : '',
+    jianyingTemplatePaths: els.jianyingTemplatePaths
+      ? els.jianyingTemplatePaths.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, 5)
+      : [],
     outputRoot: els.outputRoot.value.trim(),
     silenceThresholdSec: Number(els.silenceThresholdSec.value) || 0.2,
     exportQuality: els.exportQuality.value || 'ultra',
@@ -590,6 +599,11 @@ function applySettingsToForm(settings) {
   if (els.videoApiKey) els.videoApiKey.value = settings.videoApiKey || '';
   if (els.videoModel) els.videoModel.value = settings.videoModel || '';
   if (els.termGlossary) els.termGlossary.value = settings.termGlossary || '';
+  if (els.jianyingDraftRootSetting) els.jianyingDraftRootSetting.value = settings.jianyingDraftRoot || '';
+  if (els.jianyingTemplatePaths) {
+    const paths = Array.isArray(settings.jianyingTemplatePaths) ? settings.jianyingTemplatePaths : [];
+    els.jianyingTemplatePaths.value = paths.slice(0, 5).join('\n');
+  }
 
   els.outputRoot.value = settings.outputRoot || '';
   els.silenceThresholdSec.value = String(settings.silenceThresholdSec || 0.2);
@@ -731,6 +745,30 @@ $('pickOutputRoot').addEventListener('click', async () => {
   const picked = await window.talkcut.pickOutputDir();
   if (picked) els.outputRoot.value = picked;
 });
+
+if (els.pickJianyingDraftRoot) {
+  els.pickJianyingDraftRoot.addEventListener('click', async () => {
+    const picked = await window.talkcut.pickOutputDir();
+    if (picked) els.jianyingDraftRootSetting.value = picked;
+  });
+}
+
+if (els.addJianyingTemplatePath) {
+  els.addJianyingTemplatePath.addEventListener('click', async () => {
+    const picked = await window.talkcut.pickOutputDir();
+    if (!picked || !els.jianyingTemplatePaths) return;
+    const list = els.jianyingTemplatePaths.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const exists = list.some((item) => item.toLowerCase() === picked.toLowerCase());
+    if (!exists) list.push(picked);
+    els.jianyingTemplatePaths.value = list.slice(0, 5).join('\n');
+  });
+}
+
+if (els.clearJianyingTemplatePaths) {
+  els.clearJianyingTemplatePaths.addEventListener('click', () => {
+    if (els.jianyingTemplatePaths) els.jianyingTemplatePaths.value = '';
+  });
+}
 
 ['volcengineApiKey', 'dashscopeApiKey', 'mimoApiKey'].forEach((id) => {
   if (els[id]) {

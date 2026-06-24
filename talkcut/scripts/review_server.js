@@ -1394,15 +1394,26 @@ async function runLlmPublishSuggestions(words, config, style, inputAnalysis) {
   };
 }
 
-function pickWordsForVisualPlan(words, selectedIndices = []) {
+function pickWordsForVisualPlan(words, selectedIndices = [], deleteSegments = []) {
   const selectedSet = new Set(
     Array.isArray(selectedIndices)
       ? selectedIndices.map((v) => Number(v)).filter((v) => Number.isInteger(v))
       : [],
   );
+  const deletes = Array.isArray(deleteSegments)
+    ? deleteSegments
+      .map((seg) => ({ start: Number(seg?.start), end: Number(seg?.end) }))
+      .filter((seg) => Number.isFinite(seg.start) && Number.isFinite(seg.end) && seg.end > seg.start)
+    : [];
   return (Array.isArray(words) ? words : []).filter((w, i) => {
     if (!w || w.isGap) return false;
     if (selectedSet.has(i)) return false;
+    const start = Number(w.start);
+    const end = Number(w.end);
+    const mid = Number.isFinite(start) && Number.isFinite(end) ? (start + end) / 2 : NaN;
+    if (Number.isFinite(mid) && deletes.some((seg) => mid >= seg.start && mid <= seg.end)) {
+      return false;
+    }
     return String(w.text || '').trim();
   });
 }
@@ -1453,6 +1464,7 @@ function buildImagePlanPrompt(units, analysis, style, count, existingRanges = []
     `主题参考：${String(analysis?.topic || '').trim() || '未知'}`,
     `梗概参考：${String(analysis?.outline || '').trim() || '未知'}`,
     'Existing image/video media ranges. Avoid all listed ranges and never overlap with them. If value is none, ignore:',
+    'delete|... 是最终视频不会出现的时间段，不能把这些内容作为配图依据，也不能把配图放进这些时间范围。',
     blockedRangesText,
     '输出 JSON（只返回 JSON，不要 markdown）：',
     '{"topic":"...","style":"用户选择画风，必须贯穿所有图","visualBible":{"culturalContext":"中国/欧美/日本/其他/抽象","mainCharacter":"统一主角设定，年龄、发型、脸型、气质","outfit":"统一服饰和道具","sceneWorld":"统一时代、地点、空间基调","colorAndStyle":"统一色彩、笔触、构图风格，必须包含用户选择画风"},"items":[{"id":"img_01","timeRange":"00:10-00:17","start":10.0,"end":17.0,"durationSec":7,"title":"这一张图解决什么表达问题","purpose":"封面/观点说明/B-roll/转场/结尾","textBasis":"对应原文依据，不超过40字","directorIntent":"导演意图：为什么这里需要配图","sceneStory":"具体画面故事：人物、地点、动作、情绪、道具、前景背景","camera":"景别/角度/构图","visual":"画面描述，不超过120字","prompt":"完整图片生成提示词：画面场景 + 统一风格 + 镜头，不得复述原文","negativePrompt":"负面提示词","keywords":["..."]}]}',
@@ -1488,6 +1500,181 @@ function buildVisualBibleText(parsed, analysis, fallbackStyle) {
     push('统一色彩画风', fallbackStyle || '自媒体视频配图，统一人物和画风');
   }
   return trimByChars(parts.join('；'), 520);
+}
+
+function normalizeVisualReferenceAssetType(value, fallback = 'scene') {
+  const raw = String(value || '').toLowerCase();
+  if (/character|person|role|人物|角色|主角/.test(raw)) return 'character';
+  if (/scene|setting|environment|space|场景|环境|空间/.test(raw)) return 'scene';
+  return fallback;
+}
+
+function normalizeVisualReferenceAsset(asset, index = 0, style = '', analysis = {}) {
+  const type = normalizeVisualReferenceAssetType(asset?.type || asset?.kind || asset?.assetType, index === 0 ? 'character' : 'scene');
+  const titleFallback = type === 'character' ? `Character asset ${index + 1}` : `Scene asset ${index + 1}`;
+  const title = trimByChars(String(asset?.title || asset?.name || titleFallback).replace(/\s+/g, ' '), 48);
+  const topic = trimByChars(String(analysis?.topic || 'short-form story').replace(/\s+/g, ' '), 80);
+  const outline = trimByChars(String(analysis?.outline || '').replace(/\s+/g, ' '), 160);
+  const styleText = trimByChars(String(style || asset?.style || 'consistent editorial illustration').replace(/\s+/g, ' '), 120);
+  const rawPrompt = trimByChars(String(asset?.prompt || asset?.visualPrompt || asset?.description || '').replace(/\s+/g, ' '), 900);
+  const promptPrefix = type === 'character'
+    ? 'Create a clean white-background character reference sheet, front view, side view, three-quarter view, consistent face, hair, age, outfit, accessories, full body and bust details.'
+    : 'Create an environment-only scene reference image with no people, no characters, no readable text, showing the location, lighting, props, color palette, era, weather, and spatial layout.';
+  const prompt = trimByChars([
+    promptPrefix,
+    rawPrompt || `Topic: ${topic}. Outline: ${outline || topic}.`,
+    `Style: ${styleText}.`,
+    'This is a visual reference asset for later image and video shots; keep it clear, reusable, consistent, no subtitles, no watermark, no logo.',
+  ].filter(Boolean).join(' '), 1200);
+  const negativePrompt = trimByChars(String(
+    asset?.negativePrompt
+    || asset?.negative_prompt
+    || (type === 'scene'
+      ? 'people, character, portrait, text, watermark, logo, low quality, distorted geometry'
+      : 'text, watermark, logo, extra fingers, distorted face, inconsistent outfit, low quality')
+  ).replace(/\s+/g, ' '), 320);
+  return {
+    id: String(asset?.id || `${type}_${String(index + 1).padStart(2, '0')}`).replace(/[^\w-]/g, '_').slice(0, 48),
+    type,
+    title,
+    prompt,
+    negativePrompt,
+    image: asset?.image && typeof asset.image === 'object' ? asset.image : null,
+    source: String(asset?.source || 'llm-plan').slice(0, 32),
+  };
+}
+
+function buildFallbackVisualReferencePlan(analysis = {}, style = '') {
+  const topic = trimByChars(String(analysis?.topic || 'short-form story').replace(/\s+/g, ' '), 80);
+  const outline = trimByChars(String(analysis?.outline || '').replace(/\s+/g, ' '), 160);
+  const assets = [
+    normalizeVisualReferenceAsset({
+      type: 'character',
+      title: 'Main character reference',
+      prompt: `A reusable main character for the story about ${topic}. ${outline} Keep clothing and identity consistent.`,
+      source: 'fallback',
+    }, 0, style, analysis),
+    normalizeVisualReferenceAsset({
+      type: 'scene',
+      title: 'Main scene reference',
+      prompt: `A reusable story environment for ${topic}. Show only the setting, props, light, color palette, and atmosphere.`,
+      source: 'fallback',
+    }, 1, style, analysis),
+  ];
+  return {
+    enabled: true,
+    status: 'planned',
+    title: 'Visual reference assets',
+    prompt: assets.map((asset) => asset.prompt).join('\n\n'),
+    negativePrompt: 'text, watermark, logo, low quality, distorted anatomy, inconsistent style',
+    source: 'fallback',
+    assets,
+  };
+}
+
+function sanitizeVisualReferencePlan(parsed, analysis = {}, style = '') {
+  const direct = parsed?.visualReference || parsed?.visual_reference || parsed || {};
+  let rawAssets = Array.isArray(direct.assets) ? direct.assets : [];
+  if (!rawAssets.length && Array.isArray(direct.characters)) {
+    rawAssets = rawAssets.concat(direct.characters.map((item) => ({ ...item, type: 'character' })));
+  }
+  if (!rawAssets.length && Array.isArray(direct.scenes)) {
+    rawAssets = rawAssets.concat(direct.scenes.map((item) => ({ ...item, type: 'scene' })));
+  } else if (Array.isArray(direct.scenes)) {
+    rawAssets = rawAssets.concat(direct.scenes.map((item) => ({ ...item, type: 'scene' })));
+  }
+  if (!rawAssets.length && (direct.character || direct.scene || direct.prompt)) {
+    if (direct.character || direct.prompt) {
+      rawAssets.push({
+        type: 'character',
+        title: direct.characterTitle || 'Main character reference',
+        prompt: [direct.character, direct.outfit, direct.prompt].filter(Boolean).join(' '),
+        negativePrompt: direct.negativePrompt || direct.negative_prompt,
+      });
+    }
+    if (direct.scene) {
+      rawAssets.push({
+        type: 'scene',
+        title: direct.sceneTitle || 'Main scene reference',
+        prompt: direct.scene,
+        negativePrompt: direct.negativePrompt || direct.negative_prompt,
+      });
+    }
+  }
+  const assets = rawAssets
+    .map((asset, index) => normalizeVisualReferenceAsset(asset, index, style, analysis))
+    .filter((asset) => asset.prompt)
+    .slice(0, 5);
+  if (!assets.length) return buildFallbackVisualReferencePlan(analysis, style);
+  return {
+    enabled: direct.enabled !== false,
+    status: 'planned',
+    title: trimByChars(String(direct.title || 'Visual reference assets').replace(/\s+/g, ' '), 60),
+    prompt: trimByChars(String(direct.prompt || assets.map((asset) => asset.prompt).join('\n\n')).replace(/\s+/g, ' '), 1600),
+    negativePrompt: trimByChars(String(direct.negativePrompt || direct.negative_prompt || 'text, watermark, logo, low quality, inconsistent style').replace(/\s+/g, ' '), 500),
+    source: 'llm-plan',
+    assets,
+  };
+}
+
+function buildVisualReferencePrompt(units, analysis = {}, style = '') {
+  const list = (Array.isArray(units) ? units : [])
+    .slice(0, 180)
+    .map((u) => `${u.id}|${Number(u.start || 0).toFixed(2)}-${Number(u.end || 0).toFixed(2)}|${String(u.text || '').slice(0, 120)}`)
+    .join('\n');
+  return [
+    'You are a short-video art director. Plan reusable visual reference assets before generating B-roll images or videos.',
+    'Read the transcript and infer the story culture, protagonist, recurring locations, time period, clothing, props, and emotional tone.',
+    'Return 2 to 5 assets. Use character assets only when a recurring person or narrator embodiment is useful. Use scene assets for recurring environments.',
+    'Character asset rule: prompt must be a white-background multi-view character sheet: front, side, three-quarter, consistent face, hair, outfit and accessories.',
+    'Scene asset rule: prompt must show the environment only, no people, no characters, no readable text. Describe location, light, props, era, layout and color palette.',
+    'Do not copy transcript sentences as prompts. Make reusable visual design prompts that future shots can reference.',
+    `Chosen style: ${String(style || 'consistent editorial illustration')}`,
+    `Topic: ${String(analysis?.topic || '') || 'unknown'}`,
+    `Outline: ${String(analysis?.outline || '') || 'unknown'}`,
+    'Return JSON only:',
+    '{"visualReference":{"title":"...","negativePrompt":"...","assets":[{"id":"character_01","type":"character","title":"...","prompt":"..."},{"id":"scene_01","type":"scene","title":"...","prompt":"..."}]}}',
+    'Transcript units:',
+    list,
+  ].join('\n');
+}
+
+async function runLlmVisualReferencePlan(words, config, payload = {}) {
+  const selected = Array.isArray(payload.selectedIndices) ? payload.selectedIndices : [];
+  const deleteSegments = Array.isArray(payload.deleteSegments) ? payload.deleteSegments : [];
+  const keptWords = pickWordsForVisualPlan(words, selected, deleteSegments);
+  const units = buildTranscriptUnits(keptWords);
+  const style = String(payload.style || payload.visualStyle || payload.imageStyle || '').trim();
+  const analysis = payload.analysis && typeof payload.analysis === 'object'
+    ? payload.analysis
+    : analyzeTextForSuggestions(keptWords).analysis;
+  if (!config.ready || !units.length) {
+    return {
+      topic: analysis.topic || '',
+      outline: analysis.outline || '',
+      visualReference: buildFallbackVisualReferencePlan(analysis, style),
+    };
+  }
+  const prompt = buildVisualReferencePrompt(units, analysis, style);
+  try {
+    const raw = await callLlmProvider(config, prompt);
+    const parsed = extractJsonObject(raw) || {};
+    const visualReference = sanitizeVisualReferencePlan(parsed, analysis, style);
+    return {
+      topic: parsed.topic || analysis.topic || '',
+      outline: parsed.outline || analysis.outline || '',
+      visualReference,
+      raw,
+    };
+  } catch (err) {
+    appendCutLog(`Visual reference planning fallback: ${err.message || err}`);
+    return {
+      topic: analysis.topic || '',
+      outline: analysis.outline || '',
+      visualReference: buildFallbackVisualReferencePlan(analysis, style),
+      error: err.message || String(err),
+    };
+  }
 }
 
 const DIRECTOR_VISUAL_TERMS = [
@@ -1699,6 +1886,7 @@ function buildVideoPlanPrompt(units, analysis, style, count, aspectRatio, existi
     `用户选择风格：${visualStyle}`,
     `目标比例：${aspectRatio || '16:9'}`,
     'Existing image/video media ranges. Avoid all listed ranges and never overlap with them. If value is none, ignore:',
+    'delete|... is removed from the final video. Do not plan video materials from deleted content or place materials inside deleted ranges.',
     blockedRangesText,
     `主题参考：${String(analysis?.topic || '').trim() || '未知'}`,
     `梗概参考：${String(analysis?.outline || '').trim() || '未知'}`,
@@ -1805,7 +1993,7 @@ function buildFallbackVideoPlan(units, analysis, count, style = '', aspectRatio 
 }
 
 async function runLlmVideoPlan(words, config, payload = {}) {
-  const sourceWords = pickWordsForVisualPlan(words, payload.selectedIndices);
+  const sourceWords = pickWordsForVisualPlan(words, payload.selectedIndices, payload.deleteSegments);
   const units = buildTranscriptUnits(sourceWords);
   if (!units.length) {
     throw new Error('No transcript text available for video material planning');
@@ -1838,7 +2026,7 @@ async function runLlmVideoPlan(words, config, payload = {}) {
 }
 
 async function runLlmImagePlan(words, config, payload = {}) {
-  const sourceWords = pickWordsForVisualPlan(words, payload.selectedIndices);
+  const sourceWords = pickWordsForVisualPlan(words, payload.selectedIndices, payload.deleteSegments);
   const units = buildTranscriptUnits(sourceWords);
   if (!units.length) {
     throw new Error('可用于配图分析的文本为空');
@@ -1927,6 +2115,69 @@ function videoExtFromContentType(contentType, url = '') {
   return '.mp4';
 }
 
+function imageMimeFromExt(ext) {
+  const value = String(ext || '').toLowerCase();
+  if (value === '.jpg' || value === '.jpeg') return 'image/jpeg';
+  if (value === '.webp') return 'image/webp';
+  if (value === '.gif') return 'image/gif';
+  if (value === '.svg') return 'image/svg+xml';
+  return 'image/png';
+}
+
+function fileToDataUrl(filePath) {
+  const resolved = path.resolve(String(filePath || ''));
+  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) return '';
+  const buffer = fs.readFileSync(resolved);
+  return `data:${imageMimeFromExt(path.extname(resolved))};base64,${buffer.toString('base64')}`;
+}
+
+function resolveReferenceImageInput(input) {
+  if (!input) return '';
+  if (Array.isArray(input)) return resolveReferenceImageInput(input[0]);
+  if (typeof input === 'object') {
+    return resolveReferenceImageInput(input.dataUrl || input.base64 || input.filePath || input.path || input.url || input.imageUrl);
+  }
+  const raw = String(input || '').trim();
+  if (!raw) return '';
+  if (/^data:image\//i.test(raw)) return raw;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith('/image_assets/')) {
+    const name = decodeURIComponent(raw.split('/').pop() || '');
+    return fileToDataUrl(path.join(IMAGE_ASSET_DIR, name));
+  }
+  if (raw.startsWith('/video_assets/')) return '';
+  return fileToDataUrl(raw);
+}
+
+function resolveReferenceImageInputs(input, maxItems = 4) {
+  const rawList = Array.isArray(input) ? input : [input];
+  const seen = new Set();
+  const out = [];
+  for (const item of rawList) {
+    const value = resolveReferenceImageInput(item);
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+    if (out.length >= maxItems) break;
+  }
+  return out;
+}
+
+function resolvePublicReferenceImageInput(input) {
+  const rawList = Array.isArray(input) ? input : [input];
+  for (const item of rawList) {
+    if (!item) continue;
+    if (typeof item === 'object') {
+      const value = resolvePublicReferenceImageInput(item.url || item.imageUrl || item.outputUrl || item.sourceUrl || item.href);
+      if (value) return value;
+      continue;
+    }
+    const raw = String(item || '').trim();
+    if (/^https?:\/\//i.test(raw)) return raw;
+  }
+  return '';
+}
+
 async function rewriteImagePromptWithLlm(config, item, userNote = '') {
   if (!config.ready) return String(item?.prompt || '').trim();
   const prompt = [
@@ -2013,6 +2264,10 @@ async function callImageGenerationApi(config, item) {
     requestBody.extra_body = {
       response_format: 'url',
     };
+    const referenceImages = resolveReferenceImageInputs(item?.referenceImage || item?.visualReference || item?.reference, 4);
+    if (referenceImages.length) {
+      requestBody.extra_body.image = referenceImages.length === 1 ? referenceImages[0] : referenceImages;
+    }
   }
 
   const res = await fetch(config.endpoint, {
@@ -2145,12 +2400,20 @@ async function pollAgnesVideoResult(config, videoId) {
     attempt += 1;
     const queryUrl = queryEndpoints[(attempt - 1) % queryEndpoints.length];
     await waitAgnesVideoRequestSlot();
-    const res = await fetch(queryUrl, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${config.apiKey}`,
-      },
-    });
+    let res;
+    try {
+      res = await fetch(queryUrl, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${config.apiKey}`,
+        },
+      });
+    } catch (err) {
+      lastText = err.message || String(err);
+      appendCutLog(`[video] Agnes query network error (${attempt}): ${lastText}`);
+      await sleep(Math.min(15000, 3000 + attempt * 1000));
+      continue;
+    }
     const text = await res.text();
     lastText = text;
     if (!res.ok) {
@@ -2209,17 +2472,44 @@ async function callVideoGenerationApi(config, item, options = {}) {
       mode: 'ti2vid',
     },
   };
+  const referenceInput = options.referenceImage || item?.referenceImage || item?.visualReference || item?.reference;
+  const publicReferenceImage = resolvePublicReferenceImageInput(referenceInput);
+  if (publicReferenceImage) {
+    requestBody.image = publicReferenceImage;
+    requestBody.extra_body.image = publicReferenceImage;
+  }
 
-  await waitAgnesVideoRequestSlot();
-  const res = await fetch(config.endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.apiKey}`,
-    },
-    body: JSON.stringify(requestBody),
-  });
-  const text = await res.text();
+  const postCreate = async (body) => {
+    let lastError = null;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      await waitAgnesVideoRequestSlot();
+      try {
+        const response = await fetch(config.endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${config.apiKey}`,
+          },
+          body: JSON.stringify(body),
+        });
+        const bodyText = await response.text();
+        return { response, bodyText };
+      } catch (err) {
+        lastError = err;
+        appendCutLog(`[video] Agnes create network error (${attempt}/2): ${err.message || String(err)}`);
+        if (attempt < 2) await sleep(3500);
+      }
+    }
+    throw lastError || new Error('Agnes video create network error');
+  };
+
+  let { response: res, bodyText: text } = await postCreate(requestBody);
+  if (!res.ok && publicReferenceImage && /invalid\s+image|incorrect\s+padding|image/i.test(text)) {
+    appendCutLog('[video] Agnes rejected the reference image; retrying text-to-video without image reference.');
+    delete requestBody.image;
+    if (requestBody.extra_body) delete requestBody.extra_body.image;
+    ({ response: res, bodyText: text } = await postCreate(requestBody));
+  }
   if (!res.ok) {
     throw new Error(`Agnes video create failed: HTTP ${res.status} ${text.slice(0, 300)}`);
   }
@@ -2338,6 +2628,38 @@ function normalizeExistingDir(input) {
   return isDirectorySafe(resolved) ? resolved : '';
 }
 
+function parseConfiguredPathList(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || '').trim()).filter(Boolean);
+  }
+  const raw = String(value || '').trim();
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.map((item) => String(item || '').trim()).filter(Boolean);
+    }
+  } catch {
+    // Fall through to delimiter parsing.
+  }
+  return raw
+    .split(/\r?\n|[;,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function getConfiguredJianyingDraftRoot() {
+  return normalizeExistingDir(process.env.JIANYING_DRAFT_ROOT || '');
+}
+
+function getConfiguredJianyingTemplates() {
+  return parseConfiguredPathList(process.env.JIANYING_TEMPLATE_PATHS || '')
+    .map((item) => resolveJianyingTemplateDir(item) || normalizeExistingDir(item))
+    .filter(Boolean)
+    .filter((dir, index, list) => list.findIndex((item) => item.toLowerCase() === dir.toLowerCase()) === index)
+    .slice(0, 5);
+}
+
 function getJianyingDraftRootCandidates(extra = []) {
   const roots = [];
   const push = (value) => {
@@ -2437,11 +2759,18 @@ function resolveJianyingExportTarget(payload = {}, templateDir = '') {
       return { exportRoot: path.dirname(customRoot), exportRootSource: 'custom-draft-parent', autoPlaced: true, templateDir: templateDir || customRoot };
     }
     if (exportMode === 'custom') {
-      throw new Error(`选择的剪映草稿目录不可用：${customRoot}`);
+      return { exportRoot: customRoot, exportRootSource: 'custom-folder', autoPlaced: false, templateDir };
     }
   }
   if (templateRoot && looksLikeJianyingDraftRoot(templateRoot)) {
     return { exportRoot: templateRoot, exportRootSource: 'template-root', autoPlaced: true, templateDir };
+  }
+  const configuredRoot = getConfiguredJianyingDraftRoot();
+  if (configuredRoot) {
+    if (looksLikeJianyingDraftRoot(configuredRoot)) {
+      return { exportRoot: configuredRoot, exportRootSource: 'configured-root', autoPlaced: true, templateDir };
+    }
+    return { exportRoot: configuredRoot, exportRootSource: 'configured-folder', autoPlaced: false, templateDir };
   }
   const detected = findJianyingDraftRoots()[0];
   if (detected?.path) {
@@ -2763,7 +3092,29 @@ function getDraftAssetFilePath(item, kind) {
   const direct = String(item?.filePath || '').trim();
   if (direct) return direct;
   const nestedKey = kind === 'video' ? 'video' : 'image';
-  return String(item?.[nestedKey]?.filePath || '').trim();
+  return resolveMediaFilePathFromAsset(item?.[nestedKey] || item, kind);
+}
+
+function resolveMediaFilePathFromAsset(asset, kind = '') {
+  if (!asset || typeof asset !== 'object') return '';
+  const direct = String(asset.filePath || asset.path || '').trim();
+  if (direct && fs.existsSync(direct)) return path.resolve(direct);
+  const url = String(asset.url || asset.imageUrl || asset.videoUrl || '').trim();
+  const fileName = String(asset.fileName || '').trim() || (url ? decodeURIComponent(url.split(/[/?#]/).filter(Boolean).pop() || '') : '');
+  const candidates = [];
+  const lowerKind = String(kind || '').toLowerCase();
+  if (lowerKind === 'image' || url.includes('/image_assets/')) candidates.push(path.join(IMAGE_ASSET_DIR, fileName));
+  if (lowerKind === 'video' || url.includes('/video_assets/')) candidates.push(path.join(VIDEO_ASSET_DIR, fileName));
+  if (!lowerKind && fileName) {
+    candidates.push(path.join(IMAGE_ASSET_DIR, fileName));
+    candidates.push(path.join(VIDEO_ASSET_DIR, fileName));
+  }
+  for (const candidate of candidates) {
+    const resolved = path.resolve(candidate);
+    const allowed = resolved.startsWith(path.resolve(IMAGE_ASSET_DIR)) || resolved.startsWith(path.resolve(VIDEO_ASSET_DIR));
+    if (allowed && fs.existsSync(resolved)) return resolved;
+  }
+  return '';
 }
 
 function collectJianyingMediaItems(payload = {}, kind, deleteSegments) {
@@ -3846,6 +4197,53 @@ function sanitizeReviewMediaItems(items, kind) {
   }).filter((item) => item.id || item.prompt || item.videoPrompt || item[`${kind}`]).slice(0, 80);
 }
 
+function sanitizeReviewVisualReference(input) {
+  if (!input || typeof input !== 'object') {
+    return { enabled: true, status: 'empty', prompt: '', negativePrompt: '', image: null, assets: [] };
+  }
+  const assets = Array.isArray(input.assets)
+    ? input.assets.map((asset, index) => {
+      const normalized = normalizeVisualReferenceAsset(asset, index, '', {});
+      const image = asset?.image && typeof asset.image === 'object' ? {
+        fileName: String(asset.image.fileName || '').slice(0, 160),
+        filePath: String(asset.image.filePath || '').slice(0, 500),
+        url: String(asset.image.url || '').slice(0, 500),
+        model: String(asset.image.model || '').slice(0, 80),
+        size: String(asset.image.size || '').slice(0, 40),
+      } : null;
+      return { ...normalized, image };
+    }).slice(0, 8)
+    : [];
+  const legacyImage = input.image && typeof input.image === 'object' ? {
+    fileName: String(input.image.fileName || '').slice(0, 160),
+    filePath: String(input.image.filePath || '').slice(0, 500),
+    url: String(input.image.url || '').slice(0, 500),
+    model: String(input.image.model || '').slice(0, 80),
+    size: String(input.image.size || '').slice(0, 40),
+  } : null;
+  const nextAssets = assets.length || !legacyImage
+    ? assets
+    : [{
+      id: 'legacy_reference_01',
+      type: 'character',
+      title: 'Legacy reference image',
+      prompt: String(input.prompt || '').slice(0, 1200),
+      negativePrompt: String(input.negativePrompt || '').slice(0, 500),
+      source: 'legacy',
+      image: legacyImage,
+    }];
+  return {
+    enabled: input.enabled !== false,
+    status: String(input.status || (nextAssets.length ? 'done' : 'empty')).slice(0, 32),
+    title: String(input.title || '').slice(0, 80),
+    prompt: String(input.prompt || nextAssets.map((asset) => asset.prompt).filter(Boolean).join('\n\n')).slice(0, 1600),
+    negativePrompt: String(input.negativePrompt || '').slice(0, 500),
+    source: String(input.source || '').slice(0, 32),
+    image: legacyImage || nextAssets.find((asset) => asset.image?.url || asset.image?.filePath)?.image || null,
+    assets: nextAssets,
+  };
+}
+
 function normalizeReviewStatePayload(payload) {
   const selectedIndices = Array.isArray(payload?.selectedIndices)
     ? payload.selectedIndices
@@ -3921,6 +4319,7 @@ function normalizeReviewStatePayload(payload) {
     mediaAssets: {
       images: sanitizeReviewMediaItems(payload?.mediaAssets?.images || payload?.imageItems, 'image'),
       videos: sanitizeReviewMediaItems(payload?.mediaAssets?.videos || payload?.videoItems, 'video'),
+      visualReference: sanitizeReviewVisualReference(payload?.mediaAssets?.visualReference || payload?.visualReference),
     },
   };
 }
@@ -4262,6 +4661,24 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'POST' && pathname === '/api/llm-visual-reference') {
+      const config = getLlmConfig();
+      const body = await readBody(req);
+      const payload = JSON.parse(body || '{}');
+      const words = Array.isArray(payload.words) ? payload.words : [];
+      if (!words.length) {
+        throw new Error('words is empty, cannot plan visual reference assets');
+      }
+      if (words.length > 50000) {
+        throw new Error('Transcript is too large; please cut or shorten before planning visual reference assets');
+      }
+      appendCutLog(`Visual reference planning started: provider=${config.provider || 'fallback'}, model=${config.model || '-'}`);
+      const result = await runLlmVisualReferencePlan(words, config, payload);
+      appendCutLog(`Visual reference planning completed: ${(result.visualReference?.assets || []).length} assets`);
+      writeJson(res, 200, { success: true, ...result });
+      return;
+    }
+
     if (req.method === 'POST' && pathname === '/api/llm-image-plan') {
       const config = getLlmConfig();
       if (!config.ready) {
@@ -4294,7 +4711,10 @@ const server = http.createServer(async (req, res) => {
       if (payload.imageSize || payload.aspectRatio) {
         imageConfig.size = normalizeImageSize(payload.imageSize || payload.aspectRatio);
       }
-      let nextItem = { ...item };
+      let nextItem = {
+        ...item,
+        referenceImage: payload.referenceImage || item.referenceImage || item.visualReference || null,
+      };
       if (retry && llmConfig.ready) {
         const rewritten = await rewriteImagePromptWithLlm(llmConfig, item, payload.note);
         if (rewritten && typeof rewritten === 'object') {
@@ -4384,7 +4804,10 @@ const server = http.createServer(async (req, res) => {
       const payload = JSON.parse(body || '{}');
       const item = payload.item && typeof payload.item === 'object' ? payload.item : {};
       const retry = !!payload.retry;
-      let nextItem = { ...item };
+      let nextItem = {
+        ...item,
+        referenceImage: payload.referenceImage || item.referenceImage || item.visualReference || null,
+      };
       if (retry && llmConfig.ready) {
         const rewritten = await rewriteImagePromptWithLlm(llmConfig, {
           ...item,
@@ -4405,6 +4828,7 @@ const server = http.createServer(async (req, res) => {
         durationSec: payload.durationSec || nextItem.durationSec,
         numFrames: payload.numFrames || nextItem.numFrames,
         frameRate: payload.frameRate || nextItem.frameRate,
+        referenceImage: payload.referenceImage || nextItem.referenceImage,
       });
       appendCutLog(`Video material generation completed: ${saved.fileName}`);
       writeJson(res, 200, {
@@ -4416,12 +4840,31 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && pathname === '/api/jianying-draft-targets') {
-      const roots = findJianyingDraftRoots();
+      const configuredRoot = getConfiguredJianyingDraftRoot();
+      const configuredTemplates = getConfiguredJianyingTemplates().map((dir, index) => ({
+        name: `模板${index + 1}: ${path.basename(dir) || dir}`,
+        path: dir,
+        modified: 0,
+        modifiedText: '',
+        source: 'settings',
+      }));
+      const roots = findJianyingDraftRoots(configuredRoot ? [configuredRoot] : []);
       const detectedRoot = roots[0]?.path || '';
-      const drafts = detectedRoot ? listJianyingDrafts(detectedRoot).slice(0, 80) : [];
+      const autoDrafts = detectedRoot ? listJianyingDrafts(detectedRoot).slice(0, 80) : [];
+      const seenDrafts = new Set();
+      const drafts = [...configuredTemplates, ...autoDrafts]
+        .filter((item) => {
+          const key = String(item.path || '').toLowerCase();
+          if (!key || seenDrafts.has(key)) return false;
+          seenDrafts.add(key);
+          return true;
+        })
+        .slice(0, 80);
       writeJson(res, 200, {
         success: true,
         detectedRoot,
+        configuredRoot,
+        configuredTemplates,
         roots,
         drafts,
       });
@@ -4544,9 +4987,15 @@ if (process.env.JAYGO_CUT_TEST_EXPORTS === '1') {
     imageSizeToAgnesSize,
     videoDurationToGenerationParams,
     autoImageCountForUnits,
+    pickWordsForVisualPlan,
+    sanitizeVisualReferencePlan,
+    buildFallbackVisualReferencePlan,
+    resolveReferenceImageInput,
+    resolveReferenceImageInputs,
     buildLlmPrompt,
     buildChatAdjustPrompt,
     buildJianyingFullDraftSpec,
+    resolveMediaFilePathFromAsset,
     findJianyingDraftRoots,
     listJianyingDrafts,
     resolveJianyingExportTarget,

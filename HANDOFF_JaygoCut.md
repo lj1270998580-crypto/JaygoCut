@@ -1,7 +1,7 @@
 # Jaygo Cut Handoff Document
 
-更新时间：2026-05-07
-当前源码版本：`0.1.15`
+更新时间：2026-06-24
+当前源码版本：`0.1.17`
 项目目录：`C:\Users\15119\Documents\New project\repo`
 本机测试安装目录：`D:\Jaygo Cut\JaygoCut`
 在线更新地址：`https://ailabing.cn/downloads/jaygo/`
@@ -9,27 +9,27 @@ GitHub 仓库：`https://github.com/lj1270998580-crypto/JaygoCut`
 
 ## 1. 产品定位
 
-Jaygo Cut 是 Windows 桌面端口播视频剪辑工具。核心流程是：选择视频 -> 提取音频 -> 云端 ASR 或本地模型转录 -> 生成审核页 -> 自动标记静音/语气词/重复句/LLM 建议 -> 人工复核 -> FFmpeg 精确裁剪 -> 导出成片、字幕、文案或剪映草稿。
+Jaygo Cut 是 Windows 桌面端口播视频剪辑工具。核心流程是：选择视频 -> 提取音频 -> 云端 ASR 或本地模型转录 -> 生成审核页 -> 自动标记静音/语气词/重复句/LLM 建议 -> 人工复核 -> FFmpeg 精确裁剪 -> 导出成片或完整剪映草稿。
 
 ## 2. 当前核心能力
 
 - 转录引擎：火山引擎 ASR、阿里 DashScope `qwen3-asr-flash-filetrans` 异步识别、本地 Whisper/ggml 模型。
 - 本地模型：安装包不内置大模型，设置页支持检查本机可用语音模型，并支持一键下载安装。
 - 审核页：音频播放、波形缩放、逐字文本、颜色标记、拖选、撤销/重做、静音阈值重算、历史恢复、自动保存。
-- 审核页可信度：支持预听当前删除点、删除诊断、剪辑精度模式、裁剪前备份和复制诊断信息。
+- 审核页可信度：支持删除诊断、剪辑精度模式、裁剪前备份和复制诊断信息。
 - 规则预标记：静音阈值默认 `>= 0.2` 秒；语气词、重复句、LLM 建议使用不同颜色标注。
 - LLM：多服务商兼容，支持语义标记、标点分段、发布建议、LLM 对话调标记。
-- 视频配图：审核页悬浮入口，支持配图点、分镜提示词、图片预览、图片动效、单图重试、批量下载和裁剪合成。
-- 字幕与剪映：审核页支持导出 SRT、TXT 和剪映草稿目录；SRT 作为剪映新版本兼容兜底方案。
+- 插入素材：审核页悬浮入口，支持配图点、视频素材点、分镜提示词、人物/场景资产图、图片动效、单图/单视频重试、批量下载和裁剪合成。
+- 剪映导出：审核页支持导出完整剪映草稿，自动识别剪映/CapCut 草稿目录，也可基于用户选定模板草稿生成新草稿。
 - 在线更新：electron-updater generic provider，应用内显示版本和更新说明。
 
-## 3. 0.1.15 更新重点
+## 3. 0.1.17 更新重点
 
-- 插入素材悬浮面板增加整体滚动条，避免图片/视频素材列表较长时底部内容被遮挡。
-- 图片素材新增动效选择：`无动效`、`缓慢推进`、`缓慢拉远`、`缓慢左移`、`缓慢右移`、`缓慢上移`、`缓慢下移`。
-- 审核页会保存当前图片动效，并在执行裁剪时传给服务端。
-- `review_server.js` 会清洗 `motionEffect` 白名单，防止异常值进入裁剪脚本。
-- `cut_video.js` 使用 FFmpeg 动态滤镜把图片动效合成到最终成片；视频素材保持原样铺满。
+- 修复审核页“导出剪映”点击后缺少反馈的问题，导出前会刷新剪映目录和模板候选，失败时弹窗提示原因。
+- 人物/场景资产图支持预览和删除，正式图片/视频按分镜内容自动匹配参考资产，不再全量引用。
+- 修复 Agnes 视频素材生成把本地参考图误传给视频接口导致 `Invalid image` 或 `fetch failed` 的问题。
+- `review_server.js` 对 Agnes 视频创建和轮询增加网络重试；参考图被拒绝时会自动降级为文本生成。
+- 清理审核页工具区空白占位，折叠工具面板更紧凑，给审核文本留出更多空间。
 - 在线更新说明、CHANGELOG、安装包、GitHub Release 需保持同一版本号。
 
 ## 4. 关键目录
@@ -84,7 +84,7 @@ NSIS 打包后 `dist/` 至少包含：
 桌面复制示例：
 
 ```powershell
-$version = "0.1.15"
+$version = "0.1.17"
 Copy-Item "dist\JaygoCut-Setup-$version.exe" "C:\Users\15119\Desktop\JaygoCut-Setup-$version.exe" -Force
 Copy-Item "HANDOFF_JaygoCut.md" "C:\Users\15119\Desktop\HANDOFF_JaygoCut.md" -Force
 ```
@@ -118,7 +118,7 @@ Copy-Item "HANDOFF_JaygoCut.md" "C:\Users\15119\Desktop\HANDOFF_JaygoCut.md" -Fo
 
 ```json
 {
-  "version": "0.1.15",
+  "version": "0.1.17",
   "notes": "- 更新内容第一条\n- 更新内容第二条"
 }
 ```
@@ -128,7 +128,7 @@ Copy-Item "HANDOFF_JaygoCut.md" "C:\Users\15119\Desktop\HANDOFF_JaygoCut.md" -Fo
 ```json
 {
   "versions": {
-    "0.1.15": "- 更新内容第一条\n- 更新内容第二条"
+    "0.1.17": "- 更新内容第一条\n- 更新内容第二条"
   }
 }
 ```
@@ -139,7 +139,7 @@ Copy-Item "HANDOFF_JaygoCut.md" "C:\Users\15119\Desktop\HANDOFF_JaygoCut.md" -Fo
 
 ```powershell
 cd "C:\Users\15119\Documents\New project\repo"
-$version = "0.1.15"
+$version = "0.1.17"
 $remote = "root@47.115.58.109:/www/wwwroot/ailabing.cn/downloads/jaygo/"
 $tmp = Join-Path $env:TEMP 'jaygo_askpass.cmd'
 $pw = '<SSH_PASSWORD>'
@@ -166,7 +166,7 @@ try {
 ## 11. 上传后验证
 
 ```powershell
-$version = "0.1.15"
+$version = "0.1.17"
 curl.exe -L --max-time 30 https://ailabing.cn/downloads/jaygo/latest.yml
 curl.exe -L --max-time 30 https://ailabing.cn/downloads/jaygo/release-notes.json
 curl.exe -I --max-time 30 "https://ailabing.cn/downloads/jaygo/JaygoCut-Setup-$version.exe"
@@ -187,17 +187,17 @@ curl.exe -I --max-time 30 "https://ailabing.cn/downloads/jaygo/JaygoCut-Setup-$v
 cd "C:\Users\15119\Documents\New project\repo"
 git status --short
 git add electron/main.js electron/preload.js electron/renderer/renderer.js electron/renderer/styles.css electron/history_utils.js talkcut/scripts/generate_review.js talkcut/scripts/review_segment_utils.js talkcut/scripts/review_server.js tests/review_regression.test.js package.json package-lock.json release-notes.json CHANGELOG.md HANDOFF_JaygoCut.md
-git commit -m "chore: release 0.1.15"
-git tag v0.1.15
+git commit -m "chore: release 0.1.17"
+git tag v0.1.17
 git push origin main
-git push origin v0.1.15
+git push origin v0.1.17
 
-gh release create v0.1.15 `
-  "dist\JaygoCut-Setup-0.1.15.exe" `
-  "dist\JaygoCut-Setup-0.1.15.exe.blockmap" `
+gh release create v0.1.17 `
+  "dist\JaygoCut-Setup-0.1.17.exe" `
+  "dist\JaygoCut-Setup-0.1.17.exe.blockmap" `
   "dist\latest.yml" `
   "release-notes.json" `
-  --title "JaygoCut v0.1.15" `
+  --title "JaygoCut v0.1.17" `
   --notes-file CHANGELOG.md
 ```
 
@@ -212,10 +212,10 @@ gh release create v0.1.15 `
 
 ### 裁剪后残音或吞字
 
-1. 在审核页使用“预听当前删除点”检查边界。
-2. 打开“删除诊断”，优先处理短片段、紧贴保留词和密集删除区域。
-3. 根据内容选择剪辑精度模式：保守减少吞字，干净减少残音。
-4. 若问题集中在 ASR 时间戳错误，优先手动取消对应标记或扩大/缩小选择。
+1. 打开“删除诊断”，优先处理短片段、紧贴保留词和密集删除区域。
+2. 根据内容选择剪辑精度模式：保守减少吞字，干净减少残音。
+3. 若问题集中在 ASR 时间戳错误，优先手动取消对应标记或扩大/缩小选择。
+4. 必要时导出完整剪映草稿，在剪映里微调少数边界。
 
 ### 历史审核打不开
 
@@ -246,8 +246,8 @@ gh release create v0.1.15 `
 
 ## 14. 当前风险与待办
 
-- 剪映草稿导出已生成草稿目录并支持字幕模板，但剪映 6.x+ 草稿可能加密，SRT 仍需保留为兜底方案。
-- 视频配图依赖用户配置的图片生成模型，质量取决于模型能力和 prompt。
+- 剪映草稿导出已生成完整草稿目录并支持模板草稿，但剪映版本变化可能导致部分字段兼容性需要继续跟进。
+- 插入素材依赖用户配置的图片/视频生成模型，质量取决于模型能力、prompt 和网络稳定性。
 - LLM 标记必须由用户在审核页确认后再执行裁剪，不能完全自动删除。
 - 免费代码签名目前没有适合普通 Windows 用户的稳定方案；未签名安装包仍可能被安全软件误报或隔离。
 
@@ -260,3 +260,4 @@ gh release create v0.1.15 `
 - 审核页能打开，文本和波形不为空。
 - 更新服务器 `latest.yml`、安装包、blockmap、`release-notes.json` 可访问。
 - GitHub Release 资产和服务器版本一致。
+

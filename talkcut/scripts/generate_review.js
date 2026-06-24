@@ -247,7 +247,6 @@ const html = `<!doctype html>
       grid-column: 1;
       min-width: 0;
     }
-    .toolbar-card > #deletePreviewInfo,
     .toolbar-card > #deleteDiagnosticsPanel,
     .toolbar-card > .tool-fold {
       grid-column: 1 / -1;
@@ -610,6 +609,217 @@ const html = `<!doctype html>
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 6px 8px;
+    }
+    .media-control-grid-4 {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      align-items: end;
+    }
+    .media-control-grid-4 .media-field .meta {
+      font-size: 11px;
+    }
+    .media-control-grid-4 select {
+      height: 28px;
+      padding: 3px 6px;
+      font-size: 12px;
+    }
+    .visual-reference-box {
+      border: 1px solid color-mix(in oklab, var(--accent) 34%, var(--border));
+      border-radius: 12px;
+      background: color-mix(in oklab, var(--card-bg) 86%, var(--accent) 7%);
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+    .visual-reference-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+    .visual-reference-head label {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    .visual-reference-preview {
+      position: relative;
+      min-height: 138px;
+      aspect-ratio: 1 / 1;
+      border: 1px dashed var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      background: var(--log-bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      font-size: 12px;
+      text-align: center;
+    }
+    .visual-reference-preview img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+    .asset-reference-grid {
+      min-height: 76px;
+      max-height: 210px;
+      overflow: auto;
+      border: 1px dashed var(--border);
+      border-radius: 10px;
+      background: var(--log-bg);
+      padding: 6px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px;
+    }
+    .asset-reference-empty {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 62px;
+      color: var(--text-muted);
+      font-size: 12px;
+      text-align: center;
+    }
+    .asset-reference-card {
+      position: relative;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      overflow: hidden;
+      background: color-mix(in oklab, var(--card-bg) 86%, transparent);
+      min-width: 0;
+    }
+    .asset-reference-thumb {
+      position: relative;
+      aspect-ratio: 4 / 3;
+      background: var(--card-bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      font-size: 11px;
+      text-align: center;
+      overflow: hidden;
+    }
+    .asset-reference-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .asset-reference-caption {
+      padding: 5px 6px;
+      font-size: 11px;
+      line-height: 1.3;
+      color: var(--text-main);
+    }
+    .asset-reference-kind {
+      display: inline-block;
+      margin-right: 4px;
+      color: var(--text-muted);
+      font-weight: 700;
+    }
+    .asset-reference-actions {
+      position: absolute;
+      top: 5px;
+      right: 5px;
+      display: flex;
+      gap: 4px;
+      z-index: 2;
+      opacity: 0;
+      transition: opacity 120ms ease;
+    }
+    .asset-reference-card:hover .asset-reference-actions,
+    .asset-reference-card:focus-within .asset-reference-actions {
+      opacity: 1;
+    }
+    .asset-reference-actions button {
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      border-radius: 999px;
+      border: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
+      background: color-mix(in oklab, #020617 76%, transparent);
+      color: #fff;
+      font-size: 11px;
+      line-height: 1;
+      box-shadow: 0 6px 14px rgba(0, 0, 0, 0.24);
+    }
+    .asset-preview-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: rgba(2, 6, 23, 0.72);
+      backdrop-filter: blur(4px);
+    }
+    .asset-preview-dialog {
+      width: min(760px, 92vw);
+      max-height: 90vh;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: var(--card-bg);
+      box-shadow: 0 22px 70px rgba(0, 0, 0, 0.42);
+      overflow: hidden;
+    }
+    .asset-preview-dialog header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-main);
+      font-weight: 700;
+    }
+    .asset-preview-dialog img {
+      display: block;
+      width: 100%;
+      max-height: calc(90vh - 62px);
+      object-fit: contain;
+      background: #020617;
+    }
+    .asset-preview-dialog button {
+      padding: 4px 9px;
+      border-radius: 999px;
+    }
+    .visual-reference-prompt,
+    .media-prompt-editor {
+      width: 100%;
+      min-height: 68px;
+      resize: vertical;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--input-bg);
+      color: var(--text-main);
+      padding: 7px 8px;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .media-prompt-editor {
+      min-height: 84px;
+      max-height: 180px;
+    }
+    .media-prompt-label {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 700;
     }
     .media-field {
       display: flex;
@@ -1164,6 +1374,20 @@ const html = `<!doctype html>
       padding: 4px 7px;
       font-size: 12.5px;
     }
+    .primary-actions .jianying-quick-target {
+      flex: 0 1 170px;
+      max-width: 220px;
+    }
+    .export-status-inline {
+      min-height: 18px;
+      margin-top: 4px;
+      color: var(--text-muted);
+      font-size: 12.5px;
+      overflow-wrap: anywhere;
+    }
+    .export-status-inline:empty {
+      display: none;
+    }
     .primary-actions #status {
       flex: 1 1 140px;
       min-width: 120px;
@@ -1669,6 +1893,7 @@ const html = `<!doctype html>
 </head>
   <body>
   <input id="localImageUploadInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
+  <input id="referenceImageUploadInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
   <div class="wrap">
     <div class="card toolbar-card">
         <div id="videoPreviewPanel" class="video-preview-panel" hidden>
@@ -1700,8 +1925,12 @@ const html = `<!doctype html>
       <div class="row primary-actions">
         <button id="btnPlay" class="primary">播放/暂停</button>
         <button id="btnClear">清空选择</button>
-        <button id="btnPreviewDelete" type="button">预听删除点</button>
         <button id="btnCut" class="warn">执行裁剪</button>
+        <select id="jianyingQuickTarget" class="compact-select jianying-quick-target" title="选择剪映导出位置或模板">
+          <option value="auto" selected>默认剪映目录</option>
+          <option value="project">当前项目目录</option>
+        </select>
+        <button id="btnExportJianyingDraft" type="button" class="warn">导出剪映</button>
         <select id="cutPrecisionMode" class="compact-select" title="只影响最终裁剪边界，不改变审核文本时间戳">
           <option value="conservative">保守</option>
           <option value="standard" selected>标准</option>
@@ -1720,13 +1949,12 @@ const html = `<!doctype html>
         <span class="status-chip"><span>原时长</span><strong id="statTotalDuration">0.00 秒</strong></span>
         <span class="status-chip"><span>模式</span><strong id="statCutMode">标准</strong></span>
       </div>
-      <div id="deletePreviewInfo" class="delete-preview-info" hidden></div>
+      <div id="exportStatus" class="meta export-status-inline"></div>
       <div id="deleteDiagnosticsPanel" class="delete-diagnostics" hidden></div>
       <details class="fold-panel tool-fold" id="reviewToolFold">
         <summary>审核工具面板（点击展开）</summary>
         <div class="tool-tabs" role="tablist" aria-label="审核工具分组">
           <button class="tool-tab active" type="button" data-tool-tab="marking" aria-selected="true">智能标记</button>
-          <button class="tool-tab" type="button" data-tool-tab="export" aria-selected="false">字幕导出</button>
           <button class="tool-tab" type="button" data-tool-tab="correction" aria-selected="false">文本纠错</button>
           <button class="tool-tab" type="button" data-tool-tab="advanced" aria-selected="false">高级参数</button>
           <button class="tool-tab" type="button" data-tool-tab="more" aria-selected="false">更多状态</button>
@@ -1748,32 +1976,6 @@ const html = `<!doctype html>
             <button id="btnClearLlm">清除LLM标记</button>
           </div>
           <div id="qualityWarnings" class="quality-warnings" hidden></div>
-        </div>
-        <div class="tool-panel" data-tool-panel="export" hidden>
-          <div class="row tool-actions export-actions">
-            <span class="meta tool-section-title">字幕</span>
-            <button id="btnExportSrt" type="button">导出 SRT（剪映）</button>
-            <button id="btnExportTxt" type="button">导出 TXT 文案</button>
-            <span class="meta tool-section-title">剪映</span>
-            <select id="jianyingExportMode" title="完整草稿导出位置">
-              <option value="auto" selected>自动放入剪映草稿目录</option>
-              <option value="project">导出到当前项目目录</option>
-              <option value="custom">自定义剪映草稿根目录</option>
-            </select>
-            <input id="jianyingDraftRoot" type="text" placeholder="剪映草稿根目录（自动识别，可选）" title="通常是 com.lveditor.draft 目录；留空会自动识别剪映/CapCut 默认目录" list="jianyingDraftRootList" />
-            <datalist id="jianyingDraftRootList"></datalist>
-            <button id="btnDetectJianyingDraftRoot" type="button">识别剪映目录</button>
-            <select id="jianyingSubtitlePreset" title="剪映草稿内置字幕样式">
-              <option value="clean" selected>清爽白字</option>
-              <option value="blackgold">黑金大字</option>
-              <option value="variety">综艺描边</option>
-              <option value="soft">柔和橙底</option>
-            </select>
-            <input id="jianyingTemplatePath" type="text" placeholder="基于某个剪映模板草稿导出（可选，不覆盖原草稿）" title="填写一个剪映草稿文件夹路径，Jaygo Cut 会基于它新建草稿，不会覆盖原模板" list="jianyingTemplateDraftList" />
-            <datalist id="jianyingTemplateDraftList"></datalist>
-            <button id="btnExportJianyingDraft" type="button">导出完整剪映草稿</button>
-            <span id="exportStatus" class="meta"></span>
-          </div>
         </div>
         <div class="tool-panel" data-tool-panel="correction" hidden>
           <div class="row tool-actions replace-actions">
@@ -1838,7 +2040,6 @@ const html = `<!doctype html>
           <div class="shortcut-item"><kbd>Ctrl + Z</kbd><span>撤回上一步，可连续撤回多步</span></div>
           <div class="shortcut-item"><kbd>Ctrl + Y</kbd><span>重做刚撤回的操作</span></div>
           <div class="shortcut-item"><kbd>Ctrl + Shift + Z</kbd><span>重做刚撤回的操作</span></div>
-          <div class="shortcut-item"><kbd>S</kbd><span>预听当前或最近的删除点</span></div>
           <div class="shortcut-item"><kbd>Ctrl + F</kbd><span>聚焦文本纠错搜索框</span></div>
           <div class="shortcut-item"><kbd>Enter</kbd><span>在搜索框内跳到下一个匹配</span></div>
           <div class="shortcut-item"><kbd>Shift + Enter</kbd><span>在搜索框内跳到上一个匹配</span></div>
@@ -1907,11 +2108,7 @@ const html = `<!doctype html>
     </div>
 
     <section id="imageMediaPanel" class="media-mode-panel">
-      <div class="media-panel-actions">
-        <button id="btnGenerateImages" type="button">\u751f\u6210\u914d\u56fe</button>
-        <button id="btnDownloadImages" type="button" disabled>\u6279\u91cf\u4e0b\u8f7d</button>
-      </div>
-      <div class="media-control-grid">
+      <div class="media-control-grid media-control-grid-4">
         <label class="media-field">
           <span class="meta">\u6570\u91cf</span>
           <select id="imageCount">
@@ -1982,6 +2179,23 @@ const html = `<!doctype html>
             <option value="pan-down">\u7f13\u6162\u4e0b\u79fb</option>
           </select>
         </label>
+      </div>
+      <div class="media-panel-actions">
+        <button id="btnGenerateImages" type="button">\u751f\u6210\u914d\u56fe</button>
+        <button id="btnDownloadImages" type="button" disabled>\u6279\u91cf\u4e0b\u8f7d</button>
+      </div>
+      <div class="visual-reference-box">
+        <div class="visual-reference-head">
+          <span>\u8d44\u4ea7\u56fe\u53c2\u8003\u533a</span>
+          <label><input id="useVisualReference" type="checkbox" checked /> \u751f\u6210\u65f6\u4f7f\u7528\u53c2\u8003</label>
+        </div>
+        <div class="media-panel-actions">
+          <button id="btnGenerateVisualReference" type="button">\u89c4\u5212/\u751f\u6210\u8d44\u4ea7\u56fe</button>
+          <button id="btnUploadVisualReference" type="button">\u4e0a\u4f20\u8d44\u4ea7\u56fe</button>
+        </div>
+        <div id="visualReferenceStatus" class="meta">\u70b9\u51fb\u201c\u751f\u6210\u914d\u56fe\u201d\u540e\uff0cLLM \u4f1a\u5148\u6309\u6545\u4e8b\u89c4\u5212\u4eba\u7269/\u573a\u666f\u8d44\u4ea7\u56fe\uff0c\u518d\u751f\u6210\u6b63\u5f0f\u914d\u56fe\u3002</div>
+        <div id="visualReferencePreview" class="asset-reference-grid"><div class="asset-reference-empty">\u6682\u65e0\u8d44\u4ea7\u56fe\uff0c\u751f\u6210\u540e\u4ee5\u5c0f\u5361\u5c55\u793a\u3002</div></div>
+        <textarea id="visualReferencePrompt" class="visual-reference-prompt" hidden></textarea>
       </div>
       <div id="imageStatus" class="meta">\u70b9\u51fb\u201c\u751f\u6210\u914d\u56fe\u201d\u540e\uff0c\u4f1a\u5148\u89c4\u5212\u914d\u56fe\u70b9\uff0c\u518d\u9010\u5f20\u8c03\u7528\u56fe\u7247 API \u751f\u6210\u9884\u89c8\u3002</div>
       <div id="imageCardList"></div>
@@ -2091,18 +2305,15 @@ const html = `<!doctype html>
     const toggleAutoFillerEl = document.getElementById('toggleAutoFiller');
     const toggleAutoRepeatEl = document.getElementById('toggleAutoRepeat');
     const fillerWordAllowListEl = document.getElementById('fillerWordAllowList');
-    const btnPreviewDelete = document.getElementById('btnPreviewDelete');
     const btnToggleVideoPreview = document.getElementById('btnToggleVideoPreview');
     const btnFocusReview = document.getElementById('btnFocusReview');
     const btnShowDeleteDiagnostics = document.getElementById('btnShowDeleteDiagnostics');
     const btnCopyDiagnostics = document.getElementById('btnCopyDiagnostics');
     const cutPrecisionModeEl = document.getElementById('cutPrecisionMode');
-    const deletePreviewInfoEl = document.getElementById('deletePreviewInfo');
     const deleteDiagnosticsPanelEl = document.getElementById('deleteDiagnosticsPanel');
     const btnCut = document.getElementById('btnCut');
-    const btnExportSrt = document.getElementById('btnExportSrt');
-    const btnExportTxt = document.getElementById('btnExportTxt');
     const btnExportJianyingDraft = document.getElementById('btnExportJianyingDraft');
+    const jianyingQuickTargetEl = document.getElementById('jianyingQuickTarget');
     const jianyingSubtitlePresetEl = document.getElementById('jianyingSubtitlePreset');
     const jianyingExportModeEl = document.getElementById('jianyingExportMode');
     const jianyingDraftRootEl = document.getElementById('jianyingDraftRoot');
@@ -2159,6 +2370,13 @@ const html = `<!doctype html>
     const imageStatusEl = document.getElementById('imageStatus');
     const imageCardListEl = document.getElementById('imageCardList');
     const localImageUploadInputEl = document.getElementById('localImageUploadInput');
+    const referenceImageUploadInputEl = document.getElementById('referenceImageUploadInput');
+    const useVisualReferenceEl = document.getElementById('useVisualReference');
+    const visualReferencePreviewEl = document.getElementById('visualReferencePreview');
+    const visualReferencePromptEl = document.getElementById('visualReferencePrompt');
+    const visualReferenceStatusEl = document.getElementById('visualReferenceStatus');
+    const btnGenerateVisualReference = document.getElementById('btnGenerateVisualReference');
+    const btnUploadVisualReference = document.getElementById('btnUploadVisualReference');
     const videoAssetCountEl = document.getElementById('videoAssetCount');
     const videoAssetAspectEl = document.getElementById('videoAssetAspect');
     const videoAssetStatusEl = document.getElementById('videoAssetStatus');
@@ -2379,7 +2597,6 @@ const html = `<!doctype html>
     let waveStaticCanvas = null;
     let waveStaticKey = '';
     let previewSegment = null;
-    let previewStopTime = null;
     let skipFadeRaf = null;
     let skipFadeTimer = null;
     let skipFadeRestoreVolume = null;
@@ -2391,6 +2608,15 @@ const html = `<!doctype html>
     let videoGenerating = false;
     let imageItems = [];
     let videoItems = [];
+    let visualReference = {
+      enabled: true,
+      status: 'empty',
+      prompt: '',
+      negativePrompt: '',
+      image: null,
+      assets: [],
+      source: '',
+    };
     let activeCompositePreviewKey = '';
     let compositePreviewRaf = null;
     let lastVideoPreviewSeekAt = 0;
@@ -2573,6 +2799,252 @@ const html = `<!doctype html>
       imageStatusEl.textContent = String(text || '');
     }
 
+    function setVisualReferenceStatus(text) {
+      if (!visualReferenceStatusEl) return;
+      visualReferenceStatusEl.textContent = String(text || '');
+    }
+
+    function normalizeReferenceAsset(asset, index = 0) {
+      const raw = asset && typeof asset === 'object' ? asset : {};
+      const image = raw.image && typeof raw.image === 'object' ? JSON.parse(JSON.stringify(raw.image)) : null;
+      return {
+        id: String(raw.id || ('asset_' + (index + 1))).replace(/[^\w-]+/g, '_').slice(0, 40),
+        type: ['character', 'scene', 'object', 'style'].includes(String(raw.type || '').toLowerCase())
+          ? String(raw.type || '').toLowerCase()
+          : (index === 0 ? 'character' : 'scene'),
+        title: String(raw.title || raw.name || ('\u8d44\u4ea7\u56fe ' + (index + 1))).slice(0, 60),
+        role: String(raw.role || raw.purpose || '').slice(0, 120),
+        prompt: String(raw.prompt || '').slice(0, 1600),
+        negativePrompt: String(raw.negativePrompt || raw.negative_prompt || '').slice(0, 500),
+        aspectRatio: String(raw.aspectRatio || raw.aspect || '1:1').slice(0, 20),
+        status: String(raw.status || (image?.url ? 'done' : (raw.prompt ? 'planned' : 'empty'))).slice(0, 24),
+        source: String(raw.source || '').slice(0, 80),
+        image,
+        error: String(raw.error || '').slice(0, 500),
+      };
+    }
+
+    function normalizeReferenceAssets(value) {
+      const list = Array.isArray(value) ? value : [];
+      return list.map((asset, index) => normalizeReferenceAsset(asset, index)).slice(0, 8);
+    }
+
+    function cloneVisualReference(value) {
+      try {
+        const raw = value && typeof value === 'object' ? value : {};
+        const legacyImage = raw.image && typeof raw.image === 'object' ? JSON.parse(JSON.stringify(raw.image)) : null;
+        const assets = normalizeReferenceAssets(raw.assets);
+        if (!assets.length && legacyImage) {
+          assets.push(normalizeReferenceAsset({
+            id: 'asset_1',
+            type: 'character',
+            title: raw.title || '\u4eba\u7269\u573a\u666f\u53c2\u8003',
+            prompt: raw.prompt || '',
+            negativePrompt: raw.negativePrompt || '',
+            status: 'done',
+            source: raw.source || 'legacy',
+            image: legacyImage,
+          }, 0));
+        }
+        return {
+          enabled: raw.enabled !== false,
+          status: String(raw.status || (assets.some((asset) => asset.image?.url) ? 'done' : (raw.prompt ? 'planned' : 'empty'))).slice(0, 24),
+          prompt: String(raw.prompt || '').slice(0, 1600),
+          negativePrompt: String(raw.negativePrompt || '').slice(0, 500),
+          image: legacyImage || (assets.find((asset) => asset.image?.url)?.image || null),
+          assets,
+          source: String(raw.source || '').slice(0, 80),
+        };
+      } catch {
+        return { enabled: true, status: 'empty', prompt: '', negativePrompt: '', image: null, assets: [], source: '' };
+      }
+    }
+
+    function renderVisualReference() {
+      if (useVisualReferenceEl) useVisualReferenceEl.checked = visualReference.enabled !== false;
+      const assets = normalizeReferenceAssets(visualReference.assets);
+      visualReference.assets = assets;
+      const promptText = String(visualReference.prompt || assets.map((asset) => asset.prompt).filter(Boolean).join('\\n\\n')).slice(0, 1600);
+      if (visualReferencePromptEl && visualReferencePromptEl.value !== promptText) {
+        visualReferencePromptEl.value = promptText;
+      }
+      if (visualReferencePreviewEl) {
+        visualReferencePreviewEl.innerHTML = '';
+        if (assets.length) {
+          assets.forEach((asset, index) => {
+            const card = document.createElement('div');
+            card.className = 'asset-reference-card';
+            card.dataset.refIndex = String(index);
+            const thumb = document.createElement('div');
+            thumb.className = 'asset-reference-thumb';
+            if (asset.image?.url) {
+              const img = document.createElement('img');
+              img.src = asset.image.url;
+              img.alt = asset.title || '\u8d44\u4ea7\u56fe\u53c2\u8003';
+              thumb.appendChild(img);
+              attachMediaDimensionBadge(thumb, img, 'image', asset.image);
+            } else {
+              thumb.textContent = asset.status === 'generating' ? '\u751f\u6210\u4e2d' : (asset.status === 'error' ? '\u5931\u8d25' : '\u5f85\u751f\u6210');
+            }
+            const caption = document.createElement('div');
+            caption.className = 'asset-reference-caption';
+            const actions = document.createElement('div');
+            actions.className = 'asset-reference-actions';
+            const previewBtn = document.createElement('button');
+            previewBtn.type = 'button';
+            previewBtn.dataset.refPreview = String(index);
+            previewBtn.textContent = '看';
+            previewBtn.title = '预览资产图';
+            previewBtn.disabled = !asset.image?.url;
+            const deleteBtn = document.createElement('button');
+            deleteBtn.type = 'button';
+            deleteBtn.dataset.refDelete = String(index);
+            deleteBtn.textContent = '×';
+            deleteBtn.title = '删除资产图';
+            actions.appendChild(previewBtn);
+            actions.appendChild(deleteBtn);
+            const kind = document.createElement('span');
+            kind.className = 'asset-reference-kind';
+            kind.textContent = asset.type === 'character' ? '\u4eba\u7269' : (asset.type === 'scene' ? '\u573a\u666f' : '\u8d44\u4ea7');
+            caption.appendChild(kind);
+            caption.appendChild(document.createTextNode(asset.title || ('\u8d44\u4ea7\u56fe ' + (index + 1))));
+            if (asset.status === 'error' && asset.error) {
+              const err = document.createElement('div');
+              err.className = 'meta';
+              err.textContent = '\u5931\u8d25\uff1a' + asset.error;
+              caption.appendChild(err);
+            }
+            card.appendChild(actions);
+            card.appendChild(thumb);
+            card.appendChild(caption);
+            visualReferencePreviewEl.appendChild(card);
+          });
+        } else {
+          const empty = document.createElement('div');
+          empty.className = 'asset-reference-empty';
+          empty.textContent = visualReference.status === 'generating'
+            ? '\u6b63\u5728\u89c4\u5212/\u751f\u6210\u8d44\u4ea7\u56fe...'
+            : '\u6682\u65e0\u8d44\u4ea7\u56fe\u3002\u70b9\u51fb\u201c\u751f\u6210\u914d\u56fe\u201d\u6216\u201c\u89c4\u5212/\u751f\u6210\u8d44\u4ea7\u56fe\u201d\u540e\uff0c\u4ee5\u4eba\u7269/\u573a\u666f\u5c0f\u5361\u7247\u5c55\u793a\u3002';
+          visualReferencePreviewEl.appendChild(empty);
+        }
+      }
+      if (btnGenerateVisualReference) {
+        btnGenerateVisualReference.disabled = visualReference.status === 'generating' || imageGenerating;
+        btnGenerateVisualReference.textContent = visualReference.status === 'generating' ? '\u751f\u6210\u4e2d...' : '\u89c4\u5212/\u751f\u6210\u8d44\u4ea7\u56fe';
+      }
+      if (btnUploadVisualReference) {
+        btnUploadVisualReference.disabled = visualReference.status === 'generating' || imageGenerating;
+      }
+      const readyCount = assets.filter((asset) => asset.image?.url).length;
+      if (readyCount) {
+        setVisualReferenceStatus('\u8d44\u4ea7\u56fe\u5df2\u5c31\u7eea\uff1a' + readyCount + '/' + assets.length + ' \u5f20\u3002\u6b63\u5f0f\u914d\u56fe/\u89c6\u9891\u4f1a\u5c1d\u8bd5\u7528\u5b83\u4fdd\u6301\u4eba\u7269\u3001\u573a\u666f\u548c\u98ce\u683c\u4e00\u81f4\u3002');
+      } else if (assets.length) {
+        setVisualReferenceStatus('\u5df2\u89c4\u5212 ' + assets.length + ' \u5f20\u8d44\u4ea7\u56fe\uff0c\u53ef\u7ee7\u7eed\u751f\u6210\u6216\u4e0a\u4f20\u8865\u5145\u3002');
+      } else if (visualReference.prompt) {
+        setVisualReferenceStatus('\u53c2\u8003\u8bbe\u5b9a\u5df2\u751f\u6210\uff0c\u53ef\u7ee7\u7eed\u751f\u6210\u8d44\u4ea7\u56fe\u3002');
+      }
+    }
+
+    function openAssetPreview(index) {
+      const asset = normalizeReferenceAssets(visualReference.assets)[index];
+      const imageUrl = asset?.image?.url;
+      if (!imageUrl) return;
+      let backdrop = document.getElementById('assetPreviewBackdrop');
+      if (!backdrop) {
+        backdrop = document.createElement('div');
+        backdrop.id = 'assetPreviewBackdrop';
+        backdrop.className = 'asset-preview-backdrop';
+        backdrop.innerHTML = '<div class="asset-preview-dialog" role="dialog" aria-modal="true"><header><span></span><button type="button">关闭</button></header><img alt="资产图预览" /></div>';
+        document.body.appendChild(backdrop);
+        backdrop.addEventListener('click', (event) => {
+          if (event.target === backdrop || event.target.tagName === 'BUTTON') {
+            backdrop.hidden = true;
+          }
+        });
+      }
+      const titleEl = backdrop.querySelector('header span');
+      const imgEl = backdrop.querySelector('img');
+      if (titleEl) titleEl.textContent = asset.title || ('资产图 ' + (index + 1));
+      if (imgEl) imgEl.src = imageUrl;
+      backdrop.hidden = false;
+    }
+
+    function deleteVisualReferenceAsset(index) {
+      const assets = normalizeReferenceAssets(visualReference.assets);
+      if (!Number.isInteger(index) || index < 0 || index >= assets.length) return;
+      const removed = assets.splice(index, 1)[0];
+      visualReference.assets = assets;
+      visualReference.image = assets.find((asset) => asset.image?.url)?.image || null;
+      visualReference.status = assets.some((asset) => asset.image?.url) ? 'done' : (assets.length ? 'planned' : 'empty');
+      renderVisualReference();
+      setVisualReferenceStatus('已删除资产图：' + (removed?.title || ('资产图 ' + (index + 1))));
+      scheduleReviewStateSave(160);
+    }
+
+    function getActiveReferenceImages() {
+      if (visualReference.enabled === false) return [];
+      return normalizeReferenceAssets(visualReference.assets)
+        .map((asset) => asset.image)
+        .filter((image) => image && image.url)
+        .slice(0, 4);
+    }
+
+    function getActiveReferenceAssets() {
+      if (visualReference.enabled === false) return [];
+      return normalizeReferenceAssets(visualReference.assets).filter((asset) => asset.image?.url);
+    }
+
+    function getStoryboardTextForItem(item) {
+      return [
+        item?.title,
+        item?.purpose,
+        item?.textBasis,
+        item?.sceneStory,
+        item?.visual,
+        item?.camera,
+        item?.prompt,
+        item?.videoPrompt,
+      ].map((value) => String(value || '')).join(' ');
+    }
+
+    function tokenOverlapScore(source, target) {
+      const a = String(source || '').toLowerCase();
+      const b = String(target || '').toLowerCase();
+      if (!a || !b) return 0;
+      const chunks = a
+        .split(/[^\u4e00-\u9fa5a-z0-9]+/i)
+        .map((part) => part.trim())
+        .filter((part) => part.length >= 2)
+        .slice(0, 60);
+      let score = 0;
+      chunks.forEach((part) => {
+        if (b.includes(part)) score += Math.min(6, Math.max(1, part.length / 2));
+      });
+      return score;
+    }
+
+    function scoreReferenceAssetForItem(asset, item) {
+      const text = getStoryboardTextForItem(item);
+      const lower = text.toLowerCase();
+      let score = asset.image?.url ? 2 : 0;
+      if (asset.type === 'character' && /人物|主角|角色|人像|男|女|孩子|老人|青年|character|person|woman|man|girl|boy/i.test(text)) score += 8;
+      if (asset.type === 'scene' && /场景|环境|空间|城市|房间|街道|窗边|室内|室外|scene|environment|street|room|city/i.test(text)) score += 8;
+      if (/封面|表情|情绪|肖像|半身|脸|portrait/i.test(lower) && asset.type === 'character') score += 5;
+      score += tokenOverlapScore([asset.title, asset.role, asset.prompt].join(' '), text);
+      return score;
+    }
+
+    function getReferenceImagesForItem(item, limit = 2) {
+      const assets = getActiveReferenceAssets();
+      if (!assets.length) return [];
+      return assets
+        .map((asset, index) => ({ asset, index, score: scoreReferenceAssetForItem(asset, item) }))
+        .sort((a, b) => (b.score - a.score) || (a.index - b.index))
+        .slice(0, Math.max(1, limit))
+        .map((entry) => entry.asset.image)
+        .filter((image) => image && image.url);
+    }
+
     function setImageGenerating(next) {
       imageGenerating = !!next;
       if (btnGenerateImages) {
@@ -2585,6 +3057,7 @@ const html = `<!doctype html>
       if (imageCountEl) imageCountEl.disabled = imageGenerating;
       if (imageAspectEl) imageAspectEl.disabled = imageGenerating;
       if (imageStyleEl) imageStyleEl.disabled = imageGenerating;
+      renderVisualReference();
     }
 
     function currentImageMotionEffect() {
@@ -2692,6 +3165,22 @@ const html = `<!doctype html>
       return ranges.sort((a, b) => a.start - b.start || a.end - b.end);
     }
 
+    function collectDeletedPlacementRanges() {
+      return mergedSegmentsFromSelection().map((seg, index) => ({
+        type: 'delete',
+        start: Number(seg.start),
+        end: Number(seg.end),
+        title: '\u5df2\u6807\u8bb0\u5220\u9664\u7247\u6bb5 ' + (index + 1),
+      })).filter(isValidMediaRange);
+    }
+
+    function collectPlacementBlockedRanges(excludeType = '') {
+      return [
+        ...collectMediaRanges(excludeType),
+        ...collectDeletedPlacementRanges(),
+      ].sort((a, b) => a.start - b.start || a.end - b.end);
+    }
+
     function rangesOverlap(aStart, aEnd, bStart, bEnd, gap = 0.12) {
       return aStart < (bEnd + gap) && aEnd > (bStart - gap);
     }
@@ -2732,6 +3221,7 @@ const html = `<!doctype html>
         if (skipKind === 'video' && String(item.id || '') === skipId) return;
         if (isValidMediaRange(item)) ranges.push({ type: 'video', start: item.start, end: item.end, title: item.title || '' });
       });
+      ranges.push(...collectDeletedPlacementRanges());
       return ranges.sort((a, b) => a.start - b.start || a.end - b.end);
     }
 
@@ -3032,6 +3522,7 @@ const html = `<!doctype html>
         mediaAssets: {
           images: cloneMediaItems(imageItems),
           videos: cloneMediaItems(videoItems),
+          visualReference: cloneVisualReference(visualReference),
         },
       };
     }
@@ -3088,9 +3579,11 @@ const html = `<!doctype html>
       if (snapshot.mediaAssets && typeof snapshot.mediaAssets === 'object') {
         imageItems = cloneMediaItems(snapshot.mediaAssets.images);
         videoItems = cloneMediaItems(snapshot.mediaAssets.videos);
+        visualReference = cloneVisualReference(snapshot.mediaAssets.visualReference || visualReference);
         normalizeMediaItemTiming();
       }
       render();
+      renderVisualReference();
       renderImageCards();
       renderVideoAssetCards();
       syncCurrentToken();
@@ -3213,6 +3706,23 @@ const html = `<!doctype html>
       const body = document.createElement('div');
       body.className = 'media-details-body';
       body.textContent = content;
+      details.appendChild(summary);
+      details.appendChild(body);
+      card.appendChild(details);
+    }
+
+    function appendEditablePromptDetails(card, label, value, datasetName, index) {
+      const details = document.createElement('details');
+      details.className = 'media-details';
+      const summary = document.createElement('summary');
+      summary.textContent = label || '\u7f16\u8f91\u63d0\u793a\u8bcd';
+      const body = document.createElement('div');
+      body.className = 'media-details-body';
+      const textarea = document.createElement('textarea');
+      textarea.className = 'media-prompt-editor';
+      textarea.value = String(value || '');
+      textarea.dataset[datasetName] = String(index);
+      body.appendChild(textarea);
       details.appendChild(summary);
       details.appendChild(body);
       card.appendChild(details);
@@ -3355,12 +3865,6 @@ const html = `<!doctype html>
           uploadBtn.dataset.imageUpload = String(index);
           actions.appendChild(uploadBtn);
 
-          const copyBtn = document.createElement('button');
-          copyBtn.type = 'button';
-          copyBtn.textContent = '复制提示词';
-          copyBtn.dataset.imageCopy = String(index);
-          actions.appendChild(copyBtn);
-
           if (item.image && item.image.url) {
             const link = document.createElement('a');
             link.href = item.image.url;
@@ -3375,6 +3879,7 @@ const html = `<!doctype html>
           card.appendChild(purpose);
           card.appendChild(controls);
           appendMediaDetails(card, '\u753b\u9762\u8bf4\u660e / \u63d0\u793a\u8bcd', [scene.textContent, prompt.textContent]);
+          appendEditablePromptDetails(card, '\u7f16\u8f91\u56fe\u7247\u63d0\u793a\u8bcd', item.prompt || '', 'imagePrompt', index);
           card.appendChild(actions);
           imageCardListEl.appendChild(card);
         });
@@ -3449,12 +3954,6 @@ const html = `<!doctype html>
           retryBtn.dataset.videoRetry = String(index);
           actions.appendChild(retryBtn);
 
-          const copyBtn = document.createElement('button');
-          copyBtn.type = 'button';
-          copyBtn.textContent = '复制提示词';
-          copyBtn.dataset.videoCopy = String(index);
-          actions.appendChild(copyBtn);
-
           if (item.video && item.video.url) {
             const link = document.createElement('a');
             link.href = item.video.url;
@@ -3468,6 +3967,7 @@ const html = `<!doctype html>
           appendMediaMetaLine(card, item, 'video', item.video);
           card.appendChild(purpose);
           appendMediaDetails(card, '\u89c6\u9891\u5206\u955c / \u63d0\u793a\u8bcd', [scene.textContent, prompt.textContent]);
+          appendEditablePromptDetails(card, '\u7f16\u8f91\u89c6\u9891\u63d0\u793a\u8bcd', item.videoPrompt || item.prompt || '', 'videoPrompt', index);
           card.appendChild(actions);
           videoAssetListEl.appendChild(card);
         });
@@ -3498,99 +3998,6 @@ const html = `<!doctype html>
     function setExportStatus(text) {
       if (!exportStatusEl) return;
       exportStatusEl.textContent = String(text || '');
-    }
-
-    function formatSrtTime(seconds) {
-      const msTotal = Math.max(0, Math.round((Number(seconds) || 0) * 1000));
-      const ms = msTotal % 1000;
-      const totalSeconds = Math.floor(msTotal / 1000);
-      const s = totalSeconds % 60;
-      const totalMinutes = Math.floor(totalSeconds / 60);
-      const m = totalMinutes % 60;
-      const h = Math.floor(totalMinutes / 60);
-      return String(h).padStart(2, '0') + ':'
-        + String(m).padStart(2, '0') + ':'
-        + String(s).padStart(2, '0') + ','
-        + String(ms).padStart(3, '0');
-    }
-
-    function safeExportFileName(ext) {
-      const now = new Date();
-      const stamp = now.getFullYear()
-        + String(now.getMonth() + 1).padStart(2, '0')
-        + String(now.getDate()).padStart(2, '0') + '_'
-        + String(now.getHours()).padStart(2, '0')
-        + String(now.getMinutes()).padStart(2, '0');
-      return 'jaygo_cut_subtitles_' + stamp + '.' + ext;
-    }
-
-    function downloadTextFile(filename, text) {
-      const blob = new Blob(['\uFEFF' + String(text || '')], { type: 'text/plain;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1500);
-    }
-
-    function appendSubtitleToken(base, token) {
-      const current = String(base || '');
-      const text = String(token || '').trim();
-      if (!text) return current;
-      const prev = current.slice(-1);
-      const first = text[0];
-      if (/^[A-Za-z0-9]$/.test(prev) && /^[A-Za-z0-9]$/.test(first)) {
-        return current + ' ' + text;
-      }
-      return current + text;
-    }
-
-    function buildTimeMapper(deleteSegments) {
-      const segments = Array.isArray(deleteSegments)
-        ? deleteSegments
-          .map((seg) => ({
-            start: Number(seg.start),
-            end: Number(seg.end),
-          }))
-          .filter((seg) => Number.isFinite(seg.start) && Number.isFinite(seg.end) && seg.end > seg.start)
-          .sort((a, b) => a.start - b.start)
-        : [];
-      return function mapTime(t) {
-        const time = Math.max(0, Number(t) || 0);
-        let removed = 0;
-        for (const seg of segments) {
-          if (seg.end <= time) {
-            removed += seg.end - seg.start;
-          } else if (seg.start < time) {
-            removed += Math.max(0, time - seg.start);
-            break;
-          } else {
-            break;
-          }
-        }
-        return Math.max(0, time - removed);
-      };
-    }
-
-    function shouldBreakSubtitleCue(lastIndex, currentText, cueStart, cueEnd, nextWord) {
-      const len = compactTextLength(currentText);
-      const duration = Math.max(0, cueEnd - cueStart);
-      if (shouldParagraphBreakAfter(lastIndex)) return true;
-      if (len >= 22) return true;
-      if (duration >= 4.8 && len >= 10) return true;
-      if (hasSentencePunctuation(currentText) && len >= 10) return true;
-      if (nextWord) {
-        const gap = Number(nextWord.start) - Number(WORDS[lastIndex]?.end);
-        if (Number.isFinite(gap) && gap >= 0.9 && len >= 6) return true;
-      }
-      return false;
-    }
-
-    function compactTextLength(text) {
-      return String(text || '').replace(/\s+/g, '').length;
     }
 
     function buildExportCues() {
@@ -3644,42 +4051,6 @@ const html = `<!doctype html>
       return cues;
     }
 
-    function buildSrtText(cues) {
-      return cues.map((cue, index) => [
-        String(index + 1),
-        formatSrtTime(cue.start) + ' --> ' + formatSrtTime(Math.max(cue.end, cue.start + 0.35)),
-        String(cue.text || '').trim(),
-        '',
-      ].join('\\n')).join('\\n');
-    }
-
-    function buildPlainText(cues) {
-      const lines = [];
-      for (const cue of cues) {
-        const text = String(cue.text || '').trim();
-        if (!text) continue;
-        lines.push(text);
-      }
-      return lines.join('\\n');
-    }
-
-    function exportSubtitles(kind) {
-      const cues = buildExportCues();
-      if (!cues.length) {
-        setExportStatus('没有可导出的字幕，请检查是否全部内容都被标记删除。');
-        return;
-      }
-      if (kind === 'srt') {
-        downloadTextFile(safeExportFileName('srt'), buildSrtText(cues));
-        setExportStatus('已导出 SRT：' + cues.length + ' 条，可直接导入剪映。');
-        return;
-      }
-      if (kind === 'txt') {
-        downloadTextFile(safeExportFileName('txt'), buildPlainText(cues));
-        setExportStatus('已导出 TXT 文案：' + cues.length + ' 段。');
-      }
-    }
-
     function fillJianyingDraftOptions(targetEl, options, mapValue) {
       if (!targetEl) return;
       targetEl.innerHTML = '';
@@ -3705,11 +4076,34 @@ const html = `<!doctype html>
         if (data.detectedRoot && jianyingDraftRootEl && !jianyingDraftRootEl.value.trim()) {
           jianyingDraftRootEl.value = data.detectedRoot;
         }
+        if (jianyingQuickTargetEl) {
+          const current = jianyingQuickTargetEl.value || 'auto';
+          jianyingQuickTargetEl.innerHTML = '';
+          const addOption = (value, label) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            jianyingQuickTargetEl.appendChild(option);
+          };
+          addOption('auto', data.detectedRoot ? '默认剪映目录' : '自动识别剪映目录');
+          addOption('project', '当前项目目录');
+          roots.forEach((root, index) => {
+            if (!root?.path) return;
+            addOption('root:' + root.path, (root.source === 'settings' ? '设置草稿目录' : '草稿目录' + (index + 1)) + '：' + root.path);
+          });
+          drafts.slice(0, 5).forEach((draft, index) => {
+            if (!draft?.path) return;
+            addOption('template:' + draft.path, '模板' + (index + 1) + '：' + (draft.name || draft.path));
+          });
+          if ([...jianyingQuickTargetEl.options].some((option) => option.value === current)) {
+            jianyingQuickTargetEl.value = current;
+          }
+        }
         if (showMessage) {
           if (data.detectedRoot) {
             setExportStatus('已识别剪映草稿目录：' + data.detectedRoot + (drafts.length ? '，可选模板草稿 ' + drafts.length + ' 个。' : '。'));
           } else {
-            setExportStatus('暂未自动识别到剪映草稿目录，可选择“导出到当前项目目录”，或手动填写 com.lveditor.draft 目录。');
+            setExportStatus('暂未自动识别到剪映草稿目录，可选择“当前项目目录”，或先到主页设置里配置剪映草稿目录。');
           }
         }
         return data;
@@ -3719,15 +4113,27 @@ const html = `<!doctype html>
       }
     }
 
+    function getJianyingExportSelection() {
+      const raw = jianyingQuickTargetEl ? String(jianyingQuickTargetEl.value || 'auto') : 'auto';
+      if (raw === 'project') return { exportMode: 'project', targetRoot: '', templatePath: '' };
+      if (raw.startsWith('root:')) return { exportMode: 'custom', targetRoot: raw.slice(5), templatePath: '' };
+      if (raw.startsWith('template:')) return { exportMode: 'auto', targetRoot: '', templatePath: raw.slice(9) };
+      return { exportMode: 'auto', targetRoot: '', templatePath: '' };
+    }
+
     async function exportJianyingDraft() {
+      setExportStatus('正在准备剪映导出目标...');
+      await loadJianyingDraftTargets(false);
       const cues = buildExportCues();
       if (!cues.length) {
         setExportStatus('没有可导出的字幕，请检查是否全部内容都被标记删除。');
+        alert('剪映草稿导出失败：没有可导出的字幕，请检查是否全部内容都被标记删除。');
         return;
       }
-      const templatePath = jianyingTemplatePathEl ? jianyingTemplatePathEl.value.trim() : '';
-      const exportMode = jianyingExportModeEl ? jianyingExportModeEl.value : 'auto';
-      const targetRoot = jianyingDraftRootEl ? jianyingDraftRootEl.value.trim() : '';
+      const selection = getJianyingExportSelection();
+      const templatePath = selection.templatePath;
+      const exportMode = selection.exportMode;
+      const targetRoot = selection.targetRoot;
       const preset = jianyingSubtitlePresetEl ? jianyingSubtitlePresetEl.value : 'clean';
       const deleteSegments = mergedSegmentsFromSelection();
       const sourceDurationSec = getAudioTotalDuration();
@@ -3836,6 +4242,176 @@ const html = `<!doctype html>
       scheduleReviewStateSave(200);
     }
 
+    function mergePlannedVisualReference(nextRef) {
+      if (!nextRef || typeof nextRef !== 'object') return;
+      const currentAssets = normalizeReferenceAssets(visualReference.assets);
+      const nextAssets = normalizeReferenceAssets(nextRef.assets);
+      visualReference = cloneVisualReference({
+        ...visualReference,
+        ...nextRef,
+        enabled: visualReference.enabled !== false,
+        assets: nextAssets.length ? nextAssets : currentAssets,
+        status: currentAssets.some((asset) => asset.image?.url) ? 'done' : (nextAssets.length ? 'planned' : visualReference.status),
+      });
+    }
+
+    async function planVisualReferencePrompt() {
+      const response = await fetch('/api/llm-visual-reference', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          words: WORDS,
+          selectedIndices: Array.from(selected),
+          style: imageStyleEl ? imageStyleEl.value : '',
+          analysis: {
+            topic: llmTopic,
+            outline: llmOutline,
+            multiSpeaker: llmMultiSpeaker,
+          },
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || ('HTTP ' + response.status));
+      }
+      mergePlannedVisualReference(data.visualReference || data);
+      const prompts = normalizeReferenceAssets(visualReference.assets).map((asset) => asset.prompt).filter(Boolean);
+      visualReference.prompt = String(data.prompt || data.visualReference?.prompt || prompts.join('\\n\\n') || visualReference.prompt || '').slice(0, 1600);
+      visualReference.negativePrompt = String(data.negativePrompt || data.visualReference?.negativePrompt || visualReference.negativePrompt || '').slice(0, 500);
+      visualReference.source = 'llm-plan';
+      visualReference.status = normalizeReferenceAssets(visualReference.assets).length ? 'planned' : (visualReference.prompt ? 'planned' : 'empty');
+      renderVisualReference();
+      return visualReference.prompt;
+    }
+
+    async function generateVisualReferenceAsset(index) {
+      const assets = normalizeReferenceAssets(visualReference.assets);
+      const asset = assets[index];
+      if (!asset) return null;
+      asset.status = 'generating';
+      asset.error = '';
+      visualReference.assets = assets;
+      renderVisualReference();
+      const response = await fetch('/api/generate-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          item: {
+            id: asset.id || ('visual_reference_' + (index + 1)),
+            title: asset.title || '\u8d44\u4ea7\u56fe\u53c2\u8003',
+            purpose: asset.role || (asset.type === 'character' ? '\u7edf\u4e00\u4eba\u7269\u8bbe\u5b9a' : '\u7edf\u4e00\u573a\u666f\u8bbe\u5b9a'),
+            prompt: asset.prompt || visualReference.prompt,
+            negativePrompt: asset.negativePrompt || visualReference.negativePrompt,
+            aspectRatio: asset.aspectRatio || '1:1',
+          },
+          imageSize: asset.aspectRatio || '1:1',
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || ('HTTP ' + response.status));
+      }
+      assets[index] = normalizeReferenceAsset({
+        ...asset,
+        ...(data.item || {}),
+        prompt: data.item?.prompt || asset.prompt,
+        negativePrompt: data.item?.negativePrompt || asset.negativePrompt,
+        image: data.image,
+        status: 'done',
+        source: 'generated',
+      }, index);
+      visualReference.assets = assets;
+      visualReference.image = assets.find((item) => item.image?.url)?.image || null;
+      visualReference.status = 'done';
+      renderVisualReference();
+      return assets[index];
+    }
+
+    async function generateVisualReference() {
+      visualReference.enabled = true;
+      visualReference.status = 'generating';
+      visualReference.error = '';
+      renderVisualReference();
+      setVisualReferenceStatus('\u6b63\u5728\u89c4\u5212\u4eba\u7269/\u573a\u666f\u8d44\u4ea7\u56fe...');
+      if (!normalizeReferenceAssets(visualReference.assets).length) {
+        await planVisualReferencePrompt();
+      }
+      const assets = normalizeReferenceAssets(visualReference.assets);
+      if (!assets.length) throw new Error('\u8d44\u4ea7\u56fe\u89c4\u5212\u4e3a\u7a7a');
+      let ok = 0;
+      for (let i = 0; i < assets.length; i += 1) {
+        try {
+          setVisualReferenceStatus('\u6b63\u5728\u751f\u6210\u8d44\u4ea7\u56fe ' + (i + 1) + '/' + assets.length + '...');
+          await generateVisualReferenceAsset(i);
+          ok += 1;
+        } catch (err) {
+          const next = normalizeReferenceAssets(visualReference.assets);
+          if (next[i]) {
+            next[i].status = 'error';
+            next[i].error = err.message || String(err);
+          }
+          visualReference.assets = next;
+          renderVisualReference();
+        }
+      }
+      visualReference.status = ok ? 'done' : 'error';
+      renderVisualReference();
+      scheduleReviewStateSave(200);
+      if (!ok) throw new Error('\u8d44\u4ea7\u56fe\u5168\u90e8\u751f\u6210\u5931\u8d25');
+    }
+
+    async function importVisualReferenceImage(file) {
+      if (!/^image\//i.test(file.type || '')) {
+        throw new Error('\u8bf7\u9009\u62e9\u56fe\u7247\u6587\u4ef6');
+      }
+      if (file.size > 20 * 1024 * 1024) {
+        throw new Error('\u56fe\u7247\u6587\u4ef6\u8fc7\u5927\uff0c\u8bf7\u9009\u62e9 20MB \u4ee5\u5185\u7684\u56fe\u7247');
+      }
+      visualReference.enabled = true;
+      visualReference.status = 'generating';
+      renderVisualReference();
+      setVisualReferenceStatus('\u6b63\u5728\u5bfc\u5165\u8d44\u4ea7\u53c2\u8003\u56fe...');
+      const dataUrl = await fileToDataUrl(file);
+      const response = await fetch('/api/import-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: file.name || 'visual-reference',
+          dataUrl,
+          item: {
+            id: 'visual_reference_' + Date.now(),
+            title: file.name || '\u672c\u5730\u8d44\u4ea7\u53c2\u8003',
+            prompt: 'User uploaded visual reference: ' + (file.name || 'image'),
+          },
+          aspectRatio: '1:1',
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || ('HTTP ' + response.status));
+      }
+      const assets = normalizeReferenceAssets(visualReference.assets);
+      assets.push(normalizeReferenceAsset({
+        id: 'uploaded_' + Date.now(),
+        type: assets.length ? 'scene' : 'character',
+        title: file.name || '\u672c\u5730\u8d44\u4ea7\u53c2\u8003',
+        prompt: String(data.item?.prompt || '').slice(0, 1600),
+        image: data.image,
+        status: 'done',
+        source: 'local-upload',
+      }, assets.length));
+      visualReference = cloneVisualReference({
+        ...visualReference,
+        enabled: true,
+        status: 'done',
+        assets,
+        image: assets.find((asset) => asset.image?.url)?.image || data.image,
+        source: 'local-upload',
+      });
+      renderVisualReference();
+      scheduleReviewStateSave(200);
+    }
+
     async function generateOneImage(index, retry = false) {
       const item = imageItems[index];
       if (!item) return;
@@ -3848,6 +4424,7 @@ const html = `<!doctype html>
         body: JSON.stringify({
           item,
           retry,
+          referenceImage: getReferenceImagesForItem(item, 2),
           imageSize: imageAspectEl ? imageAspectEl.value : '',
         }),
       });
@@ -3872,7 +4449,7 @@ const html = `<!doctype html>
       setImageGenerating(true);
       try {
         setImageStatus('正在让 LLM 分析文本并规划配图点...');
-        const existingRanges = collectMediaRanges('image');
+        const existingRanges = collectPlacementBlockedRanges('image');
         imageItems = [];
         renderImageCards();
         const response = await fetch('/api/llm-image-plan', {
@@ -3881,9 +4458,12 @@ const html = `<!doctype html>
           body: JSON.stringify({
             words: WORDS,
             selectedIndices: Array.from(selected),
+            deleteSegments: mergedSegmentsFromSelection(),
+            sourceDurationSec: getAudioTotalDuration(),
             count: imageCountEl ? String(imageCountEl.value || 'auto') : 'auto',
             style: imageStyleEl ? imageStyleEl.value : '',
             existingRanges,
+            visualReference: cloneVisualReference(visualReference),
             analysis: {
               topic: llmTopic,
               outline: llmOutline,
@@ -3901,6 +4481,16 @@ const html = `<!doctype html>
         }
         if (plan.topic && !llmTopic) llmTopic = String(plan.topic).slice(0, 80);
         if (plan.outline && !llmOutline) llmOutline = String(plan.outline).slice(0, 120);
+        if (plan.visualReference && typeof plan.visualReference === 'object') {
+          const plannedRef = cloneVisualReference({
+            ...visualReference,
+            ...plan.visualReference,
+            enabled: visualReference.enabled !== false,
+            status: visualReference.image?.url ? 'done' : 'planned',
+          });
+          if (!visualReference.prompt || !visualReference.image?.url) visualReference = plannedRef;
+          renderVisualReference();
+        }
         imageItems = (Array.isArray(plan.items) ? plan.items : []).map((item) => ({
           ...item,
           motionEffect: sanitizeImageMotionEffect(item.motionEffect || currentImageMotionEffect()),
@@ -3911,6 +4501,14 @@ const html = `<!doctype html>
         applyNonOverlappingSchedule(imageItems, 'image', existingRanges);
         renderImageCards();
         setImageStatus('已规划 ' + imageItems.length + ' 个配图点，开始逐张生成...');
+
+        if (visualReference.enabled !== false && !getActiveReferenceImages().length) {
+          try {
+            await generateVisualReference();
+          } catch (err) {
+            setImageStatus('\u53c2\u8003\u56fe\u751f\u6210\u5931\u8d25\uff0c\u5c06\u5148\u6309\u666e\u901a\u63d0\u793a\u8bcd\u751f\u6210\uff1a' + (err.message || String(err)));
+          }
+        }
 
         let ok = 0;
         for (let i = 0; i < imageItems.length; i += 1) {
@@ -3947,6 +4545,7 @@ const html = `<!doctype html>
           durationSec: item.durationSec || 5,
           numFrames: item.numFrames,
           frameRate: item.frameRate,
+          referenceImage: getReferenceImagesForItem(item, 1),
         }),
       });
       const data = await response.json().catch(() => ({}));
@@ -3970,7 +4569,7 @@ const html = `<!doctype html>
       setVideoGenerating(true);
       try {
         setVideoAssetStatus('正在让 LLM 规划视频素材插入点...');
-        const existingRanges = collectMediaRanges('video');
+        const existingRanges = collectPlacementBlockedRanges('video');
         videoItems = [];
         renderVideoAssetCards();
         const response = await fetch('/api/llm-video-plan', {
@@ -3979,10 +4578,13 @@ const html = `<!doctype html>
           body: JSON.stringify({
             words: WORDS,
             selectedIndices: Array.from(selected),
+            deleteSegments: mergedSegmentsFromSelection(),
+            sourceDurationSec: getAudioTotalDuration(),
             count: Number(videoAssetCountEl ? videoAssetCountEl.value : 3) || 3,
             style: imageStyleEl ? imageStyleEl.value : '',
             aspectRatio: videoAssetAspectEl ? videoAssetAspectEl.value : '16:9',
             existingRanges,
+            visualReference: cloneVisualReference(visualReference),
             analysis: {
               topic: llmTopic,
               outline: llmOutline,
@@ -4009,6 +4611,14 @@ const html = `<!doctype html>
         applyNonOverlappingSchedule(videoItems, 'video', existingRanges);
         renderVideoAssetCards();
         setVideoAssetStatus('已规划 ' + videoItems.length + ' 个视频素材点，开始逐段生成...');
+
+        if (visualReference.enabled !== false && !getActiveReferenceImages().length) {
+          try {
+            await generateVisualReference();
+          } catch (err) {
+            setVideoAssetStatus('\u53c2\u8003\u56fe\u751f\u6210\u5931\u8d25\uff0c\u5c06\u5148\u6309\u666e\u901a\u63d0\u793a\u8bcd\u751f\u6210\u89c6\u9891\uff1a' + (err.message || String(err)));
+          }
+        }
 
         let ok = 0;
         for (let i = 0; i < videoItems.length; i += 1) {
@@ -4078,6 +4688,7 @@ const html = `<!doctype html>
         mediaAssets: {
           images: imageItems,
           videos: videoItems,
+          visualReference: cloneVisualReference(visualReference),
         },
       };
     }
@@ -4205,6 +4816,7 @@ const html = `<!doctype html>
         const restoredMedia = state.mediaAssets && typeof state.mediaAssets === 'object' ? state.mediaAssets : {};
         imageItems = Array.isArray(restoredMedia.images) ? restoredMedia.images : [];
         videoItems = Array.isArray(restoredMedia.videos) ? restoredMedia.videos : [];
+        visualReference = cloneVisualReference(restoredMedia.visualReference || visualReference);
         imageItems.forEach((item) => {
           normalizeImageItemTiming(item);
           if (item && item.image && item.status !== 'error') item.status = item.image.url ? 'done' : (item.status || 'queued');
@@ -4213,6 +4825,7 @@ const html = `<!doctype html>
           normalizeVideoItemTiming(item);
           if (item && item.video && item.status !== 'error') item.status = item.video.url ? 'done' : (item.status || 'queued');
         });
+        renderVisualReference();
         renderImageCards();
         renderVideoAssetCards();
 
@@ -4400,7 +5013,7 @@ const html = `<!doctype html>
           end: start + durationSec,
           durationSec,
           title: String(item?.title || (type === 'image' ? '图片素材' : '视频素材')),
-          motionEffect: type === 'image' ? currentImageMotionEffect() : 'none',
+          motionEffect: type === 'image' ? sanitizeImageMotionEffect(item?.motionEffect || currentImageMotionEffect()) : 'none',
         });
       };
       imageItems.forEach((item) => pushOverlay('image', item, item?.image));
@@ -5680,7 +6293,6 @@ const html = `<!doctype html>
 
     function maybeSkipSelectedSegment() {
       if (audio.paused) return;
-      if (previewStopTime !== null) return;
       if (!mergedSelected.length) return;
 
       const t = Number(audio.currentTime) || 0;
@@ -6185,29 +6797,6 @@ const html = `<!doctype html>
       return mergeDeleteSegments(adjusted);
     }
 
-    function currentOrNearestDeleteSegment() {
-      const segs = normalizeDeleteSegments(mergedSegmentsFromSelection());
-      if (!segs.length) return null;
-      const currentTime = Number(audio.currentTime) || 0;
-      const currentWord = WORDS[currentIndex] || null;
-      const cursorTime = currentWord && Number.isFinite(Number(currentWord.start))
-        ? ((Number(currentWord.start) + Number(currentWord.end)) / 2)
-        : currentTime;
-      const inside = segs.find((seg) => cursorTime >= seg.start && cursorTime <= seg.end)
-        || segs.find((seg) => currentTime >= seg.start && currentTime <= seg.end);
-      if (inside) return inside;
-      let best = segs[0];
-      let bestDistance = Number.POSITIVE_INFINITY;
-      for (const seg of segs) {
-        const distance = cursorTime < seg.start ? seg.start - cursorTime : Math.max(0, cursorTime - seg.end);
-        if (distance < bestDistance) {
-          bestDistance = distance;
-          best = seg;
-        }
-      }
-      return best;
-    }
-
     function setPreviewSegment(seg) {
       const previous = previewSegment;
       previewSegment = seg ? { ...seg } : null;
@@ -6222,31 +6811,6 @@ const html = `<!doctype html>
         });
       }
       drawWaveform();
-    }
-
-    function previewCurrentDeletePoint() {
-      updateSelectionStats();
-      const seg = currentOrNearestDeleteSegment();
-      if (!seg) {
-        setStatus('没有可预听的删除片段');
-        if (deletePreviewInfoEl) deletePreviewInfoEl.hidden = true;
-        return;
-      }
-      const total = getAudioTotalDuration();
-      const start = Math.max(0, seg.start - 2);
-      const end = Math.min(total > 0 ? total : seg.end + 2, seg.end + 2);
-      previewStopTime = end;
-      setPreviewSegment(seg);
-      if (deletePreviewInfoEl) {
-        deletePreviewInfoEl.hidden = false;
-        deletePreviewInfoEl.textContent =
-          '预听范围：删除前 ' + formatSec(start) + '-' + formatSec(seg.start)
-          + ' | 删除段 ' + formatSec(seg.start) + '-' + formatSec(seg.end)
-          + ' | 删除后 ' + formatSec(seg.end) + '-' + formatSec(end);
-      }
-      setPlaybackTime(start);
-      audio.play().catch(() => {});
-      setStatus('正在预听删除点');
     }
 
     function nearestWordIndex(timeSec, direction) {
@@ -6449,7 +7013,7 @@ const html = `<!doctype html>
           durationSec,
           title: String(item?.title || ''),
           fit: 'cover',
-          motionEffect: type === 'image' ? currentImageMotionEffect() : 'none',
+          motionEffect: type === 'image' ? sanitizeImageMotionEffect(item?.motionEffect || currentImageMotionEffect()) : 'none',
         });
       };
       imageItems.forEach((item) => pushOverlay('image', item, item?.image));
@@ -6637,12 +7201,6 @@ const html = `<!doctype html>
         setWaveZoomPopoverOpen(false);
         return;
       }
-      if (!e.ctrlKey && !e.metaKey && !e.altKey && key === 's') {
-        if (!shouldHandleGlobalHotkey(e)) return;
-        e.preventDefault();
-        previewCurrentDeletePoint();
-        return;
-      }
       if (e.code !== 'Space') return;
       if (!shouldHandleGlobalHotkey(e)) return;
       e.preventDefault();
@@ -6680,7 +7238,6 @@ const html = `<!doctype html>
     toolTabEls.forEach((tab) => {
       tab.addEventListener('click', () => setToolPanel(tab.dataset.toolTab || 'marking'));
     });
-    if (btnPreviewDelete) btnPreviewDelete.addEventListener('click', previewCurrentDeletePoint);
     if (btnToggleVideoPreview) btnToggleVideoPreview.addEventListener('click', toggleVideoPreview);
     if (btnFocusReview) btnFocusReview.addEventListener('click', toggleFocusReviewMode);
     if (btnShowDeleteDiagnostics) btnShowDeleteDiagnostics.addEventListener('click', renderDeleteDiagnostics);
@@ -6821,14 +7378,18 @@ const html = `<!doctype html>
         }
       });
     }
-    if (btnExportSrt) {
-      btnExportSrt.addEventListener('click', () => exportSubtitles('srt'));
-    }
-    if (btnExportTxt) {
-      btnExportTxt.addEventListener('click', () => exportSubtitles('txt'));
-    }
     if (btnExportJianyingDraft) {
       btnExportJianyingDraft.addEventListener('click', exportJianyingDraft);
+    }
+    if (jianyingQuickTargetEl) {
+      jianyingQuickTargetEl.addEventListener('focus', () => loadJianyingDraftTargets(false));
+      jianyingQuickTargetEl.addEventListener('mousedown', () => loadJianyingDraftTargets(false));
+      jianyingQuickTargetEl.addEventListener('change', () => {
+        const label = jianyingQuickTargetEl.selectedOptions && jianyingQuickTargetEl.selectedOptions[0]
+          ? jianyingQuickTargetEl.selectedOptions[0].textContent
+          : jianyingQuickTargetEl.value;
+        setExportStatus('已选择剪映导出目标：' + label);
+      });
     }
     if (btnDetectJianyingDraftRoot) {
       btnDetectJianyingDraftRoot.addEventListener('click', () => loadJianyingDraftTargets(true));
@@ -6876,9 +7437,90 @@ const html = `<!doctype html>
     if (imageMotionEffectEl) {
       imageMotionEffectEl.addEventListener('change', () => scheduleReviewStateSave(100));
     }
+    if (useVisualReferenceEl) {
+      useVisualReferenceEl.addEventListener('change', () => {
+        visualReference.enabled = !!useVisualReferenceEl.checked;
+        renderVisualReference();
+        scheduleReviewStateSave(120);
+      });
+    }
+    if (visualReferencePromptEl) {
+      const syncVisualReferencePrompt = () => {
+        visualReference.prompt = String(visualReferencePromptEl.value || '').slice(0, 1600);
+        visualReference.status = visualReference.image?.url ? 'done' : (visualReference.prompt ? 'planned' : 'empty');
+        renderVisualReference();
+        scheduleReviewStateSave(120);
+      };
+      visualReferencePromptEl.addEventListener('input', syncVisualReferencePrompt);
+      visualReferencePromptEl.addEventListener('change', syncVisualReferencePrompt);
+    }
+    if (visualReferencePreviewEl) {
+      visualReferencePreviewEl.addEventListener('click', (event) => {
+        const deleteBtn = event.target.closest('[data-ref-delete]');
+        const previewBtn = event.target.closest('[data-ref-preview]');
+        const card = event.target.closest('[data-ref-index]');
+        if (deleteBtn) {
+          const index = Number(deleteBtn.dataset.refDelete);
+          deleteVisualReferenceAsset(index);
+          return;
+        }
+        if (previewBtn) {
+          const index = Number(previewBtn.dataset.refPreview);
+          openAssetPreview(index);
+          return;
+        }
+        if (card && event.target.closest('.asset-reference-thumb img')) {
+          openAssetPreview(Number(card.dataset.refIndex));
+        }
+      });
+    }
+    if (btnGenerateVisualReference) {
+      btnGenerateVisualReference.addEventListener('click', async () => {
+        try {
+          await generateVisualReference();
+        } catch (err) {
+          visualReference.status = 'error';
+          renderVisualReference();
+          setVisualReferenceStatus('\u53c2\u8003\u56fe\u751f\u6210\u5931\u8d25\uff1a' + (err.message || String(err)));
+        }
+      });
+    }
+    if (btnUploadVisualReference && referenceImageUploadInputEl) {
+      btnUploadVisualReference.addEventListener('click', () => {
+        referenceImageUploadInputEl.value = '';
+        referenceImageUploadInputEl.click();
+      });
+      referenceImageUploadInputEl.addEventListener('change', async () => {
+        const file = referenceImageUploadInputEl.files && referenceImageUploadInputEl.files[0];
+        if (!file) return;
+        try {
+          await importVisualReferenceImage(file);
+        } catch (err) {
+          visualReference.status = 'error';
+          renderVisualReference();
+          setVisualReferenceStatus('\u53c2\u8003\u56fe\u5bfc\u5165\u5931\u8d25\uff1a' + (err.message || String(err)));
+        }
+      });
+    }
     if (imageCardListEl) {
+      const syncImagePromptInput = (target) => {
+        const promptInput = target.closest('[data-image-prompt]');
+        if (!promptInput) return false;
+        const index = Number(promptInput.dataset.imagePrompt);
+        if (!Number.isInteger(index) || !imageItems[index]) return true;
+        imageItems[index].prompt = String(promptInput.value || '').slice(0, 1800);
+        imageItems[index].promptEdited = true;
+        scheduleReviewStateSave(180);
+        return true;
+      };
+      imageCardListEl.addEventListener('input', (e) => {
+        syncImagePromptInput(e.target);
+      });
       imageCardListEl.addEventListener('change', (e) => {
         const durationInput = e.target.closest('[data-image-duration]');
+        if (syncImagePromptInput(e.target)) {
+          return;
+        }
         if (durationInput) {
           const index = Number(durationInput.dataset.imageDuration);
           if (!Number.isInteger(index) || !imageItems[index]) return;
@@ -6895,7 +7537,6 @@ const html = `<!doctype html>
       imageCardListEl.addEventListener('click', async (e) => {
         const retryBtn = e.target.closest('[data-image-retry]');
         const uploadBtn = e.target.closest('[data-image-upload]');
-        const copyBtn = e.target.closest('[data-image-copy]');
         if (uploadBtn) {
           const index = Number(uploadBtn.dataset.imageUpload);
           if (!Number.isInteger(index) || !imageItems[index] || !localImageUploadInputEl) return;
@@ -6909,7 +7550,7 @@ const html = `<!doctype html>
           if (!Number.isInteger(index)) return;
           try {
             setImageStatus('正在重试第 ' + (index + 1) + ' 张，LLM 会先换一个提示词...');
-            await generateOneImage(index, true);
+            await generateOneImage(index, !imageItems[index]?.promptEdited);
             setImageStatus('第 ' + (index + 1) + ' 张已重试完成');
           } catch (err) {
             if (imageItems[index]) {
@@ -6921,16 +7562,7 @@ const html = `<!doctype html>
           }
           return;
         }
-        if (copyBtn) {
-          const index = Number(copyBtn.dataset.imageCopy);
-          const text = imageItems[index]?.prompt || '';
-          if (!text) return;
-          navigator.clipboard?.writeText(text).then(() => {
-            setImageStatus('已复制第 ' + (index + 1) + ' 张提示词');
-          }).catch(() => {
-            setImageStatus('复制失败，请手动选择提示词');
-          });
-        }
+
       });
     }
     if (localImageUploadInputEl) {
@@ -6953,15 +7585,32 @@ const html = `<!doctype html>
       });
     }
     if (videoAssetListEl) {
+      const syncVideoPromptInput = (target) => {
+        const promptInput = target.closest('[data-video-prompt]');
+        if (!promptInput) return false;
+        const index = Number(promptInput.dataset.videoPrompt);
+        if (!Number.isInteger(index) || !videoItems[index]) return true;
+        const value = String(promptInput.value || '').slice(0, 1800);
+        videoItems[index].videoPrompt = value;
+        videoItems[index].prompt = value;
+        videoItems[index].promptEdited = true;
+        scheduleReviewStateSave(180);
+        return true;
+      };
+      videoAssetListEl.addEventListener('input', (e) => {
+        syncVideoPromptInput(e.target);
+      });
+      videoAssetListEl.addEventListener('change', (e) => {
+        syncVideoPromptInput(e.target);
+      });
       videoAssetListEl.addEventListener('click', async (e) => {
         const retryBtn = e.target.closest('[data-video-retry]');
-        const copyBtn = e.target.closest('[data-video-copy]');
         if (retryBtn) {
           const index = Number(retryBtn.dataset.videoRetry);
           if (!Number.isInteger(index)) return;
           try {
             setVideoAssetStatus('正在重试第 ' + (index + 1) + ' 段视频素材...');
-            await generateOneVideoAsset(index, true);
+            await generateOneVideoAsset(index, !videoItems[index]?.promptEdited);
             setVideoAssetStatus('第 ' + (index + 1) + ' 段视频素材已重试完成');
           } catch (err) {
             if (videoItems[index]) {
@@ -6973,16 +7622,7 @@ const html = `<!doctype html>
           }
           return;
         }
-        if (copyBtn) {
-          const index = Number(copyBtn.dataset.videoCopy);
-          const text = videoItems[index]?.videoPrompt || videoItems[index]?.prompt || '';
-          if (!text) return;
-          navigator.clipboard?.writeText(text).then(() => {
-            setVideoAssetStatus('已复制第 ' + (index + 1) + ' 段视频提示词');
-          }).catch(() => {
-            setVideoAssetStatus('复制失败，请手动选择提示词');
-          });
-        }
+
       });
     }
     if (btnLlmChatSend) {
@@ -7182,11 +7822,6 @@ const html = `<!doctype html>
     audio.addEventListener('timeupdate', () => {
       syncCurrentToken();
       syncVideoPreview(false);
-      if (previewStopTime !== null && Number(audio.currentTime) >= previewStopTime) {
-        audio.pause();
-        previewStopTime = null;
-        setStatus('预听完成');
-      }
     });
     audio.addEventListener('loadedmetadata', () => {
       updateSelectionStats();
@@ -7214,7 +7849,6 @@ const html = `<!doctype html>
       stopSyncTimer();
       cancelSkipFade();
       stopCompositePreviewLoop();
-      previewStopTime = null;
       if (sourceVideoEl && !sourceVideoEl.paused) sourceVideoEl.pause();
       drawWaveform();
     });
@@ -7240,6 +7874,7 @@ const html = `<!doctype html>
       render();
       syncUndoButton();
       renderPublishSuggestions({ titles: [], descriptions: [], keywords: [] });
+      renderVisualReference();
       renderImageCards();
       renderVideoAssetCards();
       refreshGlossarySummary();

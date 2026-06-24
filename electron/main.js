@@ -126,6 +126,8 @@ const DEFAULT_SETTINGS = {
   videoApiKey: '',
   videoModel: AGNES_VIDEO_MODEL,
   termGlossary: '',
+  jianyingDraftRoot: '',
+  jianyingTemplatePaths: [],
   closeBehavior: '',
   remoteUploadEndpoint: 'https://ailabing.cn/api/jaygo/upload-audio',
   remoteUploadToken: '6b5ec35b8e28d2e1fb24c899fa19e74f03355a5b62105df90c2086a76d14812a',
@@ -250,6 +252,24 @@ function normalizeAsrEngine(value) {
   if (['volcengine', 'aliyun_qwen', 'mimo', 'local'].includes(engine)) return engine;
   if (engine === 'whisper') return 'local';
   return DEFAULT_SETTINGS.asrEngine;
+}
+
+function normalizeDirList(value, maxItems = 5) {
+  const rawList = Array.isArray(value)
+    ? value
+    : String(value || '').split(/\r?\n|[;|]/);
+  const seen = new Set();
+  const out = [];
+  for (const raw of rawList) {
+    const dir = String(raw || '').trim().replace(/^"|"$/g, '');
+    if (!dir) continue;
+    const key = path.resolve(dir).toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(path.resolve(dir));
+    if (out.length >= maxItems) break;
+  }
+  return out;
 }
 
 function asrEngineEnvValue(value) {
@@ -567,6 +587,8 @@ function buildRuntimeEnv(settings) {
     ).trim(),
     VIDEO_MODEL: String(settings.videoModel || '').trim(),
     TERM_GLOSSARY: String(settings.termGlossary || ''),
+    JIANYING_DRAFT_ROOT: String(settings.jianyingDraftRoot || '').trim(),
+    JIANYING_TEMPLATE_PATHS: JSON.stringify(normalizeDirList(settings.jianyingTemplatePaths, 5)),
   };
 }
 
@@ -1136,6 +1158,14 @@ async function loadSettings() {
       if (env.VIDEO_API_KEY) merged.videoApiKey = env.VIDEO_API_KEY;
       if (env.VIDEO_MODEL) merged.videoModel = env.VIDEO_MODEL;
       if (env.TERM_GLOSSARY) merged.termGlossary = decodeMultilineEnvValue(env.TERM_GLOSSARY);
+      if (env.JIANYING_DRAFT_ROOT) merged.jianyingDraftRoot = env.JIANYING_DRAFT_ROOT;
+      if (env.JIANYING_TEMPLATE_PATHS) {
+        try {
+          merged.jianyingTemplatePaths = JSON.parse(env.JIANYING_TEMPLATE_PATHS);
+        } catch {
+          merged.jianyingTemplatePaths = env.JIANYING_TEMPLATE_PATHS;
+        }
+      }
     } catch {
       // ignore malformed .env
     }
@@ -1163,6 +1193,8 @@ async function loadSettings() {
   if (!String(merged.imageModel || '').trim()) merged.imageModel = DEFAULT_SETTINGS.imageModel;
   if (!String(merged.videoApiBaseUrl || '').trim()) merged.videoApiBaseUrl = DEFAULT_SETTINGS.videoApiBaseUrl;
   if (!String(merged.videoModel || '').trim()) merged.videoModel = DEFAULT_SETTINGS.videoModel;
+  merged.jianyingDraftRoot = String(merged.jianyingDraftRoot || '').trim();
+  merged.jianyingTemplatePaths = normalizeDirList(merged.jianyingTemplatePaths, 5);
   return merged;
 }
 
@@ -1212,6 +1244,8 @@ async function syncSkillEnv(settings) {
     current.VIDEO_API_KEY = String(settings.videoApiKey || settings.imageApiKey || (videoCanReuseLlm ? settings.llmApiKey : '') || '');
     current.VIDEO_MODEL = String(settings.videoModel || '');
     current.TERM_GLOSSARY = encodeMultilineEnvValue(settings.termGlossary || '');
+    current.JIANYING_DRAFT_ROOT = String(settings.jianyingDraftRoot || '');
+    current.JIANYING_TEMPLATE_PATHS = JSON.stringify(normalizeDirList(settings.jianyingTemplatePaths, 5));
 
     const ordered = [
       'VOLCENGINE_API_KEY',
@@ -1237,6 +1271,8 @@ async function syncSkillEnv(settings) {
       'VIDEO_API_KEY',
       'VIDEO_MODEL',
       'TERM_GLOSSARY',
+      'JIANYING_DRAFT_ROOT',
+      'JIANYING_TEMPLATE_PATHS',
       'DEFAULT_OUTPUT_DIR',
       'CUT_MIN_DELETE_MS',
       'CUT_EXPORT_QUALITY',
@@ -1293,6 +1329,8 @@ async function saveSettings(nextSettings = {}) {
     videoApiKey: String(source.videoApiKey || '').trim(),
     videoModel: String(source.videoModel || DEFAULT_SETTINGS.videoModel).trim(),
     termGlossary: String(source.termGlossary || '').replace(/\r\n/g, '\n').slice(0, 20000),
+    jianyingDraftRoot: String(source.jianyingDraftRoot || '').trim(),
+    jianyingTemplatePaths: normalizeDirList(source.jianyingTemplatePaths, 5),
     closeBehavior: ['tray', 'exit'].includes(source.closeBehavior) ? source.closeBehavior : DEFAULT_SETTINGS.closeBehavior,
     remoteUploadEndpoint: String(source.remoteUploadEndpoint || DEFAULT_SETTINGS.remoteUploadEndpoint).trim(),
     remoteUploadToken: String(source.remoteUploadToken || DEFAULT_SETTINGS.remoteUploadToken).trim(),

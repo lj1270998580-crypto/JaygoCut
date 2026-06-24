@@ -172,6 +172,24 @@
             </div>
           </label>
 
+          <label class="span-2">
+            剪映草稿根目录（可选，填写一次后审核页可直接选择）
+            <div class="inline-input">
+              <input id="jianyingDraftRootSetting" type="text" placeholder="通常是 com.lveditor.draft 目录，留空则自动识别" />
+              <button id="pickJianyingDraftRoot" type="button">选择文件夹</button>
+            </div>
+          </label>
+
+          <label class="span-2">
+            剪映模板草稿目录（最多 5 个，每行一个）
+            <textarea id="jianyingTemplatePaths" rows="3" placeholder="点击“添加模板文件夹”选择已有剪映草稿目录；导出时会基于模板新建草稿，不覆盖原模板。"></textarea>
+          </label>
+
+          <div class="span-2 actions">
+            <button id="addJianyingTemplatePath" type="button" class="secondary">添加模板文件夹</button>
+            <button id="clearJianyingTemplatePaths" type="button" class="secondary">清空模板</button>
+          </div>
+
           <label>
             静音阈值（>= 秒）
             <input id="silenceThresholdSec" type="number" min="0.2" step="0.05" />
