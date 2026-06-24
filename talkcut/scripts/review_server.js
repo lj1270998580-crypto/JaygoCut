@@ -58,10 +58,10 @@ const VIDEO_ASSET_DIR = path.resolve(process.cwd(), 'video_assets');
 const AGNES_API_BASE_URL = 'https://apihub.agnes-ai.com/v1';
 const AGNES_IMAGE_MODEL = 'agnes-image-2.1-flash';
 const AGNES_VIDEO_MODEL = 'agnes-video-v2.0';
-const AGNES_VIDEO_MIN_REQUEST_INTERVAL_MS = 3100;
+const AGNES_MIN_REQUEST_INTERVAL_MS = 3200;
 const JIANYING_DRAFT_EXPORT_DIR_NAME = 'jianying_drafts';
 
-let lastAgnesVideoRequestAt = 0;
+let lastAgnesRequestAt = 0;
 
 let currentCutJob = {
   jobId: null,
@@ -358,8 +358,8 @@ function buildAgnesVideoStatusEndpoint(baseUrl, videoId) {
 
 function buildAgnesVideoQueryEndpoints(baseUrl, videoId) {
   return [
-    buildAgnesVideoStatusEndpoint(baseUrl, videoId),
     buildAgnesVideoQueryEndpoint(baseUrl, videoId),
+    buildAgnesVideoStatusEndpoint(baseUrl, videoId),
   ];
 }
 
@@ -662,6 +662,8 @@ function buildChatAdjustPrompt(units, selectedUnitIds, userMessage, history, ana
     ? history.slice(-10).map((it) => `${it.role || 'user'}: ${String(it.text || '').slice(0, 180)}`).join('\n')
     : '';
   return [
+    'Role: You are Jaygo Cut AI Butler, an operations assistant with permission to plan safe edits, media cards, and draft-export actions for the review page.',
+    'When the user asks for an operation, translate it into precise JSON changes instead of generic advice. Prefer reversible, conservative edits.',
     '你是口播短视频剪辑师，正在根据用户反馈二次调整删除标记。',
     `主题: ${String(analysis?.topic || '').trim() || '未知'}`,
     `梗概: ${String(analysis?.outline || '').trim() || '未知'}`,
@@ -702,12 +704,12 @@ function buildLlmPrompt(chunkUnits, context = {}) {
   const multiSpeaker = context.multiSpeaker ? 'true' : 'false';
   const mainSpeakerHint = String(context.mainSpeakerHint || '').trim();
   const precisionRules = [
-    '???????????????????????????????????????',
-    '??????????????????????????????/??/??/?????????????????????',
-    '???????????????????????????????????????????????????????????????????????',
-    '??????????????????????????????????????????',
-    '??/???????????????????????????????',
-    '???????????????????????? confidence >= 0.88?',
+    'You are a senior short-form talking-head editor. Improve rhythm, but protect meaning first.',
+    'Before marking anything, infer the role of this chunk in the whole script: hook, setup, point, proof, example, contrast, conclusion, or off-topic chat.',
+    'Only mark text that can be removed while the sentence before and after still reads naturally and the argument remains complete.',
+    'For repeated ideas, keep the clearer and more complete version; delete only the weaker duplicate or abandoned restart.',
+    'For filler words, delete only standalone or consecutive fillers. Keep fillers that carry emotion, transition, hesitation, or speaker personality.',
+    'Never delete facts, numbers, names, places, causal links, contrast words, key nouns, conclusions, or necessary setup unless confidence >= 0.88.',
   ];
 
   return [
@@ -1444,6 +1446,7 @@ function buildImagePlanPrompt(units, analysis, style, count, existingRanges = []
   return [
     '你是短视频口播内容的导演、分镜师和 AI 图片提示词专家。',
     '任务：把口播文本翻译成一组能插入视频的配图分镜。你不是摘抄字幕的人，而是把抽象观点导演成具体画面的人。',
+    'If there are multiple independent stories/cases/time periods/visual worlds, every media item must include storyId and storyTitle matching the visual reference asset story group.',
     '必须按这个思考流程执行，但最终只输出 JSON：',
     'A. 先读完整文本，判断主题、情绪、文化地域、是否有人物故事。',
     'B. 选择真正适合配图的节点：开头钩子、观点冲突、人物行动、案例画面、情绪转折、结尾记忆点；不要机械平均取句。',
@@ -1513,6 +1516,8 @@ function normalizeVisualReferenceAsset(asset, index = 0, style = '', analysis = 
   const type = normalizeVisualReferenceAssetType(asset?.type || asset?.kind || asset?.assetType, index === 0 ? 'character' : 'scene');
   const titleFallback = type === 'character' ? `Character asset ${index + 1}` : `Scene asset ${index + 1}`;
   const title = trimByChars(String(asset?.title || asset?.name || titleFallback).replace(/\s+/g, ' '), 48);
+  const storyId = String(asset?.storyId || asset?.story_id || asset?.storyGroup || asset?.group || 'story_01').replace(/[^\w-]/g, '_').slice(0, 48) || 'story_01';
+  const storyTitle = trimByChars(String(asset?.storyTitle || asset?.story_title || asset?.groupTitle || asset?.storyName || 'Story 1').replace(/\s+/g, ' '), 60);
   const topic = trimByChars(String(analysis?.topic || 'short-form story').replace(/\s+/g, ' '), 80);
   const outline = trimByChars(String(analysis?.outline || '').replace(/\s+/g, ' '), 160);
   const styleText = trimByChars(String(style || asset?.style || 'consistent editorial illustration').replace(/\s+/g, ' '), 120);
@@ -1536,6 +1541,8 @@ function normalizeVisualReferenceAsset(asset, index = 0, style = '', analysis = 
   return {
     id: String(asset?.id || `${type}_${String(index + 1).padStart(2, '0')}`).replace(/[^\w-]/g, '_').slice(0, 48),
     type,
+    storyId,
+    storyTitle,
     title,
     prompt,
     negativePrompt,
@@ -1550,12 +1557,16 @@ function buildFallbackVisualReferencePlan(analysis = {}, style = '') {
   const assets = [
     normalizeVisualReferenceAsset({
       type: 'character',
+      storyId: 'story_01',
+      storyTitle: 'Story 1',
       title: 'Main character reference',
       prompt: `A reusable main character for the story about ${topic}. ${outline} Keep clothing and identity consistent.`,
       source: 'fallback',
     }, 0, style, analysis),
     normalizeVisualReferenceAsset({
       type: 'scene',
+      storyId: 'story_01',
+      storyTitle: 'Story 1',
       title: 'Main scene reference',
       prompt: `A reusable story environment for ${topic}. Show only the setting, props, light, color palette, and atmosphere.`,
       source: 'fallback',
@@ -1575,6 +1586,14 @@ function buildFallbackVisualReferencePlan(analysis = {}, style = '') {
 function sanitizeVisualReferencePlan(parsed, analysis = {}, style = '') {
   const direct = parsed?.visualReference || parsed?.visual_reference || parsed || {};
   let rawAssets = Array.isArray(direct.assets) ? direct.assets : [];
+  if (Array.isArray(direct.stories)) {
+    direct.stories.forEach((story, storyIndex) => {
+      const storyId = String(story?.storyId || story?.id || story?.story_id || `story_${String(storyIndex + 1).padStart(2, '0')}`).replace(/[^\w-]/g, '_').slice(0, 48) || `story_${String(storyIndex + 1).padStart(2, '0')}`;
+      const storyTitle = trimByChars(String(story?.storyTitle || story?.title || story?.name || `Story ${storyIndex + 1}`).replace(/\s+/g, ' '), 60);
+      const storyAssets = Array.isArray(story?.assets) ? story.assets : [];
+      rawAssets = rawAssets.concat(storyAssets.map((asset) => ({ ...asset, storyId, storyTitle })));
+    });
+  }
   if (!rawAssets.length && Array.isArray(direct.characters)) {
     rawAssets = rawAssets.concat(direct.characters.map((item) => ({ ...item, type: 'character' })));
   }
@@ -1604,7 +1623,7 @@ function sanitizeVisualReferencePlan(parsed, analysis = {}, style = '') {
   const assets = rawAssets
     .map((asset, index) => normalizeVisualReferenceAsset(asset, index, style, analysis))
     .filter((asset) => asset.prompt)
-    .slice(0, 5);
+    .slice(0, 8);
   if (!assets.length) return buildFallbackVisualReferencePlan(analysis, style);
   return {
     enabled: direct.enabled !== false,
@@ -1625,7 +1644,8 @@ function buildVisualReferencePrompt(units, analysis = {}, style = '') {
   return [
     'You are a short-video art director. Plan reusable visual reference assets before generating B-roll images or videos.',
     'Read the transcript and infer the story culture, protagonist, recurring locations, time period, clothing, props, and emotional tone.',
-    'Return 2 to 5 assets. Use character assets only when a recurring person or narrator embodiment is useful. Use scene assets for recurring environments.',
+    'Return 2 to 8 assets. Use character assets only when a recurring person or narrator embodiment is useful. Use scene assets for recurring environments.',
+    'If transcript contains multiple unrelated stories, cases, time periods or visual worlds, split them into story groups first. Every asset must include storyId and storyTitle.',
     'Character asset rule: prompt must be a white-background multi-view character sheet: front, side, three-quarter, consistent face, hair, outfit and accessories.',
     'Scene asset rule: prompt must show the environment only, no people, no characters, no readable text. Describe location, light, props, era, layout and color palette.',
     'Do not copy transcript sentences as prompts. Make reusable visual design prompts that future shots can reference.',
@@ -1633,7 +1653,7 @@ function buildVisualReferencePrompt(units, analysis = {}, style = '') {
     `Topic: ${String(analysis?.topic || '') || 'unknown'}`,
     `Outline: ${String(analysis?.outline || '') || 'unknown'}`,
     'Return JSON only:',
-    '{"visualReference":{"title":"...","negativePrompt":"...","assets":[{"id":"character_01","type":"character","title":"...","prompt":"..."},{"id":"scene_01","type":"scene","title":"...","prompt":"..."}]}}',
+    '{"visualReference":{"title":"...","negativePrompt":"...","stories":[{"storyId":"story_01","storyTitle":"Story 1","assets":[{"id":"character_01","type":"character","storyId":"story_01","storyTitle":"Story 1","title":"...","prompt":"..."},{"id":"scene_01","type":"scene","storyId":"story_01","storyTitle":"Story 1","title":"...","prompt":"..."}]}]}}',
     'Transcript units:',
     list,
   ].join('\n');
@@ -1757,6 +1777,8 @@ function sanitizeImagePlanItems(parsed, units, count, analysis, fallbackStyle) {
     const durationSec = clampDurationSec(item.durationSec || item.duration || (rawEnd - start), 5, 10, 7);
     const end = start + durationSec;
     const id = String(item.id || `img_${String(out.length + 1).padStart(2, '0')}`).replace(/[^\w-]/g, '_').slice(0, 32);
+    const storyId = String(item.storyId || item.story_id || item.storyGroup || item.group || 'story_01').replace(/[^\w-]/g, '_').slice(0, 32) || 'story_01';
+    const storyTitle = trimByChars(String(item.storyTitle || item.story_title || item.groupTitle || item.storyName || 'Story 1').replace(/\s+/g, ' '), 60);
     const title = trimByChars(String(item.title || item.name || `配图 ${out.length + 1}`).replace(/\s+/g, ' '), 40);
     const textBasis = trimByChars(String(item.textBasis || item.basis || fallbackUnit.text || '').replace(/\s+/g, ' '), 80);
     let sceneStory = trimByChars(String(item.sceneStory || item.scene_story || item.story || '').replace(/\s+/g, ' '), 180);
@@ -1791,6 +1813,8 @@ function sanitizeImagePlanItems(parsed, units, count, analysis, fallbackStyle) {
     if (!prompt) continue;
     out.push({
       id,
+      storyId,
+      storyTitle,
       timeRange: formatSecondsRange(start, end),
       start,
       end,
@@ -1821,6 +1845,20 @@ function autoImageCountForUnits(units) {
   if (duration <= 360) return 8;
   if (duration <= 720) return 10;
   return 12;
+}
+
+function autoVideoCountForUnits(units) {
+  if (!Array.isArray(units) || !units.length) return 2;
+  const starts = units.map((u) => Number(u.start)).filter(Number.isFinite);
+  const ends = units.map((u) => Number(u.end)).filter(Number.isFinite);
+  const start = starts.length ? Math.min(...starts) : 0;
+  const end = ends.length ? Math.max(...ends) : units.length * 3;
+  const duration = Number.isFinite(start) && Number.isFinite(end) && end > start ? end - start : units.length * 3;
+  if (duration <= 90) return 1;
+  if (duration <= 180) return 2;
+  if (duration <= 360) return 3;
+  if (duration <= 720) return 4;
+  return 5;
 }
 
 function buildFallbackImagePlan(units, analysis, count, style = '') {
@@ -1870,7 +1908,7 @@ function buildVideoPlanPrompt(units, analysis, style, count, aspectRatio, existi
     .slice(0, 220)
     .map((u) => `${u.id}|${u.start.toFixed(2)}-${u.end.toFixed(2)}|${u.text}`)
     .join('\n');
-  const targetCount = Math.max(1, Math.min(4, Number(count) || 3));
+  const targetCount = Math.max(1, Math.min(5, Number(count) || 3));
   const visualStyle = String(style || '').trim() || 'cinematic realistic B-roll, consistent character and scene';
   const blockedRangesText = formatExistingRangesForPrompt(existingRanges);
   return [
@@ -1881,6 +1919,7 @@ function buildVideoPlanPrompt(units, analysis, style, count, aspectRatio, existi
     '每个视频素材点必须有明确 start/end，代表它覆盖主视频画面的字幕时间范围。范围必须控制在 3-8 秒，优先 4-6 秒，由你根据语义节奏判断。',
     'videoPrompt 必须是可拍摄/可生成的视频画面描述：人物或主体、地点、动作、镜头运动、光线、风格、情绪、环境细节；禁止直接复制原文句子。',
     '如文本是中国语境，用中国人物、服饰、空间和生活场景；如是海外故事，要匹配对应国家/时代/建筑/服饰。',
+    'If there are multiple independent stories/cases/time periods/visual worlds, every media item must include storyId and storyTitle matching the visual reference asset story group.',
     '输出只允许 JSON，不要 markdown。',
     `生成 ${targetCount} 个视频素材点。`,
     `用户选择风格：${visualStyle}`,
@@ -1898,7 +1937,7 @@ function buildVideoPlanPrompt(units, analysis, style, count, aspectRatio, existi
 }
 
 function sanitizeVideoPlanItems(parsed, units, count, analysis, fallbackStyle, aspectRatio) {
-  const targetCount = Math.max(1, Math.min(4, Number(count) || 3));
+  const targetCount = Math.max(1, Math.min(5, Number(count) || 3));
   const rawItems = Array.isArray(parsed?.items)
     ? parsed.items
     : Array.isArray(parsed?.videoPoints)
@@ -1919,6 +1958,8 @@ function sanitizeVideoPlanItems(parsed, units, count, analysis, fallbackStyle, a
     const end = start + durationSec;
     const generation = videoDurationToGenerationParams(durationSec);
     const id = String(item.id || `vid_${String(out.length + 1).padStart(2, '0')}`).replace(/[^\w-]/g, '_').slice(0, 32);
+    const storyId = String(item.storyId || item.story_id || item.storyGroup || item.group || 'story_01').replace(/[^\w-]/g, '_').slice(0, 32) || 'story_01';
+    const storyTitle = trimByChars(String(item.storyTitle || item.story_title || item.groupTitle || item.storyName || 'Story 1').replace(/\s+/g, ' '), 60);
     const title = trimByChars(String(item.title || item.name || `视频素材 ${out.length + 1}`).replace(/\s+/g, ' '), 40);
     const purpose = trimByChars(String(item.purpose || 'B-roll').replace(/\s+/g, ' '), 32);
     const textBasis = trimByChars(String(item.textBasis || item.basis || fallbackUnit.text || '').replace(/\s+/g, ' '), 80);
@@ -1942,6 +1983,8 @@ function sanitizeVideoPlanItems(parsed, units, count, analysis, fallbackStyle, a
     if (!videoPrompt) continue;
     out.push({
       id,
+      storyId,
+      storyTitle,
       type: 'video',
       timeRange: formatSecondsRange(start, end),
       start,
@@ -1967,7 +2010,8 @@ function sanitizeVideoPlanItems(parsed, units, count, analysis, fallbackStyle, a
 }
 
 function buildFallbackVideoPlan(units, analysis, count, style = '', aspectRatio = '16:9') {
-  const imageLike = buildFallbackImagePlan(units, analysis, Math.max(4, Number(count) || 3), style).slice(0, Math.max(1, Math.min(4, Number(count) || 3)));
+  const targetCount = Math.max(1, Math.min(5, Number(count) || 3));
+  const imageLike = buildFallbackImagePlan(units, analysis, Math.max(4, targetCount), style).slice(0, targetCount);
   return imageLike.map((item, index) => {
     const durationSec = clampDurationSec(Number(item.durationSec) || 5, 3, 8, 5);
     const end = Number(item.start) + durationSec;
@@ -1999,7 +2043,9 @@ async function runLlmVideoPlan(words, config, payload = {}) {
     throw new Error('No transcript text available for video material planning');
   }
   const analysis = await resolveAnalysis(units, config, payload.analysis);
-  const count = Math.max(1, Math.min(4, Number(payload.count) || 3));
+  const count = String(payload.count || '').toLowerCase() === 'auto'
+    ? autoVideoCountForUnits(units)
+    : Math.max(1, Math.min(5, Number(payload.count) || 3));
   const style = String(payload.style || '').trim();
   const aspectRatio = String(payload.aspectRatio || payload.aspect || '16:9').trim() || '16:9';
   let items = [];
@@ -2270,6 +2316,10 @@ async function callImageGenerationApi(config, item) {
     }
   }
 
+  if (config.provider === 'agnes') {
+    await waitAgnesRequestSlot('image');
+  }
+
   const res = await fetch(config.endpoint, {
     method: 'POST',
     headers: {
@@ -2320,16 +2370,22 @@ function findVideoIdFromResponse(json) {
   return String(
     json?.video_id
     || json?.id
+    || json?.remixed_from_video_id
     || json?.data?.video_id
     || json?.data?.id
+    || json?.data?.remixed_from_video_id
     || json?.data?.video?.video_id
     || json?.data?.video?.id
+    || json?.data?.video?.remixed_from_video_id
     || json?.output?.video_id
     || json?.output?.id
+    || json?.output?.remixed_from_video_id
     || json?.result?.video_id
     || json?.result?.id
+    || json?.result?.remixed_from_video_id
     || json?.task?.video_id
     || json?.task?.id
+    || json?.task?.remixed_from_video_id
     || '',
   ).trim();
 }
@@ -2382,13 +2438,18 @@ async function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitAgnesVideoRequestSlot() {
+async function waitAgnesRequestSlot(label = 'agnes') {
   const now = Date.now();
-  const waitMs = Math.max(0, AGNES_VIDEO_MIN_REQUEST_INTERVAL_MS - (now - lastAgnesVideoRequestAt));
+  const waitMs = Math.max(0, AGNES_MIN_REQUEST_INTERVAL_MS - (now - lastAgnesRequestAt));
   if (waitMs > 0) {
+    appendCutLog('[' + label + '] Waiting ' + waitMs + 'ms to respect Agnes RPM 20 limit');
     await sleep(waitMs);
   }
-  lastAgnesVideoRequestAt = Date.now();
+  lastAgnesRequestAt = Date.now();
+}
+
+async function waitAgnesVideoRequestSlot() {
+  return waitAgnesRequestSlot('video');
 }
 
 async function pollAgnesVideoResult(config, videoId) {
@@ -4172,6 +4233,14 @@ function sanitizeReviewMediaItems(items, kind) {
       sourceUrl: String(asset.sourceUrl || '').slice(0, 500),
       videoId: String(asset.videoId || '').slice(0, 120),
     } : null;
+    const rawStatus = String(item?.status || '');
+    const hasGeneratedAsset = !!(sanitizedAsset && (sanitizedAsset.url || sanitizedAsset.filePath || sanitizedAsset.fileName));
+    const status = rawStatus === 'generating' && !hasGeneratedAsset
+      ? 'queued'
+      : (['queued', 'generating', 'done', 'error'].includes(rawStatus) ? rawStatus : '');
+    const error = rawStatus === 'generating' && !hasGeneratedAsset
+      ? '?????????????'
+      : String(item?.error || '').slice(0, 500);
     return {
       id: String(item?.id || '').replace(/[^\w-]/g, '_').slice(0, 48),
       type: kind,
@@ -4190,8 +4259,8 @@ function sanitizeReviewMediaItems(items, kind) {
       prompt: String(item?.prompt || '').slice(0, 1600),
       videoPrompt: String(item?.videoPrompt || '').slice(0, 1600),
       negativePrompt: String(item?.negativePrompt || '').slice(0, 500),
-      status: ['queued', 'generating', 'done', 'error'].includes(String(item?.status || '')) ? String(item.status) : '',
-      error: String(item?.error || '').slice(0, 500),
+      status,
+      error,
       [assetKey]: sanitizedAsset,
     };
   }).filter((item) => item.id || item.prompt || item.videoPrompt || item[`${kind}`]).slice(0, 80);
@@ -4402,6 +4471,48 @@ function resolveStaticPath(urlPathname) {
   return resolved;
 }
 
+function getReviewHtmlCompatibilityPatch() {
+  return '<script id="jaygo-compat-build-time-mapper">\n'
+    + '(function(){\n'
+    + '  if (typeof window.buildTimeMapper !== "function") {\n'
+    + '    window.buildTimeMapper = function(deleteSegments) {\n'
+    + '      var source = Array.isArray(deleteSegments) ? deleteSegments : [];\n'
+    + '      var segments = source.map(function(seg){ return { start: Number(seg && seg.start), end: Number(seg && seg.end) }; })\n'
+    + '        .filter(function(seg){ return Number.isFinite(seg.start) && Number.isFinite(seg.end) && seg.end > seg.start; })\n'
+    + '        .sort(function(a,b){ return (a.start - b.start) || (a.end - b.end); });\n'
+    + '      var merged = [];\n'
+    + '      segments.forEach(function(seg){\n'
+    + '        var last = merged[merged.length - 1];\n'
+    + '        if (last && seg.start <= last.end + 0.001) last.end = Math.max(last.end, seg.end);\n'
+    + '        else merged.push({ start: seg.start, end: seg.end });\n'
+    + '      });\n'
+    + '      return function(time) {\n'
+    + '        var value = Math.max(0, Number(time) || 0);\n'
+    + '        var removed = 0;\n'
+    + '        for (var i = 0; i < merged.length; i += 1) {\n'
+    + '          var seg = merged[i];\n'
+    + '          if (value >= seg.end) removed += seg.end - seg.start;\n'
+    + '          else if (value > seg.start) { removed += value - seg.start; break; }\n'
+    + '          else break;\n'
+    + '        }\n'
+    + '        return Math.max(0, Number((value - removed).toFixed(3)));\n'
+    + '      };\n'
+    + '    };\n'
+    + '  }\n'
+    + '}());\n'
+    + '</script>\n';
+}
+
+function injectReviewHtmlCompatibility(html) {
+  const body = String(html || '');
+  if (!body.includes('buildExportCues') || body.includes('function buildTimeMapper') || body.includes('jaygo-compat-build-time-mapper')) {
+    return body;
+  }
+  const patch = getReviewHtmlCompatibilityPatch();
+  if (body.includes('</body>')) return body.replace('</body>', patch + '</body>');
+  return body + patch;
+}
+
 function serveFile(req, res, absolutePath) {
   if (!fs.existsSync(absolutePath)) {
     res.writeHead(404);
@@ -4412,6 +4523,19 @@ function serveFile(req, res, absolutePath) {
   const stat = fs.statSync(absolutePath);
   const ext = path.extname(absolutePath).toLowerCase();
   const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+
+  if (ext === '.html') {
+    const html = injectReviewHtmlCompatibility(fs.readFileSync(absolutePath, 'utf8'));
+    const buffer = Buffer.from(html, 'utf8');
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Length': buffer.length,
+      'Accept-Ranges': 'none',
+      'Cache-Control': 'no-store',
+    });
+    res.end(buffer);
+    return;
+  }
 
   if (req.headers.range && (ext === '.mp3' || ext === '.m4a' || ext === '.wav' || ext === '.mp4')) {
     const [startRaw, endRaw] = String(req.headers.range).replace('bytes=', '').split('-');
@@ -4987,6 +5111,7 @@ if (process.env.JAYGO_CUT_TEST_EXPORTS === '1') {
     imageSizeToAgnesSize,
     videoDurationToGenerationParams,
     autoImageCountForUnits,
+    autoVideoCountForUnits,
     pickWordsForVisualPlan,
     sanitizeVisualReferencePlan,
     buildFallbackVisualReferencePlan,

@@ -193,6 +193,9 @@ function testImagePlanPromptRulesAndAspectRatio() {
   assert.strictEqual(reviewServerTools.imageSizeToAgnesSize('9:16'), '768x1024');
   assert.strictEqual(reviewServerTools.imageSizeToAgnesSize('16:9'), '1024x768');
   assert.strictEqual(reviewServerTools.autoImageCountForUnits([{ start: 0, end: 60 }, { start: 60, end: 120 }]), 6);
+  assert.strictEqual(reviewServerTools.autoVideoCountForUnits([{ start: 0, end: 60 }]), 1);
+  assert.strictEqual(reviewServerTools.autoVideoCountForUnits([{ start: 0, end: 240 }]), 3);
+  assert.strictEqual(reviewServerTools.autoVideoCountForUnits([{ start: 0, end: 900 }]), 5);
 }
 
 function testVisualPlanUsesOnlyKeptTranscript() {
@@ -217,6 +220,8 @@ function testVisualPlanUsesOnlyKeptTranscript() {
   assert.ok(visualReference.assets.length >= 2, 'visual reference should include character and scene assets');
   assert.strictEqual(visualReference.assets[0].type, 'character');
   assert.strictEqual(visualReference.assets[1].type, 'scene');
+  assert.strictEqual(visualReference.assets[0].storyId, 'story_01');
+  assert.strictEqual(visualReference.assets[1].storyId, 'story_01');
   assert.ok(/white-background|front view/i.test(visualReference.assets[0].prompt), 'character asset should be a reusable white-background reference sheet');
   assert.ok(/no people|environment-only/i.test(visualReference.assets[1].prompt), 'scene asset should avoid people and only describe the environment');
 }
@@ -516,13 +521,25 @@ function testGeneratedReviewInlineScriptSyntax() {
   assert.ok(html.includes('id="referenceImageUploadInput"'), 'visual reference should support user-uploaded reference images');
   assert.ok(html.includes('/api/llm-visual-reference'), 'review page should ask LLM to plan a unified character/scene reference');
   assert.ok(html.includes('asset-reference-grid'), 'visual reference assets should render as compact thumbnail cards');
-  assert.ok(html.includes('data-ref-preview'), 'visual reference assets should expose preview actions');
+  assert.ok(!html.includes('data-ref-preview'), 'visual reference assets should no longer use click-to-preview buttons');
+  assert.ok(html.includes('data-ref-hover'), 'visual reference assets should support hover preview');
+  assert.ok(html.includes('asset-hover-preview'), 'visual reference hover preview should render above floating panels');
+  assert.ok(html.includes('showAssetHoverPreview'), 'visual reference assets should support hover zoom preview');
   assert.ok(html.includes('data-ref-delete'), 'visual reference assets should expose delete actions');
-  assert.ok(html.includes('openAssetPreview'), 'visual reference assets should support in-page preview');
+  assert.ok(!html.includes('openAssetPreview'), 'visual reference click modal should be removed');
   assert.ok(html.includes('deleteVisualReferenceAsset'), 'visual reference assets should support deletion');
-  assert.ok(html.includes('getReferenceImagesForItem'), 'image/video generation should match reference assets to each storyboard item');
-  assert.ok(html.includes('referenceImage: getReferenceImagesForItem(item, 2)'), 'image generation should pass matched reference images instead of every asset');
-  assert.ok(html.includes('referenceImage: getReferenceImagesForItem(item, 1)'), 'video generation should pass at most one matched reference image');
+  assert.ok(html.includes('groupReferenceAssetsByStory'), 'visual reference assets should be grouped by story');
+  assert.ok(html.includes('getReferenceAssetsForItem'), 'image/video generation should match reference assets to each storyboard item');
+  assert.ok(html.includes('prepareReferenceAwareMediaItem'), 'image/video generation should simplify prompts when reference assets are present');
+  assert.ok(html.includes('referenceImagesFromAssets(referenceAssets)'), 'image/video generation should pass matched reference images instead of every asset');
+  assert.ok(html.includes('setJianyingExportBusy'), 'Jianying export button should expose busy state');
+  assert.ok(html.includes('fetchJsonWithTimeout'), 'Jianying export should not hang forever while resolving targets');
+  assert.ok(html.includes('function buildTimeMapper'), 'Jianying full draft export should remap subtitle time after deletions');
+  assert.ok(html.includes('resetInterruptedMediaGenerationState'), 'review page should recover interrupted media generation as retryable cards');
+  assert.ok(html.includes('runAiButlerLocalCommand'), 'AI butler should execute common app operations locally');
+  assert.ok(html.includes('AI\u7ba1\u5bb6'), 'review page should rename LLM chat to AI butler');
+  assert.ok(html.includes('AI\u5206\u6790'), 'review page should rename LLM marking to AI analysis');
+  assert.ok(html.includes('media-download-icon'), 'media cards should expose compact corner download icons');
   assert.ok(html.includes('data-image-prompt'), 'image cards should expose direct prompt editing');
   assert.ok(html.includes('data-video-prompt'), 'video cards should expose direct prompt editing');
   assert.ok(html.includes("imageCardListEl.addEventListener('input'"), 'image prompt edits should sync before blur');
@@ -557,6 +574,8 @@ function testGeneratedReviewInlineScriptSyntax() {
   assert.ok(html.includes('id="fillerWordAllowList"'), 'review page should let users choose which filler words are auto-marked');
   assert.ok(html.includes('id="toggleAutoRepeat"'), 'review page should let users toggle repeated-phrase auto marking');
   assert.ok(html.includes('<option value="auto" selected>'), 'image material quantity should default to automatic matching');
+  assert.ok(html.includes('id="videoAssetCount"'), 'video material quantity selector should exist');
+  assert.ok(html.includes("count: videoAssetCountEl ? String(videoAssetCountEl.value || 'auto') : 'auto'"), 'video material quantity should support automatic matching');
   assert.ok(html.includes('/api/llm-video-plan'), 'review page should request LLM video material plans');
   assert.ok(html.includes('/api/generate-video'), 'review page should call video generation API');
   assert.ok(html.includes('buildMediaOverlaysForCut'), 'review page should submit generated image/video overlays to cut API');
@@ -659,7 +678,12 @@ function testReviewServerProvidesSafeSourceVideoRoute() {
   assert.ok(server.includes('buildAgnesVideoStatusEndpoint'), 'review server should also support the documented /v1/videos/{id} polling endpoint');
   assert.ok(server.includes('remixed_from_video_id'), 'review server should detect Agnes completed video URL fields');
   assert.ok(server.includes('envValue(fileEnv'), 'review server should prefer the live env file over stale process env values');
-  assert.ok(server.includes('AGNES_VIDEO_MIN_REQUEST_INTERVAL_MS'), 'review server should throttle Agnes video polling under the RPM limit');
+  assert.ok(server.includes('AGNES_MIN_REQUEST_INTERVAL_MS'), 'review server should throttle all Agnes image/video requests under the RPM limit');
+  assert.ok(server.includes("waitAgnesRequestSlot('image')"), 'Agnes image requests should share the RPM throttle');
+  assert.ok(server.includes('autoVideoCountForUnits'), 'video material planning should support automatic count matching');
+  assert.ok(server.includes('rawStatus === \'generating\' && !hasGeneratedAsset'), 'review state should recover interrupted media generation as retryable cards');
+  assert.ok(server.includes('injectReviewHtmlCompatibility'), 'review server should patch old review pages with compatibility helpers');
+  assert.ok(server.includes('jaygo-compat-build-time-mapper'), 'old review pages should receive a Jianying time-mapper compatibility patch');
   assert.ok(server.includes('videoDurationToGenerationParams'), 'review server should map planned video durations to stable Agnes frame counts');
   assert.ok(server.includes("mode: 'ti2vid'"), 'Agnes video requests should explicitly use the Agnes text-to-video mode');
   assert.ok(server.includes('formatMediaItemsForChat'), 'LLM chat prompt should include existing media cards');

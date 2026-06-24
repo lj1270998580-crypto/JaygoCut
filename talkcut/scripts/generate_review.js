@@ -756,6 +756,14 @@ const html = `<!doctype html>
       line-height: 1;
       box-shadow: 0 6px 14px rgba(0, 0, 0, 0.24);
     }
+    .asset-reference-story {
+      grid-column: 1 / -1;
+      padding: 3px 2px 1px;
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--accent);
+      border-bottom: 1px dashed color-mix(in oklab, var(--border) 72%, transparent);
+    }
     .asset-preview-backdrop {
       position: fixed;
       inset: 0;
@@ -797,6 +805,24 @@ const html = `<!doctype html>
       padding: 4px 9px;
       border-radius: 999px;
     }
+    .asset-hover-preview {
+      position: fixed;
+      z-index: 12000;
+      pointer-events: none;
+      width: min(420px, 36vw);
+      max-height: min(520px, 72vh);
+      border: 1px solid color-mix(in oklab, var(--accent) 48%, var(--border));
+      border-radius: 14px;
+      padding: 8px;
+      background: color-mix(in oklab, var(--card-bg) 96%, #020617 18%);
+      box-shadow: 0 22px 60px rgba(0, 0, 0, 0.42);
+      opacity: 0;
+      transform: translate3d(12px, 12px, 0) scale(.98);
+      transition: opacity 90ms ease, transform 90ms ease;
+    }
+    .asset-hover-preview.visible { opacity: 1; transform: translate3d(12px, 12px, 0) scale(1); }
+    .asset-hover-preview img { display: block; width: 100%; max-height: min(420px, 58vh); object-fit: contain; border-radius: 10px; background: var(--log-bg); }
+    .asset-hover-preview-title { margin-top: 6px; font-size: 12px; color: var(--text-main); line-height: 1.35; word-break: break-word; }
     .visual-reference-prompt,
     .media-prompt-editor {
       width: 100%;
@@ -1034,6 +1060,28 @@ const html = `<!doctype html>
       padding: 5px 7px;
       backdrop-filter: blur(4px);
     }
+    .media-download-icon {
+      position: absolute;
+      right: 8px;
+      bottom: 8px;
+      z-index: 3;
+      width: 30px;
+      height: 30px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+      background: rgba(2, 6, 23, 0.74);
+      color: #f8fafc;
+      text-decoration: none;
+      font-size: 15px;
+      line-height: 1;
+      box-shadow: 0 8px 18px rgba(0, 0, 0, 0.26);
+      backdrop-filter: blur(4px);
+    }
+    .media-download-icon:hover { background: color-mix(in oklab, var(--accent) 72%, #020617 28%); color: #fff; }
+    .image-preview.has-download-icon .media-dimension-badge { right: 44px; }
     .image-card-title {
       font-weight: 700;
       font-size: 13px;
@@ -1127,7 +1175,7 @@ const html = `<!doctype html>
       color: var(--text-muted);
     }
     #llmChatHistory {
-      flex: 1 1 auto;
+      flex: 0 1 auto;
       border: 1px solid var(--border);
       border-radius: 8px;
       padding: 8px;
@@ -1135,7 +1183,33 @@ const html = `<!doctype html>
       background: var(--log-bg);
       font-size: 13px;
       line-height: 1.45;
-      min-height: 180px;
+      min-height: 112px;
+      max-height: min(220px, 24vh);
+    }
+    .ai-butler-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 12px;
+      line-height: 1.3;
+      color: var(--text-muted);
+      background: color-mix(in oklab, var(--card-bg) 88%, var(--token-gap-bg) 12%);
+      white-space: nowrap;
+    }
+    .ai-butler-status.busy {
+      color: var(--accent);
+      border-color: color-mix(in oklab, var(--accent) 48%, var(--border));
+    }
+    .ai-butler-status.ok {
+      color: var(--ok);
+      border-color: color-mix(in oklab, var(--ok) 45%, var(--border));
+    }
+    .ai-butler-status.error {
+      color: var(--danger);
+      border-color: color-mix(in oklab, var(--danger) 48%, var(--border));
     }
     .chat-row {
       margin-bottom: 8px;
@@ -1970,10 +2044,10 @@ const html = `<!doctype html>
             <label class="meta"><input id="toggleAutoRepeat" type="checkbox" checked /> 自动标记重复句</label>
           </div>
           <div class="row tool-actions">
-            <span class="meta tool-section-title">LLM</span>
-            <button id="btnLlmMark">LLM标记</button>
-            <button id="btnApplyLlm">应用LLM建议</button>
-            <button id="btnClearLlm">清除LLM标记</button>
+            <span class="meta tool-section-title">AI分析</span>
+            <button id="btnLlmMark">AI分析</button>
+            <button id="btnApplyLlm">应用AI建议</button>
+            <button id="btnClearLlm">清除AI标记</button>
           </div>
           <div id="qualityWarnings" class="quality-warnings" hidden></div>
         </div>
@@ -2020,7 +2094,7 @@ const html = `<!doctype html>
             <span class="legend-item"><span class="legend-dot silence"></span>停顿规则（自动）</span>
             <span class="legend-item"><span class="legend-dot filler"></span>语气词规则（自动）</span>
             <span class="legend-item"><span class="legend-dot repeat"></span>重复句规则（自动）</span>
-            <span class="legend-item"><span class="legend-dot llm"></span>LLM建议</span>
+            <span class="legend-item"><span class="legend-dot llm"></span>AI建议</span>
           </div>
           <div class="meta">操作提示：单击定位播放点；双击切换删除/取消；拖过文本可连续标记；Ctrl+Z 撤回上一步标记；空格键播放/暂停；鼠标滚轮可缩放波形；播放时自动跳过已选段。</div>
           <div class="meta" id="llmSummary" style="margin-top:4px"></div>
@@ -2061,7 +2135,7 @@ const html = `<!doctype html>
 
   <button id="btnToggleLeftPanel" class="floating-toggle left" type="button">发布建议</button>
   <button id="btnToggleImagePanel" class="floating-toggle left image-toggle" type="button">视频配图</button>
-  <button id="btnToggleRightPanel" class="floating-toggle right" type="button">LLM对话</button>
+  <button id="btnToggleRightPanel" class="floating-toggle right" type="button">AI管家</button>
   <button id="btnToggleLogPanel" class="floating-toggle right log-toggle" type="button">裁剪日志<span id="cutLogBadge" class="floating-badge" hidden></span></button>
 
   <aside class="side-panel floating-side left">
@@ -2193,7 +2267,7 @@ const html = `<!doctype html>
           <button id="btnGenerateVisualReference" type="button">\u89c4\u5212/\u751f\u6210\u8d44\u4ea7\u56fe</button>
           <button id="btnUploadVisualReference" type="button">\u4e0a\u4f20\u8d44\u4ea7\u56fe</button>
         </div>
-        <div id="visualReferenceStatus" class="meta">\u70b9\u51fb\u201c\u751f\u6210\u914d\u56fe\u201d\u540e\uff0cLLM \u4f1a\u5148\u6309\u6545\u4e8b\u89c4\u5212\u4eba\u7269/\u573a\u666f\u8d44\u4ea7\u56fe\uff0c\u518d\u751f\u6210\u6b63\u5f0f\u914d\u56fe\u3002</div>
+        <div id="visualReferenceStatus" class="meta">\u70b9\u51fb\u201c\u751f\u6210\u914d\u56fe\u201d\u540e\uff0cAI \u4f1a\u5148\u6309\u6545\u4e8b\u89c4\u5212\u4eba\u7269/\u573a\u666f\u8d44\u4ea7\u56fe\uff0c\u518d\u751f\u6210\u6b63\u5f0f\u914d\u56fe\u3002</div>
         <div id="visualReferencePreview" class="asset-reference-grid"><div class="asset-reference-empty">\u6682\u65e0\u8d44\u4ea7\u56fe\uff0c\u751f\u6210\u540e\u4ee5\u5c0f\u5361\u5c55\u793a\u3002</div></div>
         <textarea id="visualReferencePrompt" class="visual-reference-prompt" hidden></textarea>
       </div>
@@ -2207,9 +2281,10 @@ const html = `<!doctype html>
         <label class="media-field">
           <span class="meta">\u6570\u91cf</span>
           <select id="videoAssetCount">
+            <option value="auto" selected>自动匹配</option>
             <option value="1">1 \u6bb5</option>
             <option value="2">2 \u6bb5</option>
-            <option value="3" selected>3 \u6bb5</option>
+            <option value="3">3 \u6bb5</option>
             <option value="4">4 \u6bb5</option>
           </select>
         </label>
@@ -2225,25 +2300,26 @@ const html = `<!doctype html>
       <div class="media-panel-actions single">
         <button id="btnGenerateVideos" type="button">\u751f\u6210\u89c6\u9891\u7d20\u6750</button>
       </div>
-      <div id="videoAssetStatus" class="meta">\u70b9\u51fb\u540e\u4f1a\u5148\u7531 LLM \u89c4\u5212\u63d2\u5165\u4f4d\u7f6e\uff0c\u518d\u8c03\u7528 Agnes \u751f\u6210\u89c6\u9891\u7d20\u6750\u3002</div>
+      <div id="videoAssetStatus" class="meta">\u70b9\u51fb\u540e\u4f1a\u5148\u7531 AI \u89c4\u5212\u63d2\u5165\u4f4d\u7f6e\uff0c\u518d\u8c03\u7528 Agnes \u751f\u6210\u89c6\u9891\u7d20\u6750\u3002</div>
       <div id="videoAssetList"></div>
     </section>
   </aside>
 
   <aside class="side-panel floating-side right">
     <div class="panel-header">
-      <span>LLM对话调标记</span>
+      <span>AI管家</span>
+      <span id="aiButlerStatusPill" class="ai-butler-status">待命</span>
       <div class="panel-actions">
         <button id="btnLlmChatUndo" disabled>撤回一步</button>
         <button id="btnCloseRightPanel" class="panel-close" type="button">收起</button>
       </div>
     </div>
     <div id="llmChatHistory"></div>
-    <textarea id="llmChatInput" placeholder="例如：保留开头铺垫，删除后半段重复表达；把第2张图换成漫画风格；把视频素材提前2秒；减少插图。"></textarea>
+    <textarea id="llmChatInput" placeholder="例如：导出剪映；重新生成第2张图；把视频素材提前2秒；保留开头铺垫，删除后半段重复表达。"></textarea>
     <div class="row compact-row">
-      <button id="btnLlmChatSend">发送并调整</button>
+      <button id="btnLlmChatSend">让AI执行</button>
     </div>
-    <div id="llmChatStatus" class="meta">可通过对话调整删除标记、插图和视频素材规划，不满意可撤回。</div>
+    <div id="llmChatStatus" class="meta">AI管家可通过对话执行导出剪映、重新生成素材、调整删除标记和规划插图插视频。</div>
   </aside>
 
   <aside class="side-panel floating-side right log-side">
@@ -2386,6 +2462,7 @@ const html = `<!doctype html>
     const btnLlmChatSend = document.getElementById('btnLlmChatSend');
     const btnLlmChatUndo = document.getElementById('btnLlmChatUndo');
     const llmChatStatusEl = document.getElementById('llmChatStatus');
+    const aiButlerStatusPillEl = document.getElementById('aiButlerStatusPill');
 
     const selected = new Set(AUTO);
     const autoSet = new Set(AUTO);
@@ -2696,7 +2773,7 @@ const html = `<!doctype html>
       if (btnToggleRightPanel) {
         btnToggleRightPanel.classList.toggle('active', rightPanelOpen);
         btnToggleRightPanel.classList.toggle('hidden', anyRightPanelOpen);
-        btnToggleRightPanel.textContent = 'LLM对话';
+        btnToggleRightPanel.textContent = 'AI管家';
       }
       if (btnToggleLogPanel) {
         btnToggleLogPanel.classList.toggle('active', logPanelOpen);
@@ -2818,6 +2895,8 @@ const html = `<!doctype html>
         negativePrompt: String(raw.negativePrompt || raw.negative_prompt || '').slice(0, 500),
         aspectRatio: String(raw.aspectRatio || raw.aspect || '1:1').slice(0, 20),
         status: String(raw.status || (image?.url ? 'done' : (raw.prompt ? 'planned' : 'empty'))).slice(0, 24),
+        storyId: String(raw.storyId || raw.story_id || raw.storyGroup || raw.group || 'story_01').replace(/[^\w-]+/g, '_').slice(0, 40) || 'story_01',
+        storyTitle: String(raw.storyTitle || raw.story_title || raw.groupTitle || raw.storyName || '\u6545\u4e8b1').slice(0, 60),
         source: String(raw.source || '').slice(0, 80),
         image,
         error: String(raw.error || '').slice(0, 500),
@@ -2860,71 +2939,84 @@ const html = `<!doctype html>
       }
     }
 
+    function groupReferenceAssetsByStory(assets) {
+      const groups = [];
+      const indexById = new Map();
+      (assets || []).forEach((asset, index) => {
+        const storyId = String(asset.storyId || 'story_01') || 'story_01';
+        if (!indexById.has(storyId)) {
+          indexById.set(storyId, groups.length);
+          groups.push({ id: storyId, title: String(asset.storyTitle || ('\u6545\u4e8b' + (groups.length + 1))), items: [] });
+        }
+        groups[indexById.get(storyId)].items.push({ asset, index });
+      });
+      return groups;
+    }
+
     function renderVisualReference() {
       if (useVisualReferenceEl) useVisualReferenceEl.checked = visualReference.enabled !== false;
       const assets = normalizeReferenceAssets(visualReference.assets);
       visualReference.assets = assets;
       const promptText = String(visualReference.prompt || assets.map((asset) => asset.prompt).filter(Boolean).join('\\n\\n')).slice(0, 1600);
-      if (visualReferencePromptEl && visualReferencePromptEl.value !== promptText) {
-        visualReferencePromptEl.value = promptText;
-      }
+      if (visualReferencePromptEl && visualReferencePromptEl.value !== promptText) visualReferencePromptEl.value = promptText;
       if (visualReferencePreviewEl) {
         visualReferencePreviewEl.innerHTML = '';
         if (assets.length) {
-          assets.forEach((asset, index) => {
-            const card = document.createElement('div');
-            card.className = 'asset-reference-card';
-            card.dataset.refIndex = String(index);
-            const thumb = document.createElement('div');
-            thumb.className = 'asset-reference-thumb';
-            if (asset.image?.url) {
-              const img = document.createElement('img');
-              img.src = asset.image.url;
-              img.alt = asset.title || '\u8d44\u4ea7\u56fe\u53c2\u8003';
-              thumb.appendChild(img);
-              attachMediaDimensionBadge(thumb, img, 'image', asset.image);
-            } else {
-              thumb.textContent = asset.status === 'generating' ? '\u751f\u6210\u4e2d' : (asset.status === 'error' ? '\u5931\u8d25' : '\u5f85\u751f\u6210');
+          const groups = groupReferenceAssetsByStory(assets);
+          groups.forEach((group) => {
+            if (groups.length > 1) {
+              const heading = document.createElement('div');
+              heading.className = 'asset-reference-story';
+              heading.textContent = group.title || group.id;
+              visualReferencePreviewEl.appendChild(heading);
             }
-            const caption = document.createElement('div');
-            caption.className = 'asset-reference-caption';
-            const actions = document.createElement('div');
-            actions.className = 'asset-reference-actions';
-            const previewBtn = document.createElement('button');
-            previewBtn.type = 'button';
-            previewBtn.dataset.refPreview = String(index);
-            previewBtn.textContent = '看';
-            previewBtn.title = '预览资产图';
-            previewBtn.disabled = !asset.image?.url;
-            const deleteBtn = document.createElement('button');
-            deleteBtn.type = 'button';
-            deleteBtn.dataset.refDelete = String(index);
-            deleteBtn.textContent = '×';
-            deleteBtn.title = '删除资产图';
-            actions.appendChild(previewBtn);
-            actions.appendChild(deleteBtn);
-            const kind = document.createElement('span');
-            kind.className = 'asset-reference-kind';
-            kind.textContent = asset.type === 'character' ? '\u4eba\u7269' : (asset.type === 'scene' ? '\u573a\u666f' : '\u8d44\u4ea7');
-            caption.appendChild(kind);
-            caption.appendChild(document.createTextNode(asset.title || ('\u8d44\u4ea7\u56fe ' + (index + 1))));
-            if (asset.status === 'error' && asset.error) {
-              const err = document.createElement('div');
-              err.className = 'meta';
-              err.textContent = '\u5931\u8d25\uff1a' + asset.error;
-              caption.appendChild(err);
-            }
-            card.appendChild(actions);
-            card.appendChild(thumb);
-            card.appendChild(caption);
-            visualReferencePreviewEl.appendChild(card);
+            group.items.forEach(({ asset, index }) => {
+              const card = document.createElement('div');
+              card.className = 'asset-reference-card';
+              card.dataset.refIndex = String(index);
+              const thumb = document.createElement('div');
+              thumb.className = 'asset-reference-thumb';
+              if (asset.image?.url) {
+                const img = document.createElement('img');
+                img.src = asset.image.url;
+                img.alt = asset.title || '\u8d44\u4ea7\u56fe\u53c2\u8003';
+                img.dataset.refHover = String(index);
+                thumb.appendChild(img);
+                attachMediaDimensionBadge(thumb, img, 'image', asset.image);
+              } else {
+                thumb.textContent = asset.status === 'generating' ? '\u751f\u6210\u4e2d' : (asset.status === 'error' ? '\u5931\u8d25' : '\u5f85\u751f\u6210');
+              }
+              const actions = document.createElement('div');
+              actions.className = 'asset-reference-actions';
+              const deleteBtn = document.createElement('button');
+              deleteBtn.type = 'button';
+              deleteBtn.dataset.refDelete = String(index);
+              deleteBtn.textContent = '\u00d7';
+              deleteBtn.title = '\u5220\u9664\u8d44\u4ea7\u56fe';
+              actions.appendChild(deleteBtn);
+              const caption = document.createElement('div');
+              caption.className = 'asset-reference-caption';
+              const kind = document.createElement('span');
+              kind.className = 'asset-reference-kind';
+              kind.textContent = asset.type === 'character' ? '\u4eba\u7269' : (asset.type === 'scene' ? '\u573a\u666f' : '\u8d44\u4ea7');
+              caption.appendChild(kind);
+              caption.appendChild(document.createTextNode(asset.title || ('\u8d44\u4ea7\u56fe ' + (index + 1))));
+              if (asset.status === 'error' && asset.error) {
+                const err = document.createElement('div');
+                err.className = 'meta';
+                err.textContent = '\u5931\u8d25\uff1a' + asset.error;
+                caption.appendChild(err);
+              }
+              card.appendChild(actions);
+              card.appendChild(thumb);
+              card.appendChild(caption);
+              visualReferencePreviewEl.appendChild(card);
+            });
           });
         } else {
           const empty = document.createElement('div');
           empty.className = 'asset-reference-empty';
-          empty.textContent = visualReference.status === 'generating'
-            ? '\u6b63\u5728\u89c4\u5212/\u751f\u6210\u8d44\u4ea7\u56fe...'
-            : '\u6682\u65e0\u8d44\u4ea7\u56fe\u3002\u70b9\u51fb\u201c\u751f\u6210\u914d\u56fe\u201d\u6216\u201c\u89c4\u5212/\u751f\u6210\u8d44\u4ea7\u56fe\u201d\u540e\uff0c\u4ee5\u4eba\u7269/\u573a\u666f\u5c0f\u5361\u7247\u5c55\u793a\u3002';
+          empty.textContent = visualReference.status === 'generating' ? '\u6b63\u5728\u89c4\u5212/\u751f\u6210\u8d44\u4ea7\u56fe...' : '\u6682\u65e0\u8d44\u4ea7\u56fe\u3002';
           visualReferencePreviewEl.appendChild(empty);
         }
       }
@@ -2932,41 +3024,59 @@ const html = `<!doctype html>
         btnGenerateVisualReference.disabled = visualReference.status === 'generating' || imageGenerating;
         btnGenerateVisualReference.textContent = visualReference.status === 'generating' ? '\u751f\u6210\u4e2d...' : '\u89c4\u5212/\u751f\u6210\u8d44\u4ea7\u56fe';
       }
-      if (btnUploadVisualReference) {
-        btnUploadVisualReference.disabled = visualReference.status === 'generating' || imageGenerating;
-      }
+      if (btnUploadVisualReference) btnUploadVisualReference.disabled = visualReference.status === 'generating' || imageGenerating;
       const readyCount = assets.filter((asset) => asset.image?.url).length;
-      if (readyCount) {
-        setVisualReferenceStatus('\u8d44\u4ea7\u56fe\u5df2\u5c31\u7eea\uff1a' + readyCount + '/' + assets.length + ' \u5f20\u3002\u6b63\u5f0f\u914d\u56fe/\u89c6\u9891\u4f1a\u5c1d\u8bd5\u7528\u5b83\u4fdd\u6301\u4eba\u7269\u3001\u573a\u666f\u548c\u98ce\u683c\u4e00\u81f4\u3002');
-      } else if (assets.length) {
-        setVisualReferenceStatus('\u5df2\u89c4\u5212 ' + assets.length + ' \u5f20\u8d44\u4ea7\u56fe\uff0c\u53ef\u7ee7\u7eed\u751f\u6210\u6216\u4e0a\u4f20\u8865\u5145\u3002');
-      } else if (visualReference.prompt) {
-        setVisualReferenceStatus('\u53c2\u8003\u8bbe\u5b9a\u5df2\u751f\u6210\uff0c\u53ef\u7ee7\u7eed\u751f\u6210\u8d44\u4ea7\u56fe\u3002');
-      }
+      if (readyCount) setVisualReferenceStatus('\u8d44\u4ea7\u56fe\u5df2\u5c31\u7eea\uff1a' + readyCount + '/' + assets.length + ' \u5f20\u3002\u6b63\u5f0f\u914d\u56fe/\u89c6\u9891\u4f1a\u6839\u636e\u5206\u955c\u81ea\u52a8\u5339\u914d\u53c2\u8003\u56fe\u3002');
+      else if (assets.length) setVisualReferenceStatus('\u5df2\u89c4\u5212 ' + assets.length + ' \u5f20\u8d44\u4ea7\u56fe\uff0c\u53ef\u7ee7\u7eed\u751f\u6210\u6216\u4e0a\u4f20\u8865\u5145\u3002');
+      else if (visualReference.prompt) setVisualReferenceStatus('\u53c2\u8003\u8bbe\u5b9a\u5df2\u751f\u6210\uff0c\u53ef\u7ee7\u7eed\u751f\u6210\u8d44\u4ea7\u56fe\u3002');
     }
 
-    function openAssetPreview(index) {
+    function ensureAssetHoverPreview() {
+      let panel = document.getElementById('assetHoverPreview');
+      if (!panel) {
+        panel = document.createElement('div');
+        panel.id = 'assetHoverPreview';
+        panel.className = 'asset-hover-preview';
+        panel.innerHTML = '<img alt="asset preview" /><div class="asset-hover-preview-title"></div>';
+        document.body.appendChild(panel);
+      }
+      return panel;
+    }
+
+    function positionAssetHoverPreview(panel, event) {
+      if (!panel || !event) return;
+      const margin = 18;
+      const rect = panel.getBoundingClientRect();
+      let left = event.clientX + 14;
+      let top = event.clientY + 14;
+      if (left + rect.width + margin > window.innerWidth) left = Math.max(margin, event.clientX - rect.width - 14);
+      if (top + rect.height + margin > window.innerHeight) top = Math.max(margin, window.innerHeight - rect.height - margin);
+      panel.style.left = left + 'px';
+      panel.style.top = top + 'px';
+    }
+
+    function showAssetHoverPreview(index, event) {
       const asset = normalizeReferenceAssets(visualReference.assets)[index];
       const imageUrl = asset?.image?.url;
       if (!imageUrl) return;
-      let backdrop = document.getElementById('assetPreviewBackdrop');
-      if (!backdrop) {
-        backdrop = document.createElement('div');
-        backdrop.id = 'assetPreviewBackdrop';
-        backdrop.className = 'asset-preview-backdrop';
-        backdrop.innerHTML = '<div class="asset-preview-dialog" role="dialog" aria-modal="true"><header><span></span><button type="button">关闭</button></header><img alt="资产图预览" /></div>';
-        document.body.appendChild(backdrop);
-        backdrop.addEventListener('click', (event) => {
-          if (event.target === backdrop || event.target.tagName === 'BUTTON') {
-            backdrop.hidden = true;
-          }
-        });
-      }
-      const titleEl = backdrop.querySelector('header span');
-      const imgEl = backdrop.querySelector('img');
-      if (titleEl) titleEl.textContent = asset.title || ('资产图 ' + (index + 1));
+      const panel = ensureAssetHoverPreview();
+      const imgEl = panel.querySelector('img');
+      const titleEl = panel.querySelector('.asset-hover-preview-title');
       if (imgEl) imgEl.src = imageUrl;
-      backdrop.hidden = false;
+      if (titleEl) titleEl.textContent = asset.title || ('\u8d44\u4ea7\u56fe ' + (index + 1));
+      panel.classList.add('visible');
+      positionAssetHoverPreview(panel, event);
+    }
+
+    function moveAssetHoverPreview(event) {
+      const panel = document.getElementById('assetHoverPreview');
+      if (!panel || !panel.classList.contains('visible')) return;
+      positionAssetHoverPreview(panel, event);
+    }
+
+    function hideAssetHoverPreview() {
+      const panel = document.getElementById('assetHoverPreview');
+      if (panel) panel.classList.remove('visible');
     }
 
     function deleteVisualReferenceAsset(index) {
@@ -3030,19 +3140,51 @@ const html = `<!doctype html>
       if (asset.type === 'character' && /人物|主角|角色|人像|男|女|孩子|老人|青年|character|person|woman|man|girl|boy/i.test(text)) score += 8;
       if (asset.type === 'scene' && /场景|环境|空间|城市|房间|街道|窗边|室内|室外|scene|environment|street|room|city/i.test(text)) score += 8;
       if (/封面|表情|情绪|肖像|半身|脸|portrait/i.test(lower) && asset.type === 'character') score += 5;
-      score += tokenOverlapScore([asset.title, asset.role, asset.prompt].join(' '), text);
+      if (asset.storyId && item?.storyId && String(asset.storyId) === String(item.storyId)) score += 18;
+      if (asset.storyTitle && item?.storyTitle && String(item.storyTitle).includes(String(asset.storyTitle).slice(0, 8))) score += 8;
+      score += tokenOverlapScore([asset.storyTitle, asset.title, asset.role, asset.prompt].join(' '), text);
       return score;
     }
 
-    function getReferenceImagesForItem(item, limit = 2) {
+    function getReferenceAssetsForItem(item, limit = 2) {
       const assets = getActiveReferenceAssets();
       if (!assets.length) return [];
       return assets
         .map((asset, index) => ({ asset, index, score: scoreReferenceAssetForItem(asset, item) }))
         .sort((a, b) => (b.score - a.score) || (a.index - b.index))
         .slice(0, Math.max(1, limit))
-        .map((entry) => entry.asset.image)
-        .filter((image) => image && image.url);
+        .map((entry) => entry.asset)
+        .filter((asset) => asset.image?.url);
+    }
+
+    function referenceImagesFromAssets(assets) {
+      return (assets || []).map((asset) => asset.image).filter((image) => image && image.url);
+    }
+
+    function getReferenceImagesForItem(item, limit = 2) {
+      return referenceImagesFromAssets(getReferenceAssetsForItem(item, limit));
+    }
+
+    function prepareReferenceAwareMediaItem(item, referenceAssets, type) {
+      const refs = Array.isArray(referenceAssets) ? referenceAssets.filter((asset) => asset?.image?.url) : [];
+      if (!refs.length) return item;
+      const hasCharacter = refs.some((asset) => asset.type === 'character');
+      const hasScene = refs.some((asset) => asset.type === 'scene');
+      const refTitles = refs.map((asset) => asset.title).filter(Boolean).join(', ');
+      const storyLine = [item?.sceneStory || item?.visual || item?.title || '', item?.camera || ''].filter(Boolean).join(' | ');
+      const styleLine = imageStyleEl ? String(imageStyleEl.value || '').trim() : '';
+      const concisePrompt = [
+        'Use the provided reference image(s) as visual anchors: ' + refTitles + '.',
+        hasCharacter ? 'Character identity, face, hair, clothing and temperament must follow the character reference image. Do not invent a new detailed character description.' : '',
+        hasScene ? 'Location, lighting, props and atmosphere should follow the scene reference image when relevant.' : '',
+        storyLine ? 'Current shot: ' + storyLine : '',
+        styleLine ? 'Style: ' + styleLine : '',
+        'No subtitles, no readable text, no watermark, no logo. Match the current storyboard instead of copying transcript words literally.',
+      ].filter(Boolean).join(' ');
+      const next = { ...item, referenceAssetIds: refs.map((asset) => asset.id).filter(Boolean) };
+      if (type === 'video') { next.videoPrompt = concisePrompt; next.prompt = concisePrompt; }
+      else next.prompt = concisePrompt;
+      return next;
     }
 
     function setImageGenerating(next) {
@@ -3339,7 +3481,7 @@ const html = `<!doctype html>
       if (!item && isAdd) {
         item = {
           id: id || nextMediaId(kind),
-          title: kind === 'video' ? 'LLM video asset' : 'LLM image asset',
+          title: kind === 'video' ? 'AI video asset' : 'AI image asset',
           purpose: '',
           textBasis: '',
           directorIntent: '',
@@ -3412,8 +3554,8 @@ const html = `<!doctype html>
         renderImageCards();
         renderVideoAssetCards();
         syncCompositePreviewOverlay();
-        setImageStatus('LLM 已调整图片素材规划，可按需重新生成。');
-        setVideoAssetStatus('LLM 已调整视频素材规划，可按需重新生成。');
+        setImageStatus('AI已调整图片素材规划，可按需重新生成。');
+        setVideoAssetStatus('AI已调整视频素材规划，可按需重新生成。');
       }
       return changed;
     }
@@ -3453,13 +3595,20 @@ const html = `<!doctype html>
       if (videoAssetAspectEl) videoAssetAspectEl.disabled = videoGenerating;
     }
 
+    function setAiButlerStatus(text, tone = '') {
+      if (!aiButlerStatusPillEl) return;
+      aiButlerStatusPillEl.textContent = String(text || '待命');
+      aiButlerStatusPillEl.dataset.tone = String(tone || '');
+    }
+
     function setLlmChatSubmitting(next) {
       llmChatSubmitting = !!next;
       if (btnLlmChatSend) {
         btnLlmChatSend.disabled = llmChatSubmitting;
-        btnLlmChatSend.textContent = llmChatSubmitting ? '处理中...' : '发送并调整';
+        btnLlmChatSend.textContent = llmChatSubmitting ? '执行中...' : '让AI执行';
       }
       if (llmChatInputEl) llmChatInputEl.disabled = llmChatSubmitting;
+      setAiButlerStatus(llmChatSubmitting ? '执行中' : '待命', llmChatSubmitting ? 'busy' : '');
     }
 
     function getWordText(index) {
@@ -3506,6 +3655,63 @@ const html = `<!doctype html>
       } catch (e) {
         return [];
       }
+    }
+
+    function mediaItemHasGeneratedFile(item, kind) {
+      const media = kind === 'video' ? item?.video : item?.image;
+      return !!(media && (media.url || media.filePath || media.fileName || media.path));
+    }
+
+    function resetInterruptedMediaItems(items, kind) {
+      let changed = false;
+      (Array.isArray(items) ? items : []).forEach((item) => {
+        if (!item || typeof item !== 'object') return;
+        const status = String(item.status || '').toLowerCase();
+        if (status !== 'generating' && status !== 'processing') return;
+        if (mediaItemHasGeneratedFile(item, kind)) {
+          item.status = 'done';
+          item.error = '';
+        } else {
+          item.status = 'error';
+          item.error = item.error || '上次生成被中断，请点击重新生成';
+        }
+        changed = true;
+      });
+      return changed;
+    }
+
+    function resetInterruptedVisualReferenceState() {
+      let changed = false;
+      const assets = normalizeReferenceAssets(visualReference.assets);
+      assets.forEach((asset) => {
+        const status = String(asset.status || '').toLowerCase();
+        if (status !== 'generating' && status !== 'processing') return;
+        if (asset.image && (asset.image.url || asset.image.filePath || asset.image.fileName || asset.image.path)) {
+          asset.status = 'done';
+          asset.error = '';
+        } else {
+          asset.status = 'error';
+          asset.error = asset.error || '上次资产图生成被中断，请重新生成';
+        }
+        changed = true;
+      });
+      visualReference.assets = assets;
+      const status = String(visualReference.status || '').toLowerCase();
+      if (status === 'generating' || status === 'processing') {
+        visualReference.status = assets.some((asset) => asset.status === 'done') ? 'done' : (assets.length ? 'planned' : 'empty');
+        changed = true;
+      }
+      visualReference.image = assets.find((asset) => asset.image && (asset.image.url || asset.image.filePath || asset.image.fileName || asset.image.path))?.image || null;
+      return changed;
+    }
+
+    function resetInterruptedMediaGenerationState() {
+      const imageChanged = resetInterruptedMediaItems(imageItems, 'image');
+      const videoChanged = resetInterruptedMediaItems(videoItems, 'video');
+      const referenceChanged = resetInterruptedVisualReferenceState();
+      imageGenerating = false;
+      videoGenerating = false;
+      return imageChanged || videoChanged || referenceChanged;
     }
 
     function snapshotSelectionState() {
@@ -3582,6 +3788,7 @@ const html = `<!doctype html>
         visualReference = cloneVisualReference(snapshot.mediaAssets.visualReference || visualReference);
         normalizeMediaItemTiming();
       }
+      resetInterruptedMediaGenerationState();
       render();
       renderVisualReference();
       renderImageCards();
@@ -3783,6 +3990,18 @@ const html = `<!doctype html>
       card.appendChild(line);
     }
 
+    function appendPreviewDownload(preview, url, fileName, title = '\u4e0b\u8f7d') {
+      if (!preview || !url) return;
+      preview.classList.add('has-download-icon');
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = String(fileName || 'media').replace(/[\\/:*?"<>|]+/g, '_');
+      link.className = 'media-download-icon';
+      link.title = title;
+      link.textContent = '\u2b07';
+      preview.appendChild(link);
+    }
+
     function renderImageCards() {
       if (!imageCardListEl) return;
       imageCardListEl.innerHTML = '';
@@ -3806,6 +4025,7 @@ const html = `<!doctype html>
             img.alt = item.title || '视频配图';
             preview.appendChild(img);
             attachMediaDimensionBadge(preview, img, 'image', item.image);
+            appendPreviewDownload(preview, item.image.url, ((item.title || item.id || 'image') + '.png'));
           } else {
             const message = document.createElement('div');
             message.textContent = item.status === 'error'
@@ -3865,14 +4085,6 @@ const html = `<!doctype html>
           uploadBtn.dataset.imageUpload = String(index);
           actions.appendChild(uploadBtn);
 
-          if (item.image && item.image.url) {
-            const link = document.createElement('a');
-            link.href = item.image.url;
-            link.download = ((item.title || item.id || 'image') + '.png').replace(/[\\/:*?"<>|]+/g, '_');
-            link.textContent = '下载';
-            actions.appendChild(link);
-          }
-
           card.appendChild(preview);
           card.appendChild(title);
           appendMediaMetaLine(card, item, 'image', item.image);
@@ -3916,6 +4128,7 @@ const html = `<!doctype html>
             video.style.objectFit = 'contain';
             preview.appendChild(video);
             attachMediaDimensionBadge(preview, video, 'video', item.video);
+            appendPreviewDownload(preview, item.video.url, ((item.title || item.id || 'video') + '.mp4'));
           } else {
             const message = document.createElement('div');
             message.textContent = item.status === 'error'
@@ -3954,14 +4167,6 @@ const html = `<!doctype html>
           retryBtn.dataset.videoRetry = String(index);
           actions.appendChild(retryBtn);
 
-          if (item.video && item.video.url) {
-            const link = document.createElement('a');
-            link.href = item.video.url;
-            link.download = ((item.title || item.id || 'video') + '.mp4').replace(/[\\/:*?"<>|]+/g, '_');
-            link.textContent = '下载';
-            actions.appendChild(link);
-          }
-
           card.appendChild(preview);
           card.appendChild(title);
           appendMediaMetaLine(card, item, 'video', item.video);
@@ -3998,6 +4203,37 @@ const html = `<!doctype html>
     function setExportStatus(text) {
       if (!exportStatusEl) return;
       exportStatusEl.textContent = String(text || '');
+    }
+
+    function buildTimeMapper(deleteSegments) {
+      const segments = (Array.isArray(deleteSegments) ? deleteSegments : [])
+        .map((seg) => ({ start: Number(seg.start), end: Number(seg.end) }))
+        .filter((seg) => Number.isFinite(seg.start) && Number.isFinite(seg.end) && seg.end > seg.start)
+        .sort((a, b) => (a.start - b.start) || (a.end - b.end));
+      const merged = [];
+      segments.forEach((seg) => {
+        const last = merged[merged.length - 1];
+        if (!last || seg.start > last.end) {
+          merged.push({ ...seg });
+        } else {
+          last.end = Math.max(last.end, seg.end);
+        }
+      });
+      return (time) => {
+        const t = Math.max(0, Number(time) || 0);
+        let removed = 0;
+        for (const seg of merged) {
+          if (t >= seg.end) {
+            removed += seg.end - seg.start;
+          } else if (t > seg.start) {
+            removed += t - seg.start;
+            break;
+          } else {
+            break;
+          }
+        }
+        return Math.max(0, Number((t - removed).toFixed(3)));
+      };
     }
 
     function buildExportCues() {
@@ -4062,10 +4298,33 @@ const html = `<!doctype html>
       });
     }
 
-    async function loadJianyingDraftTargets(showMessage) {
+    function setJianyingExportBusy(busy, label) {
+      if (!btnExportJianyingDraft) return;
+      if (!btnExportJianyingDraft.dataset.defaultLabel) {
+        btnExportJianyingDraft.dataset.defaultLabel = btnExportJianyingDraft.textContent || '\u5bfc\u51fa\u526a\u6620\u8349\u7a3f';
+      }
+      btnExportJianyingDraft.disabled = !!busy;
+      btnExportJianyingDraft.textContent = busy ? (label || '\u5bfc\u51fa\u4e2d...') : btnExportJianyingDraft.dataset.defaultLabel;
+    }
+
+    async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 8000) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || 8000));
       try {
-        const response = await fetch('/api/jianying-draft-targets');
+        const response = await fetch(url, { ...options, signal: controller.signal });
         const data = await response.json().catch(() => ({}));
+        return { response, data };
+      } catch (err) {
+        if (err && err.name === 'AbortError') throw new Error('\u8bf7\u6c42\u8d85\u65f6\uff0c\u8bf7\u68c0\u67e5\u526a\u6620\u76ee\u5f55\u6216\u7a0d\u540e\u91cd\u8bd5');
+        throw err;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    async function loadJianyingDraftTargets(showMessage, timeoutMs = 6000) {
+      try {
+        const { response, data } = await fetchJsonWithTimeout('/api/jianying-draft-targets', {}, timeoutMs);
         if (!response.ok || !data.success) {
           throw new Error(data.error || ('HTTP ' + response.status));
         }
@@ -4122,74 +4381,47 @@ const html = `<!doctype html>
     }
 
     async function exportJianyingDraft() {
-      setExportStatus('正在准备剪映导出目标...');
-      await loadJianyingDraftTargets(false);
-      const cues = buildExportCues();
-      if (!cues.length) {
-        setExportStatus('没有可导出的字幕，请检查是否全部内容都被标记删除。');
-        alert('剪映草稿导出失败：没有可导出的字幕，请检查是否全部内容都被标记删除。');
-        return;
-      }
-      const selection = getJianyingExportSelection();
-      const templatePath = selection.templatePath;
-      const exportMode = selection.exportMode;
-      const targetRoot = selection.targetRoot;
-      const preset = jianyingSubtitlePresetEl ? jianyingSubtitlePresetEl.value : 'clean';
-      const deleteSegments = mergedSegmentsFromSelection();
-      const sourceDurationSec = getAudioTotalDuration();
-      const sourceVideoMeta = {
-        width: sourceVideoEl ? (Number(sourceVideoEl.videoWidth) || 0) : 0,
-        height: sourceVideoEl ? (Number(sourceVideoEl.videoHeight) || 0) : 0,
-      };
-      setExportStatus('正在生成完整剪映草稿（主视频轨 + 字幕轨 + 素材轨）...');
-      if (btnExportJianyingDraft) btnExportJianyingDraft.disabled = true;
+      if (btnExportJianyingDraft && btnExportJianyingDraft.disabled) return;
+      setJianyingExportBusy(true, '\u51c6\u5907\u4e2d...');
+      setExportStatus('\u6b63\u5728\u51c6\u5907\u526a\u6620\u5bfc\u51fa\u76ee\u6807...');
       try {
+        await loadJianyingDraftTargets(false, 3500);
+        const cues = buildExportCues();
+        if (!cues.length) throw new Error('\u6ca1\u6709\u53ef\u5bfc\u51fa\u7684\u5b57\u5e55\uff0c\u8bf7\u68c0\u67e5\u662f\u5426\u5168\u90e8\u5185\u5bb9\u90fd\u88ab\u6807\u8bb0\u5220\u9664\u3002');
+        const selection = getJianyingExportSelection();
+        const preset = jianyingSubtitlePresetEl ? jianyingSubtitlePresetEl.value : 'clean';
+        const deleteSegments = mergedSegmentsFromSelection();
+        const sourceDurationSec = getAudioTotalDuration();
+        const sourceVideoMeta = {
+          width: sourceVideoEl ? (Number(sourceVideoEl.videoWidth) || 0) : 0,
+          height: sourceVideoEl ? (Number(sourceVideoEl.videoHeight) || 0) : 0,
+        };
+        setJianyingExportBusy(true, '\u5bfc\u51fa\u4e2d...');
+        setExportStatus('\u6b63\u5728\u751f\u6210\u5b8c\u6574\u526a\u6620\u8349\u7a3f\uff08\u4e3b\u89c6\u9891 + \u5b57\u5e55 + \u7d20\u6750\uff09...');
         await saveReviewState('force');
-        const response = await fetch('/api/export-jianying-draft', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+        const { response, data } = await fetchJsonWithTimeout('/api/export-jianying-draft', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             fullDraft: true,
-            cues: cues.map((cue) => ({
-              start: cue.start,
-              end: Math.max(cue.end, cue.start + 0.35),
-              text: String(cue.text || '').trim(),
-            })),
-            deleteSegments,
-            sourceDurationSec,
-            sourceVideoMeta,
-            mediaAssets: {
-              images: cloneMediaItems(imageItems),
-              videos: cloneMediaItems(videoItems),
-            },
-            preset,
-            templatePath,
-            exportMode,
-            targetRoot,
+            cues: cues.map((cue) => ({ start: cue.start, end: Math.max(cue.end, cue.start + 0.35), text: String(cue.text || '').trim() })),
+            deleteSegments, sourceDurationSec, sourceVideoMeta,
+            mediaAssets: { images: cloneMediaItems(imageItems), videos: cloneMediaItems(videoItems) },
+            preset, templatePath: selection.templatePath, exportMode: selection.exportMode, targetRoot: selection.targetRoot,
             draftName: 'JaygoCut_' + new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14),
           }),
-        });
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok || !data.success) {
-          throw new Error(data.error || ('HTTP ' + response.status));
-        }
-        const draftKind = data.fullDraft ? '完整剪映草稿' : '字幕草稿';
-        const mediaText = data.fullDraft
-          ? ('，主视频片段 ' + (data.keepSegments || 0) + ' 段，图片 ' + (data.imageAssets || 0) + ' 张，视频素材 ' + (data.videoAssets || 0) + ' 段')
-          : '';
-        const fallbackText = data.fallbackUsed ? ('\\n\\n完整草稿生成失败，已自动导出字幕草稿。\\n原因：' + (data.fallbackReason || '未知')) : '';
-        const placementText = data.autoPlaced
-          ? '已放入剪映草稿目录，打开剪映即可看到'
-          : '已导出到项目目录，需要时可手动复制到剪映草稿目录';
-        const templateText = data.templateUsed ? '；已基于模板草稿生成新草稿，未覆盖原模板' : '';
-        const message = placementText + '：' + data.draftDir + '（' + draftKind + '，字幕 ' + data.cues + ' 条' + mediaText + '）' + templateText;
+        }, 120000);
+        if (!response.ok || !data.success) throw new Error(data.error || ('HTTP ' + response.status));
+        const placementText = data.autoPlaced ? '\u5df2\u653e\u5165\u526a\u6620\u8349\u7a3f\u76ee\u5f55\uff0c\u6253\u5f00\u526a\u6620\u5373\u53ef\u67e5\u770b' : '\u5df2\u5bfc\u51fa\u5230\u9879\u76ee\u76ee\u5f55';
+        const mediaText = data.fullDraft ? ('\uff0c\u4e3b\u89c6\u9891\u7247\u6bb5 ' + (data.keepSegments || 0) + ' \u6bb5\uff0c\u56fe\u7247 ' + (data.imageAssets || 0) + ' \u5f20\uff0c\u89c6\u9891\u7d20\u6750 ' + (data.videoAssets || 0) + ' \u6bb5') : '';
+        const message = placementText + '\uff1a' + data.draftDir + '\uff1b\u5b57\u5e55 ' + data.cues + ' \u6761' + mediaText;
         setExportStatus(message);
-        alert(message + fallbackText + (data.autoPlaced ? '\\n\\n提示：如果剪映已经打开但没有出现新项目，请重启剪映刷新项目列表。' : '\\n\\n提示：若新版剪映无法识别完整草稿，可使用导出的 SRT 或字幕草稿兜底。'));
+        alert(message + (data.autoPlaced ? '\\n\\n\u5982\u679c\u526a\u6620\u5df2\u6253\u5f00\u4f46\u6ca1\u51fa\u73b0\u65b0\u9879\u76ee\uff0c\u8bf7\u91cd\u542f\u526a\u6620\u5237\u65b0\u9879\u76ee\u5217\u8868\u3002' : ''));
       } catch (err) {
-        setExportStatus('剪映草稿导出失败：' + (err.message || String(err)));
-        alert('剪映草稿导出失败：' + (err.message || String(err)));
+        const message = '\u526a\u6620\u8349\u7a3f\u5bfc\u51fa\u5931\u8d25\uff1a' + (err.message || String(err));
+        setExportStatus(message);
+        alert(message);
       } finally {
-        if (btnExportJianyingDraft) btnExportJianyingDraft.disabled = false;
+        setJianyingExportBusy(false);
       }
     }
 
@@ -4418,13 +4650,15 @@ const html = `<!doctype html>
       item.status = 'generating';
       item.error = '';
       renderImageCards();
+      const referenceAssets = getReferenceAssetsForItem(item, 2);
+      const requestItem = prepareReferenceAwareMediaItem(item, referenceAssets, 'image');
       const response = await fetch('/api/generate-image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          item,
+          item: requestItem,
           retry,
-          referenceImage: getReferenceImagesForItem(item, 2),
+          referenceImage: referenceImagesFromAssets(referenceAssets),
           imageSize: imageAspectEl ? imageAspectEl.value : '',
         }),
       });
@@ -4448,7 +4682,7 @@ const html = `<!doctype html>
       if (imageGenerating) return;
       setImageGenerating(true);
       try {
-        setImageStatus('正在让 LLM 分析文本并规划配图点...');
+        setImageStatus('正在让 AI 分析文本并规划配图点...');
         const existingRanges = collectPlacementBlockedRanges('image');
         imageItems = [];
         renderImageCards();
@@ -4535,17 +4769,19 @@ const html = `<!doctype html>
       item.status = 'generating';
       item.error = '';
       renderVideoAssetCards();
+      const referenceAssets = getReferenceAssetsForItem(item, 1);
+      const requestItem = prepareReferenceAwareMediaItem(item, referenceAssets, 'video');
       const response = await fetch('/api/generate-video', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          item,
+          item: requestItem,
           retry,
           aspectRatio: videoAssetAspectEl ? videoAssetAspectEl.value : item.aspectRatio,
           durationSec: item.durationSec || 5,
           numFrames: item.numFrames,
           frameRate: item.frameRate,
-          referenceImage: getReferenceImagesForItem(item, 1),
+          referenceImage: referenceImagesFromAssets(referenceAssets),
         }),
       });
       const data = await response.json().catch(() => ({}));
@@ -4568,7 +4804,7 @@ const html = `<!doctype html>
       if (videoGenerating) return;
       setVideoGenerating(true);
       try {
-        setVideoAssetStatus('正在让 LLM 规划视频素材插入点...');
+        setVideoAssetStatus('正在让 AI 规划视频素材插入点...');
         const existingRanges = collectPlacementBlockedRanges('video');
         videoItems = [];
         renderVideoAssetCards();
@@ -4580,7 +4816,7 @@ const html = `<!doctype html>
             selectedIndices: Array.from(selected),
             deleteSegments: mergedSegmentsFromSelection(),
             sourceDurationSec: getAudioTotalDuration(),
-            count: Number(videoAssetCountEl ? videoAssetCountEl.value : 3) || 3,
+            count: videoAssetCountEl ? String(videoAssetCountEl.value || 'auto') : 'auto',
             style: imageStyleEl ? imageStyleEl.value : '',
             aspectRatio: videoAssetAspectEl ? videoAssetAspectEl.value : '16:9',
             existingRanges,
@@ -4825,6 +5061,7 @@ const html = `<!doctype html>
           normalizeVideoItemTiming(item);
           if (item && item.video && item.status !== 'error') item.status = item.video.url ? 'done' : (item.status || 'queued');
         });
+        resetInterruptedMediaGenerationState();
         renderVisualReference();
         renderImageCards();
         renderVideoAssetCards();
@@ -5658,7 +5895,7 @@ const html = `<!doctype html>
 
       const parts = [
         '规则预标记: ' + ruleMarked + ' 项（已应用 ' + selectedByRule + ' 项）',
-        'LLM建议: ' + count + ' 项（已应用 ' + selectedByLlm + ' 项）',
+        'AI建议: ' + count + ' 项（已应用 ' + selectedByLlm + ' 项）',
       ];
       if (llmTopic) {
         parts.push('主题: ' + llmTopic);
@@ -5778,7 +6015,7 @@ const html = `<!doctype html>
       const autoReason = autoReasonByIndex.get(i);
       const llmReason = llmReasonByIndex.get(i);
       if (autoReason) parts.push('规则: ' + autoReason);
-      if (llmReason) parts.push('LLM建议: ' + llmReason);
+      if (llmReason) parts.push('AI建议: ' + llmReason);
       return parts.join(' | ');
     }
 
@@ -5838,7 +6075,7 @@ const html = `<!doctype html>
     function setLlmMarking(next) {
       llmMarking = !!next;
       btnLlmMark.disabled = llmMarking;
-      btnLlmMark.textContent = llmMarking ? 'LLM分析中...' : 'LLM标记';
+      btnLlmMark.textContent = llmMarking ? 'AI分析中...' : 'AI分析';
     }
 
     function rebuildTokenRects() {
@@ -6374,13 +6611,13 @@ const html = `<!doctype html>
       render();
       syncCurrentToken();
       updateSelectionStats();
-      refreshLlmSummary('LLM 建议：已清空');
+      refreshLlmSummary('AI建议：已清空');
       scheduleReviewStateSave(250);
     }
 
     function applyLlmSuggestions() {
       if (!llmSuggested.size) {
-        alert('暂无 LLM 建议可应用');
+        alert('暂无 AI建议可应用');
         return;
       }
       let added = 0;
@@ -6394,7 +6631,7 @@ const html = `<!doctype html>
       });
       updateSelectionStats();
       refreshIdleStatus();
-      setStatus('已应用 LLM 建议，新增 ' + added + ' 项');
+      setStatus('已应用 AI建议，新增 ' + added + ' 项');
       setTimeout(refreshIdleStatus, 1200);
       scheduleReviewStateSave(250);
     }
@@ -6403,8 +6640,8 @@ const html = `<!doctype html>
       if (llmMarking) return;
       setLlmMarking(true);
       try {
-        setStatus('LLM 正在分析文本，请稍候...');
-        refreshLlmSummary('LLM 建议：分析中...');
+        setStatus('AI正在分析文本，请稍候...');
+        refreshLlmSummary('AI建议：分析中...');
         const response = await fetch('/api/llm-mark', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -6412,7 +6649,7 @@ const html = `<!doctype html>
         });
         const data = await response.json();
         if (!data.success) {
-          throw new Error(data.error || 'LLM 标记失败');
+          throw new Error(data.error || 'AI分析失败');
         }
 
         pushSelectionUndo();
@@ -6463,7 +6700,7 @@ const html = `<!doctype html>
         const summary = String(data.summary || '').trim();
         const debug = (data && typeof data.debug === 'object' && data.debug) ? data.debug : {};
         const extra = [
-          'LLM已标记 ' + llmSuggested.size + ' 项',
+          'AI已标记 ' + llmSuggested.size + ' 项',
           data.selectedUnitCount ? ('候选句段 ' + data.selectedUnitCount + ' 个') : '',
           Number.isFinite(Number(data.successfulChunks))
             ? ('分块处理 ' + Number(data.successfulChunks) + '/' + Number(data.chunkCount || 0))
@@ -6487,8 +6724,8 @@ const html = `<!doctype html>
           Object.keys(punctuationByIndex).length > 0 ? ('标点/分段优化 ' + Object.keys(punctuationByIndex).length + ' 处') : '',
           summary ? ('说明: ' + toZhReason(summary, '模型已给出删除建议')) : '',
         ].filter(Boolean).join(' | ');
-        refreshLlmSummary(extra || 'LLM 建议：已更新');
-        setStatus('LLM 标记完成，可点“应用LLM建议”加入删除列表');
+        refreshLlmSummary(extra || 'AI建议：已更新');
+        setStatus('AI分析完成，可点“应用AI建议”加入删除列表');
         setTimeout(refreshIdleStatus, 1400);
         scheduleReviewStateSave(250);
       } finally {
@@ -6546,7 +6783,7 @@ const html = `<!doctype html>
         }
         llmSuggested.add(idx);
         if (!llmReasonByIndex.has(idx)) {
-          llmReasonByIndex.set(idx, 'LLM对话建议');
+          llmReasonByIndex.set(idx, 'AI管家建议');
         }
         refreshToken(idx);
       }
@@ -6576,6 +6813,90 @@ const html = `<!doctype html>
       undoLastSelectionChange('chat');
     }
 
+    function parseChineseOrdinal(raw) {
+      const text = String(raw || '').trim();
+      if (!text) return null;
+      const direct = Number(text.replace(/[^0-9]/g, ''));
+      if (Number.isInteger(direct) && direct > 0) return direct;
+      const digits = { '一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10 };
+      if (text === '十') return 10;
+      if (text.includes('十')) {
+        const parts = text.split('十');
+        const tens = parts[0] ? digits[parts[0]] || 1 : 1;
+        const ones = parts[1] ? digits[parts[1]] || 0 : 0;
+        return tens * 10 + ones;
+      }
+      return digits[text] || null;
+    }
+
+    function isOperationalOnlyAiCommand(text, actions) {
+      if (!actions.length) return false;
+      const raw = String(text || '');
+      if (/(标记|删除|取消|保留|精简|废话|语气|重复|口播|文案|分析删|调整删)/.test(raw)) return false;
+      return true;
+    }
+
+    async function runAiButlerLocalCommand(text) {
+      const raw = String(text || '').trim();
+      const actions = [];
+      const imageMatch = raw.match(/(?:重新生成|重试|换|再生成).{0,12}第\s*([一二两三四五六七八九十\d]+)\s*(?:张|个)?\s*(?:图|图片|配图)/);
+      const videoMatch = raw.match(/(?:重新生成|重试|换|再生成).{0,12}第\s*([一二两三四五六七八九十\d]+)\s*(?:段|个)?\s*(?:视频|素材|B-roll|b-roll)/);
+
+      if (imageMatch) {
+        const ordinal = parseChineseOrdinal(imageMatch[1]);
+        const index = ordinal ? ordinal - 1 : -1;
+        if (index >= 0 && imageItems[index]) {
+          setAiButlerStatus('重生成图片', 'busy');
+          await generateOneImage(index, true);
+          actions.push('已重新生成第 ' + ordinal + ' 张图片');
+        } else {
+          actions.push('没有找到第 ' + (ordinal || '?') + ' 张图片');
+        }
+      }
+
+      if (videoMatch) {
+        const ordinal = parseChineseOrdinal(videoMatch[1]);
+        const index = ordinal ? ordinal - 1 : -1;
+        if (index >= 0 && videoItems[index]) {
+          setAiButlerStatus('重生成视频', 'busy');
+          await generateOneVideoAsset(index, true);
+          actions.push('已重新生成第 ' + ordinal + ' 段视频素材');
+        } else {
+          actions.push('没有找到第 ' + (ordinal || '?') + ' 段视频素材');
+        }
+      }
+
+      if (/导出.*剪映|剪映.*导出/.test(raw)) {
+        setAiButlerStatus('导出剪映', 'busy');
+        await exportJianyingDraft();
+        actions.push('已执行剪映导出');
+      }
+      if (/生成.*配图|规划.*配图|插图/.test(raw)) {
+        setAiButlerStatus('生成配图', 'busy');
+        await generateVideoImages();
+        actions.push('已规划并生成配图');
+      }
+      if (/生成.*视频素材|规划.*视频素材|B-roll|broll/i.test(raw)) {
+        setAiButlerStatus('生成视频素材', 'busy');
+        await generateVideoAssets();
+        actions.push('已规划并生成视频素材');
+      }
+      if (/AI分析|AI标记|AI分析|AI分析|分析删除|智能标记/.test(raw)) {
+        setAiButlerStatus('AI分析', 'busy');
+        await runLlmMark();
+        actions.push('已执行AI分析');
+      }
+      if (/应用.*(AI|LLM).*建议/.test(raw)) {
+        applyLlmSuggestions();
+        actions.push('已应用AI建议');
+      }
+      if (/清除.*(AI|LLM).*标记|清空.*(AI|LLM).*标记/.test(raw)) {
+        clearLlmMarks();
+        actions.push('已清除AI标记');
+      }
+      return actions;
+    }
+
     async function sendLlmChatAdjust() {
       if (llmChatSubmitting) return;
       const text = String(llmChatInputEl ? llmChatInputEl.value : '').trim();
@@ -6587,7 +6908,17 @@ const html = `<!doctype html>
       try {
         pushChatMessage('user', text);
         if (llmChatInputEl) llmChatInputEl.value = '';
-        setLlmChatStatus('LLM 正在根据你的要求调整标记...');
+        setLlmChatStatus('AI管家正在理解并执行你的要求...');
+
+        const localActions = await runAiButlerLocalCommand(text);
+        if (localActions.length) {
+          pushChatMessage('assistant', '已执行：' + localActions.join('；'));
+          setLlmChatStatus(localActions.join('；'));
+          if (isOperationalOnlyAiCommand(text, localActions)) {
+            setAiButlerStatus('已完成', 'ok');
+            return;
+          }
+        }
 
         const response = await fetch('/api/llm-chat-adjust', {
           method: 'POST',
@@ -6632,7 +6963,8 @@ const html = `<!doctype html>
           summary ? ('摘要: ' + summary) : '',
         ].filter(Boolean);
         pushChatMessage('assistant', msgParts.join(' | '));
-        setLlmChatStatus('对话调标记完成');
+        setLlmChatStatus('AI管家已完成调整');
+        setAiButlerStatus('已完成', 'ok');
       } finally {
         setLlmChatSubmitting(false);
       }
@@ -7271,9 +7603,9 @@ const html = `<!doctype html>
       try {
         await runLlmMark();
       } catch (e) {
-        setStatus('LLM 标记失败: ' + e.message);
-        refreshLlmSummary('LLM 建议：调用失败');
-        alert('LLM 标记失败: ' + e.message);
+        setStatus('AI分析失败: ' + e.message);
+        refreshLlmSummary('AI建议：调用失败');
+        alert('AI分析失败: ' + e.message);
       }
     });
     document.getElementById('btnApplyLlm').addEventListener('click', applyLlmSuggestions);
@@ -7457,22 +7789,18 @@ const html = `<!doctype html>
     if (visualReferencePreviewEl) {
       visualReferencePreviewEl.addEventListener('click', (event) => {
         const deleteBtn = event.target.closest('[data-ref-delete]');
-        const previewBtn = event.target.closest('[data-ref-preview]');
-        const card = event.target.closest('[data-ref-index]');
-        if (deleteBtn) {
-          const index = Number(deleteBtn.dataset.refDelete);
-          deleteVisualReferenceAsset(index);
-          return;
-        }
-        if (previewBtn) {
-          const index = Number(previewBtn.dataset.refPreview);
-          openAssetPreview(index);
-          return;
-        }
-        if (card && event.target.closest('.asset-reference-thumb img')) {
-          openAssetPreview(Number(card.dataset.refIndex));
-        }
+        if (!deleteBtn) return;
+        deleteVisualReferenceAsset(Number(deleteBtn.dataset.refDelete));
       });
+      visualReferencePreviewEl.addEventListener('mouseover', (event) => {
+        const img = event.target.closest('[data-ref-hover]');
+        if (img) showAssetHoverPreview(Number(img.dataset.refHover), event);
+      });
+      visualReferencePreviewEl.addEventListener('mousemove', moveAssetHoverPreview);
+      visualReferencePreviewEl.addEventListener('mouseout', (event) => {
+        if (!event.relatedTarget || !visualReferencePreviewEl.contains(event.relatedTarget)) hideAssetHoverPreview();
+      });
+      visualReferencePreviewEl.addEventListener('mouseleave', hideAssetHoverPreview);
     }
     if (btnGenerateVisualReference) {
       btnGenerateVisualReference.addEventListener('click', async () => {
@@ -7549,7 +7877,7 @@ const html = `<!doctype html>
           const index = Number(retryBtn.dataset.imageRetry);
           if (!Number.isInteger(index)) return;
           try {
-            setImageStatus('正在重试第 ' + (index + 1) + ' 张，LLM 会先换一个提示词...');
+            setImageStatus('正在重试第 ' + (index + 1) + ' 张，AI 会先换一个提示词...');
             await generateOneImage(index, !imageItems[index]?.promptEdited);
             setImageStatus('第 ' + (index + 1) + ' 张已重试完成');
           } catch (err) {
@@ -7630,9 +7958,10 @@ const html = `<!doctype html>
         try {
           await sendLlmChatAdjust();
         } catch (e) {
-          setLlmChatStatus('LLM 对话调标记失败: ' + e.message);
+          setLlmChatStatus('AI管家执行失败：' + e.message);
+          setAiButlerStatus('失败', 'error');
           pushChatMessage('assistant', '处理失败: ' + e.message);
-          alert('LLM 对话调标记失败: ' + e.message);
+          alert('AI管家执行失败: ' + e.message);
         }
       });
     }
@@ -7646,7 +7975,8 @@ const html = `<!doctype html>
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
           sendLlmChatAdjust().catch((err) => {
-            setLlmChatStatus('LLM 对话调标记失败: ' + err.message);
+            setLlmChatStatus('AI管家执行失败：' + err.message);
+            setAiButlerStatus('失败', 'error');
             pushChatMessage('assistant', '处理失败: ' + err.message);
           });
         }
