@@ -30,6 +30,7 @@ const els = {
   outputRoot: $('outputRoot'),
   silenceThresholdSec: $('silenceThresholdSec'),
   exportQuality: $('exportQuality'),
+  settingsSaveStatus: $('settingsSaveStatus'),
   videoPath: $('videoPath'),
   depsOutput: $('depsOutput'),
   taskState: $('taskState'),
@@ -892,9 +893,33 @@ if (els.installUpdate) {
 }
 
 $('saveSettings').addEventListener('click', async () => {
-  const saved = await window.talkcut.saveSettings(getSettingsFromForm());
-  applySettingsToForm(saved);
-  scheduleAutoLlmTest();
+  const button = $('saveSettings');
+  const previousText = button ? button.textContent : '';
+  try {
+    if (button) {
+      button.disabled = true;
+      button.textContent = '保存中...';
+    }
+    if (els.settingsSaveStatus) {
+      els.settingsSaveStatus.textContent = '';
+    }
+    const saved = await window.talkcut.saveSettings(getSettingsFromForm());
+    applySettingsToForm(saved);
+    if (els.settingsSaveStatus) {
+      els.settingsSaveStatus.textContent = `已保存（${new Date().toLocaleTimeString()}）`;
+    }
+    scheduleAutoLlmTest();
+  } catch (err) {
+    if (els.settingsSaveStatus) {
+      els.settingsSaveStatus.textContent = `保存失败：${err.message || String(err)}`;
+    }
+    throw err;
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = previousText || '保存设置';
+    }
+  }
 });
 
 $('checkDeps').addEventListener('click', async () => {

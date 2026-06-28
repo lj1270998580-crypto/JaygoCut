@@ -570,16 +570,21 @@ function buildPublishSuggestionPrompt(units, analysis, style) {
     .slice(0, 220)
     .map((u) => `${u.id}|${u.text}`)
     .join('\n');
-  const mode = ['保守', '吸睛', '专业'].includes(style) ? style : '专业';
+  const mode = ['自媒体爆款', '保守', '吸睛', '专业'].includes(style) ? style : '自媒体爆款';
   return [
-    '你是中文自媒体标题与简介编辑器。',
+    '你是中文自媒体爆款标题、封面标题与简介编辑器。',
     `主题: ${String(analysis?.topic || '').trim() || '未知'}`,
     `梗概: ${String(analysis?.outline || '').trim() || '未知'}`,
     `风格: ${mode}`,
-    '请生成 10 个标题（每个不超过30字）和 3 个作品简介（每个不超过140字）。',
-    '要求：不夸张、不造假、避免敏感违规词。',
+    '请先理解全文的核心冲突、人物关系、情绪钩子、反差点、结果悬念和用户痛点。',
+    '生成 10 个视频主标题：每个不超过30字，必须使用10种不同句式，不要重复同一种模板。',
+    '生成 5 个封面标题：每个不超过18字，短、狠、清晰，适合放在封面上。',
+    '生成 3 个作品简介：每个不超过140字，适合发布页简介。',
+    '生成 8-12 个话题参考：必须以 # 开头，贴合内容主题、情绪、人群、场景或平台搜索习惯。',
+    '爆款句式参考：反差冲突、问题悬念、结果前置、认知颠覆、避坑提醒、情绪共鸣、故事转折、身份代入、行动建议、金句总结。',
+    '要求：不造假，不低俗，不使用夸大承诺，不编造文中没有的信息。',
     '输出 JSON（只返回 JSON）：',
-    '{"titles":["..."],"descriptions":["..."],"keywords":["..."]}',
+    '{"titles":["..."],"coverTitles":["..."],"descriptions":["..."],"topics":["#..."]}',
     '文本素材（id|text）：',
     list,
   ].join('\n');
@@ -1247,16 +1252,16 @@ function trimByChars(input, maxChars) {
   return chars.slice(0, maxChars).join('');
 }
 
-function sanitizeTitles(rawTitles = []) {
+function sanitizeTitles(rawTitles = [], limit = 10, maxChars = 30) {
   const out = [];
   const seen = new Set();
   for (const t of rawTitles) {
-    const title = trimByChars(String(t || '').replace(/\s+/g, ' '), 30);
+    const title = trimByChars(String(t || '').replace(/\s+/g, ' '), maxChars);
     if (!title) continue;
     if (seen.has(title)) continue;
     seen.add(title);
     out.push(title);
-    if (out.length >= 10) break;
+    if (out.length >= limit) break;
   }
   return out;
 }
@@ -1279,11 +1284,12 @@ function sanitizeKeywords(rawKeywords = []) {
   const out = [];
   const seen = new Set();
   for (const kw of rawKeywords) {
-    const text = trimByChars(String(kw || '').replace(/\s+/g, ' '), 18);
+    const text = trimByChars(String(kw || '').replace(/^#+/, '').replace(/\s+/g, ' '), 18);
     if (!text) continue;
-    if (seen.has(text)) continue;
-    seen.add(text);
-    out.push(text);
+    const topic = `#${text}`;
+    if (seen.has(topic)) continue;
+    seen.add(topic);
+    out.push(topic);
     if (out.length >= 12) break;
   }
   return out;
@@ -1328,19 +1334,31 @@ async function resolveAnalysis(units, config, inputAnalysis = {}) {
 function buildFallbackPublishTitles(units, analysis) {
   const topic = trimByChars(String(analysis?.topic || '').trim(), 18);
   const seed = topic || trimByChars(String(units[0]?.text || '').trim(), 16) || '本期内容重点';
-  const tails = [
-    '：核心观点速看',
-    '：这点最值得注意',
-    '，一条视频讲清楚',
-    '，关键逻辑一次说透',
-    '：先看结论',
-    '，避免踩坑',
-    '：高效理解版',
-    '，重点都在这',
-    '：建议收藏',
-    '，完整版梳理',
+  const templates = [
+    `为什么${seed}，很多人没想明白`,
+    `${seed}背后的关键真相`,
+    `别再忽略${seed}这个信号`,
+    `看懂${seed}，少走很多弯路`,
+    `${seed}不是小事，是提醒`,
+    `普通人最该看懂的${seed}`,
+    `${seed}，真正影响在哪里`,
+    `如果你也关心${seed}`,
+    `${seed}的反常识一面`,
+    `这次把${seed}说透`,
   ];
-  return tails.map((tail) => trimByChars(`${seed}${tail}`, 30));
+  return templates.map((title) => trimByChars(title, 30));
+}
+
+function buildFallbackPublishCoverTitles(units, analysis) {
+  const topic = trimByChars(String(analysis?.topic || '').trim(), 10);
+  const seed = topic || trimByChars(String(units[0]?.text || '').trim(), 8) || '这件事';
+  return [
+    `${seed}真相`,
+    `别再误解${seed}`,
+    `关键在这里`,
+    `看完就懂了`,
+    `这点很重要`,
+  ].map((title) => trimByChars(title, 18));
 }
 
 function buildFallbackPublishDescriptions(units, analysis) {
@@ -1356,6 +1374,21 @@ function buildFallbackPublishDescriptions(units, analysis) {
   ]);
 }
 
+function buildFallbackPublishTopics(units, analysis) {
+  const topic = trimByChars(String(analysis?.topic || '').trim(), 12);
+  const base = [
+    topic,
+    '口播',
+    '自媒体',
+    '认知提升',
+    '生活感悟',
+    '成长思考',
+    '观点分享',
+    '短视频文案',
+  ].filter(Boolean);
+  return sanitizeKeywords(base);
+}
+
 async function runLlmPublishSuggestions(words, config, style, inputAnalysis) {
   const units = buildTranscriptUnits(words);
   if (!units.length) {
@@ -1369,29 +1402,46 @@ async function runLlmPublishSuggestions(words, config, style, inputAnalysis) {
     .concat(Array.isArray(parsed.titles) ? parsed.titles : [])
     .concat(Array.isArray(parsed.headlines) ? parsed.headlines : [])
     .concat(Array.isArray(parsed.title_list) ? parsed.title_list : []);
+  const coverTitlesRaw = []
+    .concat(Array.isArray(parsed.coverTitles) ? parsed.coverTitles : [])
+    .concat(Array.isArray(parsed.cover_titles) ? parsed.cover_titles : [])
+    .concat(Array.isArray(parsed.coverHeadlines) ? parsed.coverHeadlines : [])
+    .concat(Array.isArray(parsed.cover_headlines) ? parsed.cover_headlines : [])
+    .concat(Array.isArray(parsed.covers) ? parsed.covers : []);
   const descriptionsRaw = []
     .concat(Array.isArray(parsed.descriptions) ? parsed.descriptions : [])
     .concat(Array.isArray(parsed.summary_list) ? parsed.summary_list : [])
     .concat(Array.isArray(parsed.intros) ? parsed.intros : []);
-  const keywordsRaw = []
+  const topicsRaw = []
+    .concat(Array.isArray(parsed.topics) ? parsed.topics : [])
+    .concat(Array.isArray(parsed.hashtags) ? parsed.hashtags : [])
     .concat(Array.isArray(parsed.keywords) ? parsed.keywords : [])
     .concat(Array.isArray(parsed.tags) ? parsed.tags : []);
 
   let titles = sanitizeTitles(titlesRaw);
+  let coverTitles = sanitizeTitles(coverTitlesRaw, 5, 18);
   let descriptions = sanitizeDescriptions(descriptionsRaw);
-  const keywords = sanitizeKeywords(keywordsRaw);
+  let topics = sanitizeKeywords(topicsRaw);
 
   if (!titles.length) {
     titles = sanitizeTitles(buildFallbackPublishTitles(units, analysis));
   }
+  if (!coverTitles.length) {
+    coverTitles = sanitizeTitles(buildFallbackPublishCoverTitles(units, analysis), 5, 18);
+  }
   if (!descriptions.length) {
     descriptions = buildFallbackPublishDescriptions(units, analysis);
+  }
+  if (!topics.length) {
+    topics = buildFallbackPublishTopics(units, analysis);
   }
 
   return {
     titles: titles.slice(0, 10),
+    coverTitles: coverTitles.slice(0, 5),
     descriptions: descriptions.slice(0, 3),
-    keywords,
+    topics,
+    keywords: topics,
     analysis,
   };
 }
@@ -2629,6 +2679,42 @@ function parseJsonFileNoBom(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, ''));
 }
 
+function tryParseJsonFileNoBom(filePath) {
+  try {
+    return { ok: true, value: parseJsonFileNoBom(filePath), error: '' };
+  } catch (err) {
+    return { ok: false, value: null, error: err?.message || String(err) };
+  }
+}
+
+function isValidJianyingDraftContent(content) {
+  return Boolean(
+    content
+    && typeof content === 'object'
+    && !Array.isArray(content)
+    && (
+      Array.isArray(content.tracks)
+      || (content.materials && typeof content.materials === 'object')
+      || content.canvas_config
+      || content.duration
+    ),
+  );
+}
+
+function resolveValidJianyingDraftContentPath(dir) {
+  if (!isDirectorySafe(dir)) return '';
+  const candidates = [
+    path.join(dir, 'draft_content.json'),
+    path.join(dir, 'draft_content.json.bak'),
+  ];
+  for (const candidate of candidates) {
+    if (!fs.existsSync(candidate)) continue;
+    const parsed = tryParseJsonFileNoBom(candidate);
+    if (parsed.ok && isValidJianyingDraftContent(parsed.value)) return candidate;
+  }
+  return '';
+}
+
 function deepClone(value) {
   return JSON.parse(JSON.stringify(value || {}));
 }
@@ -2640,13 +2726,12 @@ function resolveJianyingTemplatePath(input) {
   if (!fs.existsSync(resolved)) return '';
   const stat = fs.statSync(resolved);
   if (stat.isDirectory()) {
-    const candidates = [
-      path.join(resolved, 'draft_content.json'),
-      path.join(resolved, 'draft_content.json.bak'),
-    ];
-    return candidates.find((p) => fs.existsSync(p)) || '';
+    return resolveValidJianyingDraftContentPath(resolved);
   }
-  if (stat.isFile() && path.basename(resolved).toLowerCase() === 'draft_content.json') return resolved;
+  if (stat.isFile() && path.basename(resolved).toLowerCase() === 'draft_content.json') {
+    const parsed = tryParseJsonFileNoBom(resolved);
+    return parsed.ok && isValidJianyingDraftContent(parsed.value) ? resolved : '';
+  }
   return '';
 }
 
@@ -2665,8 +2750,7 @@ function isDirectorySafe(input) {
 
 function looksLikeJianyingDraftDir(dir) {
   if (!isDirectorySafe(dir)) return false;
-  return ['draft_content.json', 'draft_info.json', 'draft_meta_info.json', 'template-2.tmp']
-    .some((name) => fs.existsSync(path.join(dir, name)));
+  return Boolean(resolveValidJianyingDraftContentPath(dir));
 }
 
 function looksLikeJianyingDraftRoot(dir) {
@@ -2713,12 +2797,52 @@ function getConfiguredJianyingDraftRoot() {
   return normalizeExistingDir(process.env.JIANYING_DRAFT_ROOT || '');
 }
 
-function getConfiguredJianyingTemplates() {
+function describeJianyingTemplateCandidate(input) {
+  const raw = String(input || '').trim().replace(/^"|"$/g, '');
+  if (!raw) return null;
+  const resolved = path.resolve(raw);
+  if (!fs.existsSync(resolved)) {
+    return { path: resolved, valid: false, reason: '路径不存在' };
+  }
+  let dir = resolved;
+  try {
+    const stat = fs.statSync(resolved);
+    if (stat.isFile()) dir = path.dirname(resolved);
+  } catch {
+    return { path: resolved, valid: false, reason: '路径不可访问' };
+  }
+  const contentPath = path.join(dir, 'draft_content.json');
+  if (!fs.existsSync(contentPath)) {
+    return { path: dir, valid: false, reason: '缺少 draft_content.json' };
+  }
+  const parsed = tryParseJsonFileNoBom(contentPath);
+  if (!parsed.ok) {
+    return { path: dir, valid: false, reason: 'draft_content.json 不是明文 JSON，可能是新版剪映加密草稿' };
+  }
+  if (!isValidJianyingDraftContent(parsed.value)) {
+    return { path: dir, valid: false, reason: 'draft_content.json 不是可识别的剪映草稿结构' };
+  }
+  return { path: dir, valid: true, reason: '' };
+}
+
+function getConfiguredJianyingTemplateEntries() {
+  const seen = new Set();
   return parseConfiguredPathList(process.env.JIANYING_TEMPLATE_PATHS || '')
-    .map((item) => resolveJianyingTemplateDir(item) || normalizeExistingDir(item))
+    .map(describeJianyingTemplateCandidate)
     .filter(Boolean)
-    .filter((dir, index, list) => list.findIndex((item) => item.toLowerCase() === dir.toLowerCase()) === index)
+    .filter((entry) => {
+      const key = String(entry.path || '').toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
     .slice(0, 5);
+}
+
+function getConfiguredJianyingTemplates() {
+  return getConfiguredJianyingTemplateEntries()
+    .filter((entry) => entry.valid)
+    .map((entry) => entry.path);
 }
 
 function getJianyingDraftRootCandidates(extra = []) {
@@ -2800,10 +2924,14 @@ function uniqueDraftName(baseName, exportRoot) {
 
 function resolveJianyingExportTarget(payload = {}, templateDir = '') {
   const exportMode = String(payload.exportMode || 'auto').toLowerCase();
-  const customRoot = normalizeExistingDir(payload.targetRoot || payload.draftRoot || '');
+  const rawCustomRoot = String(payload.targetRoot || payload.draftRoot || '').trim();
+  const customRoot = normalizeExistingDir(rawCustomRoot);
   const templateRoot = templateDir && looksLikeJianyingDraftDir(templateDir)
     ? path.dirname(templateDir)
     : '';
+  if (String(payload.templatePath || '').trim() && !templateDir) {
+    throw new Error('所选剪映模板无效：请在主设置中重新选择包含有效 draft_content.json 的剪映草稿文件夹。');
+  }
   if (exportMode === 'project') {
     return {
       exportRoot: path.resolve(process.cwd(), JIANYING_DRAFT_EXPORT_DIR_NAME),
@@ -2822,6 +2950,9 @@ function resolveJianyingExportTarget(payload = {}, templateDir = '') {
     if (exportMode === 'custom') {
       return { exportRoot: customRoot, exportRootSource: 'custom-folder', autoPlaced: false, templateDir };
     }
+  }
+  if (exportMode === 'custom' && rawCustomRoot) {
+    throw new Error(`自定义剪映导出目录无效或不可访问：${rawCustomRoot}`);
   }
   if (templateRoot && looksLikeJianyingDraftRoot(templateRoot)) {
     return { exportRoot: templateRoot, exportRootSource: 'template-root', autoPlaced: true, templateDir };
@@ -2847,7 +2978,12 @@ function resolveJianyingExportTarget(payload = {}, templateDir = '') {
 
 function loadJianyingTemplate(templatePath) {
   const contentPath = resolveJianyingTemplatePath(templatePath);
-  if (!contentPath) return null;
+  if (!contentPath) {
+    if (String(templatePath || '').trim()) {
+      throw new Error('所选剪映模板无效：请重新选择包含有效 draft_content.json 的剪映草稿文件夹。');
+    }
+    return null;
+  }
   const content = parseJsonFileNoBom(contentPath);
   const materials = content.materials && typeof content.materials === 'object' ? content.materials : {};
   const textMaterial = Array.isArray(materials.texts) && materials.texts.length
@@ -3037,6 +3173,70 @@ function normalizeCueList(cues) {
     .sort((a, b) => a.start - b.start);
 }
 
+function appendJianyingSubtitleText(base, token) {
+  const left = String(base || '').trim();
+  const right = String(token || '').trim();
+  if (!right) return left;
+  if (!left) return right;
+  if (/^[，。！？；：,.!?;:、）】》"”’]/.test(right)) return left + right;
+  if (/[（【《"“‘]$/.test(left)) return left + right;
+  if (/[\u4e00-\u9fff]$/.test(left) && /^[\u4e00-\u9fff]/.test(right)) return left + right;
+  return `${left} ${right}`;
+}
+
+function buildJianyingSubtitleItems(cues, textStyle = {}) {
+  const normalized = normalizeCueList(cues);
+  const merged = [];
+  for (const cue of normalized) {
+    const start = Number(cue.start);
+    const end = Number(cue.end);
+    const text = String(cue.text || '').trim();
+    if (!text || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+    const last = merged[merged.length - 1];
+    const overlap = last ? last.end - start : 0;
+    const lastDuration = last ? last.end - last.start : 0;
+    const tinyCurrent = end - start < 0.28;
+    const tinyPrevious = lastDuration > 0 && lastDuration < 0.28;
+    const shouldMerge = !!last && overlap > 0.001 && (tinyCurrent || tinyPrevious || text.length <= 2 || last.text.length <= 2);
+    if (shouldMerge) {
+      last.end = Math.max(last.end, end);
+      last.text = appendJianyingSubtitleText(last.text, text);
+    } else {
+      merged.push({ start, end, text });
+    }
+  }
+
+  const items = [];
+  const minReadable = 0.12;
+  const gap = 0.012;
+  for (let i = 0; i < merged.length; i += 1) {
+    const cue = merged[i];
+    let start = Number(cue.start);
+    let end = Number(cue.end);
+    const nextStart = i < merged.length - 1 ? Number(merged[i + 1].start) : Infinity;
+    if (Number.isFinite(nextStart)) {
+      end = Math.min(end, Math.max(start, nextStart - gap));
+    }
+    let duration = end - start;
+    if (duration < minReadable) {
+      if (Number.isFinite(nextStart) && nextStart - start >= 0.05) {
+        duration = nextStart - start - gap;
+      } else if (!Number.isFinite(nextStart)) {
+        duration = minReadable;
+      }
+    }
+    if (duration < 0.05) continue;
+    items.push({
+      ref: `subtitle_${items.length + 1}`,
+      text: String(cue.text || '').trim(),
+      start: Number(start.toFixed(3)),
+      duration: Number(duration.toFixed(3)),
+      ...textStyle,
+    });
+  }
+  return items;
+}
+
 function clampNumber(value, min, max, fallback = min) {
   const num = Number(value);
   if (!Number.isFinite(num)) return fallback;
@@ -3151,17 +3351,27 @@ function textStyleForJianyingPreset(preset) {
 
 function getDraftAssetFilePath(item, kind) {
   const direct = String(item?.filePath || '').trim();
-  if (direct) return direct;
+  if (isUsableMediaFilePath(direct)) return path.resolve(direct);
   const nestedKey = kind === 'video' ? 'video' : 'image';
   return resolveMediaFilePathFromAsset(item?.[nestedKey] || item, kind);
+}
+
+function isUsableMediaFilePath(filePath) {
+  if (!filePath) return false;
+  try {
+    return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
 }
 
 function resolveMediaFilePathFromAsset(asset, kind = '') {
   if (!asset || typeof asset !== 'object') return '';
   const direct = String(asset.filePath || asset.path || '').trim();
-  if (direct && fs.existsSync(direct)) return path.resolve(direct);
+  if (isUsableMediaFilePath(direct)) return path.resolve(direct);
   const url = String(asset.url || asset.imageUrl || asset.videoUrl || '').trim();
   const fileName = String(asset.fileName || '').trim() || (url ? decodeURIComponent(url.split(/[/?#]/).filter(Boolean).pop() || '') : '');
+  if (!fileName) return '';
   const candidates = [];
   const lowerKind = String(kind || '').toLowerCase();
   if (lowerKind === 'image' || url.includes('/image_assets/')) candidates.push(path.join(IMAGE_ASSET_DIR, fileName));
@@ -3173,7 +3383,7 @@ function resolveMediaFilePathFromAsset(asset, kind = '') {
   for (const candidate of candidates) {
     const resolved = path.resolve(candidate);
     const allowed = resolved.startsWith(path.resolve(IMAGE_ASSET_DIR)) || resolved.startsWith(path.resolve(VIDEO_ASSET_DIR));
-    if (allowed && fs.existsSync(resolved)) return resolved;
+    if (allowed && isUsableMediaFilePath(resolved)) return resolved;
   }
   return '';
 }
@@ -3187,7 +3397,7 @@ function collectJianyingMediaItems(payload = {}, kind, deleteSegments) {
   const mapTime = (time) => mapDraftTimeAfterDeletes(time, deleteSegments);
   return sanitized.map((item, index) => {
     const filePath = getDraftAssetFilePath(item, kind);
-    if (!filePath || !fs.existsSync(filePath)) return null;
+    if (!isUsableMediaFilePath(filePath)) return null;
     const originalStart = Number(item.start);
     const originalEnd = Number(item.end);
     if (!Number.isFinite(originalStart) || !Number.isFinite(originalEnd) || originalEnd <= originalStart) return null;
@@ -3253,13 +3463,10 @@ function buildJianyingFullDraftSpec(payload = {}) {
     volume: 0,
     sourceStart: 0,
   }));
-  const textItems = cues.map((cue, index) => ({
-    ref: `subtitle_${index + 1}`,
-    text: String(cue.text || '').trim(),
-    start: Number(Number(cue.start).toFixed(3)),
-    duration: Number(Math.max(0.35, Number(cue.end) - Number(cue.start)).toFixed(3)),
-    ...textStyle,
-  }));
+  const textItems = buildJianyingSubtitleItems(cues, textStyle);
+  if (!textItems.length) {
+    throw new Error('没有可导出的字幕，请检查是否全部内容都被标记删除。');
+  }
   const tracks = [
     { type: 'video', name: 'Jaygo Cut 主视频', items: mainVideoItems },
   ];
@@ -3316,28 +3523,151 @@ function runCapcutCliCompile(specPath, draftDir, templateDir = '') {
   };
 }
 
+function isDraftPlacementPermissionError(err) {
+  const text = `${err?.code || ''}\n${err?.message || err || ''}`;
+  return /\b(EPERM|EACCES|EBUSY|ENOTEMPTY)\b/i.test(text) || /operation not permitted|permission denied|being used|占用|拒绝访问/i.test(text);
+}
+
+function copyDirectoryIntoPlace(sourceDir, finalDir) {
+  const resolvedSource = path.resolve(sourceDir);
+  const resolvedFinal = path.resolve(finalDir);
+  if (!isDirectorySafe(resolvedSource)) {
+    throw new Error(`Draft staging directory is missing: ${resolvedSource}`);
+  }
+  const finalRoot = path.dirname(resolvedFinal);
+  fs.mkdirSync(finalRoot, { recursive: true });
+  const tempDir = path.join(finalRoot, `.${path.basename(resolvedFinal)}.jaygo_tmp_${Date.now()}_${process.pid}`);
+  fs.rmSync(tempDir, { recursive: true, force: true });
+  try {
+    fs.cpSync(resolvedSource, tempDir, { recursive: true, force: true });
+    fs.rmSync(resolvedFinal, { recursive: true, force: true });
+    fs.renameSync(tempDir, resolvedFinal);
+  } catch (err) {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    throw err;
+  }
+}
+
+function uniquePathVariants(inputPath) {
+  const raw = String(inputPath || '');
+  if (!raw) return [];
+  const normalized = path.resolve(raw);
+  const variants = new Set([
+    raw,
+    normalized,
+    raw.replace(/\//g, '\\'),
+    raw.replace(/\\/g, '/'),
+    normalized.replace(/\//g, '\\'),
+    normalized.replace(/\\/g, '/'),
+  ]);
+  for (const value of Array.from(variants)) {
+    variants.add(value.replace(/\\/g, '\\\\'));
+    variants.add(value.replace(/\//g, '\\/'));
+  }
+  return Array.from(variants).filter(Boolean).sort((a, b) => b.length - a.length);
+}
+
+function rewriteDraftPathReferences(draftDir, fromPath, toPath) {
+  const root = path.resolve(draftDir || '');
+  if (!isDirectorySafe(root)) return 0;
+  const fromVariants = uniquePathVariants(fromPath);
+  const toVariants = uniquePathVariants(toPath);
+  if (!fromVariants.length || !toVariants.length) return 0;
+  let changedFiles = 0;
+  const stack = [root];
+  while (stack.length) {
+    const current = stack.pop();
+    let entries = [];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+        continue;
+      }
+      if (!/\.(json|txt)$/i.test(entry.name)) continue;
+      let content = '';
+      try {
+        content = fs.readFileSync(fullPath, 'utf8');
+      } catch {
+        continue;
+      }
+      let next = content;
+      for (let i = 0; i < fromVariants.length; i += 1) {
+        const from = fromVariants[i];
+        const to = toVariants[Math.min(i, toVariants.length - 1)] || toVariants[0];
+        if (!from || from === to || !next.includes(from)) continue;
+        next = next.split(from).join(to);
+      }
+      if (next !== content) {
+        fs.writeFileSync(fullPath, next, 'utf8');
+        changedFiles += 1;
+      }
+    }
+  }
+  return changedFiles;
+}
+
 function writeJianyingFullDraft(payload = {}) {
   const { spec, stats } = buildJianyingFullDraftSpec(payload);
   const templateDir = resolveJianyingTemplateDir(payload.templatePath);
   const target = resolveJianyingExportTarget(payload, templateDir);
-  const exportRoot = path.resolve(target.exportRoot);
-  fs.mkdirSync(exportRoot, { recursive: true });
-  const draftName = uniqueDraftName(spec.name, exportRoot);
-  spec.name = draftName;
-  const draftDir = path.join(exportRoot, draftName);
   const specDir = path.join(path.resolve(process.cwd(), JIANYING_DRAFT_EXPORT_DIR_NAME), '_specs');
-  const specPath = path.join(specDir, `${draftName}.json`);
+  const stagingRoot = path.join(path.resolve(process.cwd(), JIANYING_DRAFT_EXPORT_DIR_NAME), '_staging');
   fs.mkdirSync(specDir, { recursive: true });
-  fs.writeFileSync(specPath, `${JSON.stringify(spec, null, 2)}\n`, 'utf8');
-  const cliResult = runCapcutCliCompile(specPath, draftDir, target.templateDir);
-  fs.copyFileSync(specPath, path.join(draftDir, 'jaygo_cut_full_draft_spec.json'));
+  fs.mkdirSync(stagingRoot, { recursive: true });
+  const baseDraftName = spec.name;
+  const compileToRoot = (root) => {
+    const exportRoot = path.resolve(root);
+    fs.mkdirSync(exportRoot, { recursive: true });
+    const draftName = uniqueDraftName(baseDraftName, exportRoot);
+    spec.name = draftName;
+    const draftDir = path.join(exportRoot, draftName);
+    const stagingDraftDir = path.join(stagingRoot, `${draftName}_${Date.now()}_${process.pid}`);
+    const specPath = path.join(specDir, `${draftName}.json`);
+    fs.writeFileSync(specPath, `${JSON.stringify(spec, null, 2)}\n`, 'utf8');
+    fs.rmSync(stagingDraftDir, { recursive: true, force: true });
+    let cliResult;
+    try {
+      cliResult = runCapcutCliCompile(specPath, stagingDraftDir, target.templateDir);
+      fs.copyFileSync(specPath, path.join(stagingDraftDir, 'jaygo_cut_full_draft_spec.json'));
+      rewriteDraftPathReferences(stagingDraftDir, stagingDraftDir, draftDir);
+      copyDirectoryIntoPlace(stagingDraftDir, draftDir);
+    } finally {
+      fs.rmSync(stagingDraftDir, { recursive: true, force: true });
+    }
+    return { exportRoot, draftName, draftDir, specPath, cliResult };
+  };
+
+  let compiled;
+  let placementFailed = false;
+  let placementError = '';
+  try {
+    compiled = compileToRoot(target.exportRoot);
+  } catch (err) {
+    if (!target.autoPlaced || !isDraftPlacementPermissionError(err)) throw err;
+    placementFailed = true;
+    placementError = err?.message || String(err);
+    const fallbackRoot = path.resolve(process.cwd(), JIANYING_DRAFT_EXPORT_DIR_NAME);
+    compiled = compileToRoot(fallbackRoot);
+  }
+
+  const { exportRoot, draftName, draftDir, specPath, cliResult } = compiled;
+  const autoPlaced = target.autoPlaced && !placementFailed;
+  const exportRootSource = placementFailed ? 'project-fallback-locked' : target.exportRootSource;
   fs.writeFileSync(path.join(draftDir, 'README_JaygoCut.txt'), [
     'Jaygo Cut 完整剪映草稿导出说明',
     '',
     '1. 这个文件夹包含主视频轨、字幕轨，以及已生成的图片/视频素材轨。',
-    target.autoPlaced
+    autoPlaced
       ? '2. 草稿已直接写入剪映/CapCut 草稿目录，打开剪映即可在项目列表中看到；如果剪映已打开，必要时请重启剪映刷新列表。'
-      : '2. 草稿已导出到当前项目目录，请将整个草稿文件夹复制到剪映草稿目录后打开。',
+      : (placementFailed
+        ? '2. 自动写入剪映草稿目录失败，通常是剪映正在运行或草稿目录被占用；本次已保留完整草稿到当前项目目录。请关闭剪映后再复制整个文件夹到剪映草稿目录。'
+        : '2. 草稿已导出到当前项目目录，请将整个草稿文件夹复制到剪映草稿目录后打开。'),
     target.templateDir
       ? '3. 本草稿基于你选择的模板草稿生成了一个新草稿，原模板不会被覆盖。'
       : '3. 未选择模板草稿，已使用 Jaygo Cut 默认草稿结构。',
@@ -3349,7 +3679,8 @@ function writeJianyingFullDraft(payload = {}) {
     `图片素材：${stats.imageAssets}`,
     `视频素材：${stats.videoAssets}`,
     `导出根目录：${exportRoot}`,
-    `导出方式：${target.exportRootSource}`,
+    `导出方式：${exportRootSource}`,
+    placementFailed ? `自动放入失败原因：${placementError}` : '',
   ].join('\r\n'), 'utf8');
   return {
     fullDraft: true,
@@ -3358,13 +3689,17 @@ function writeJianyingFullDraft(payload = {}) {
     draftName,
     specPath,
     exportRoot,
-    exportRootSource: target.exportRootSource,
-    autoPlaced: target.autoPlaced,
+    exportRootSource,
+    autoPlaced,
+    placementFailed,
+    placementError,
     templateUsed: Boolean(target.templateDir),
     templatePath: target.templateDir,
-    compatibilityNote: target.autoPlaced
+    compatibilityNote: autoPlaced
       ? '完整草稿已写入剪映/CapCut 草稿目录；若项目列表未刷新，请重启剪映。'
-      : '完整草稿依赖剪映/CapCut 草稿格式兼容性；如新版剪映无法识别，请使用 SRT 或字幕草稿兜底。',
+      : (placementFailed
+        ? '剪映草稿目录被占用，已改为导出完整草稿到项目目录；关闭剪映后可手动复制到剪映草稿目录。'
+        : '完整草稿依赖剪映/CapCut 草稿格式兼容性；如新版剪映无法识别，请使用 SRT 或字幕草稿兜底。'),
     cliStdout: cliResult.stdout,
     cliStderr: cliResult.stderr,
     ...stats,
@@ -3373,17 +3708,7 @@ function writeJianyingFullDraft(payload = {}) {
 
 function writeJianyingDraftExport(payload = {}) {
   if (payload.fullDraft) {
-    try {
-      return writeJianyingFullDraft(payload);
-    } catch (err) {
-      const fallback = writeJianyingDraft({ ...payload, fullDraft: false });
-      return {
-        ...fallback,
-        fullDraft: false,
-        fallbackUsed: true,
-        fallbackReason: err.message || String(err),
-      };
-    }
+    return writeJianyingFullDraft(payload);
   }
   return writeJianyingDraft(payload);
 }
@@ -3799,6 +4124,388 @@ function sanitizeMediaActions(actions) {
     out.push(item);
   }
   return out;
+}
+
+const PROOFREAD_CHAR_ALIASES = new Map(Object.entries({
+  妳: '你',
+  祂: '他',
+  她: '他',
+  它: '他',
+  牠: '他',
+  地: '的',
+  得: '的',
+  再: '在',
+  做: '作',
+  像: '象',
+}));
+
+function normalizeProofreadComparable(input) {
+  return String(input || '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[\s\p{P}\p{S}]/gu, '')
+    .split('')
+    .map((ch) => PROOFREAD_CHAR_ALIASES.get(ch) || ch)
+    .join('');
+}
+
+function bigramsOf(text) {
+  const value = String(text || '');
+  if (value.length <= 1) return value ? [value] : [];
+  const out = [];
+  for (let i = 0; i < value.length - 1; i += 1) out.push(value.slice(i, i + 2));
+  return out;
+}
+
+function proofreadTextSimilarity(left, right) {
+  const a = normalizeProofreadComparable(left);
+  const b = normalizeProofreadComparable(right);
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const charsA = new Set(a.split(''));
+  const charsB = new Set(b.split(''));
+  let charOverlap = 0;
+  charsA.forEach((ch) => {
+    if (charsB.has(ch)) charOverlap += 1;
+  });
+  const charScore = charOverlap / Math.max(1, Math.min(charsA.size, charsB.size));
+
+  const gramsA = bigramsOf(a);
+  const gramsB = bigramsOf(b);
+  const counts = new Map();
+  gramsA.forEach((gram) => counts.set(gram, (counts.get(gram) || 0) + 1));
+  let gramOverlap = 0;
+  gramsB.forEach((gram) => {
+    const count = counts.get(gram) || 0;
+    if (count > 0) {
+      gramOverlap += 1;
+      counts.set(gram, count - 1);
+    }
+  });
+  const gramScore = (2 * gramOverlap) / Math.max(1, gramsA.length + gramsB.length);
+  const lengthBalance = Math.min(a.length, b.length) / Math.max(a.length, b.length);
+  return Number((gramScore * 0.5 + charScore * 0.35 + lengthBalance * 0.15).toFixed(4));
+}
+
+function splitOriginalProofreadText(originalText) {
+  return String(originalText || '')
+    .split(/[\r\n。！？!?；;]+/)
+    .map((part) => part.trim())
+    .filter((part) => normalizeProofreadComparable(part).length >= 4)
+    .slice(0, 40);
+}
+
+function buildProofreadCandidates(units, originalText) {
+  const originals = splitOriginalProofreadText(originalText);
+  const safeUnits = Array.isArray(units) ? units : [];
+  const candidates = [];
+  for (let originalIndex = 0; originalIndex < originals.length; originalIndex += 1) {
+    const original = originals[originalIndex];
+    const originalComparable = normalizeProofreadComparable(original);
+    const threshold = originalComparable.length <= 10 ? 0.62 : 0.50;
+    const scored = [];
+    for (let i = 0; i < safeUnits.length; i += 1) {
+      let recognized = '';
+      for (let span = 1; span <= 3 && i + span <= safeUnits.length; span += 1) {
+        recognized = joinWordTokens(safeUnits.slice(i, i + span).map((unit) => unit.text));
+        const score = proofreadTextSimilarity(original, recognized);
+        if (score >= threshold) {
+          const first = safeUnits[i];
+          const last = safeUnits[i + span - 1];
+          scored.push({
+            id: 0,
+            originalId: originalIndex + 1,
+            original,
+            recognized,
+            unitIds: safeUnits.slice(i, i + span).map((unit) => unit.id),
+            startIndex: first.startIndex,
+            endIndex: last.endIndex,
+            score,
+          });
+        }
+      }
+    }
+    scored
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 4)
+      .forEach((item) => candidates.push({ ...item, id: candidates.length + 1 }));
+  }
+  return candidates.slice(0, 80);
+}
+
+function buildOriginalProofreadPrompt(candidates, originalText) {
+  const candidateText = (Array.isArray(candidates) ? candidates : [])
+    .map((item) => JSON.stringify({
+      candidateId: item.id,
+      originalId: item.originalId,
+      similarity: item.score,
+      startIndex: item.startIndex,
+      endIndex: item.endIndex,
+      recognized: item.recognized,
+      original: item.original,
+    }))
+    .join('\n');
+  return [
+    '你是中文口播转写校对助手。请对比“识别稿”和“用户提供的原文”，只找出识别错误。',
+    '重点纠正：人名、地名、品牌名、专有名词、数字、同音错字、以及“他/她/它”的指代错误。',
+    '不要润色，不要改写语序，不要新增内容，不要删除口播中真实存在但原文没有的口头表达；只在能从原文明确判断时纠正。',
+    '系统已经先做过句子相似度匹配。你只能在下方候选句里校对，严禁修改候选句之外的任何内容。',
+    '如果用户只提供了一句话，只能修正与这句话高度相似的候选句；没有把握就返回空 corrections。',
+    '返回严格 JSON，不要 Markdown：{"corrections":[{"candidateId":数字,"startIndex":数字,"endIndex":数字,"from":"识别稿原词","to":"正确文字","reason":"简短中文理由"}],"summary":"中文摘要"}',
+    'startIndex/endIndex 必须落在候选句的 startIndex/endIndex 范围内。每条 to 建议不超过 30 个汉字。',
+    '',
+    '候选句如下，每行是一个 JSON 对象：',
+    candidateText || '(没有足够相似的候选句，请返回空 corrections)',
+    '',
+    '用户提供的原文：',
+    String(originalText || '').slice(0, 16000),
+  ].join('\n');
+}
+
+function findPhraseRangeInWords(words, candidate, phrase) {
+  const target = normalizeProofreadComparable(phrase);
+  if (!target || !candidate || !Array.isArray(words)) return null;
+  const start = Math.max(0, Number(candidate.startIndex) || 0);
+  const end = Math.min(words.length - 1, Number(candidate.endIndex) || 0);
+  for (let i = start; i <= end; i += 1) {
+    let combined = '';
+    for (let j = i; j <= end && j < i + 24; j += 1) {
+      combined = joinWordTokens([combined, words[j]?.text || '']);
+      const normalized = normalizeProofreadComparable(combined);
+      if (normalized === target) return { startIndex: i, endIndex: j };
+      if (normalized.length > target.length + 4) break;
+    }
+  }
+  return null;
+}
+
+function sanitizeProofreadCorrections(parsed, candidates, words = []) {
+  const source = Array.isArray(parsed?.corrections)
+    ? parsed.corrections
+    : Array.isArray(parsed?.items)
+      ? parsed.items
+      : [];
+  const candidateById = new Map((Array.isArray(candidates) ? candidates : []).map((item) => [Number(item.id), item]));
+  const out = [];
+  for (const raw of source.slice(0, 120)) {
+    const id = Number(raw?.candidateId ?? raw?.candidate_id ?? raw?.id ?? raw?.unitId ?? raw?.unit_id);
+    const candidate = candidateById.get(id);
+    if (!candidate) continue;
+    let startIndex = Number(raw?.startIndex ?? raw?.start_index);
+    let endIndex = Number(raw?.endIndex ?? raw?.end_index);
+    const from = String(raw?.from || '').trim().slice(0, 80);
+    if ((!Number.isInteger(startIndex) || !Number.isInteger(endIndex)) && from) {
+      const found = findPhraseRangeInWords(words, candidate, from);
+      if (found) {
+        startIndex = found.startIndex;
+        endIndex = found.endIndex;
+      }
+    }
+    if (!Number.isInteger(startIndex) || !Number.isInteger(endIndex)) continue;
+    if (endIndex < startIndex) [startIndex, endIndex] = [endIndex, startIndex];
+    if (startIndex < candidate.startIndex || endIndex > candidate.endIndex) continue;
+    const to = String(raw?.to ?? raw?.correct ?? raw?.replacement ?? '').trim().slice(0, 80);
+    if (!to) continue;
+    if (to.length > 30 || endIndex - startIndex > 12) continue;
+    const originalComparable = normalizeProofreadComparable(candidate.original);
+    const toComparable = normalizeProofreadComparable(to);
+    if (toComparable && !originalComparable.includes(toComparable)) continue;
+    if (from) {
+      const targetText = joinWordTokens(words.slice(startIndex, endIndex + 1).map((word) => word?.text || ''));
+      if (targetText && proofreadTextSimilarity(targetText, from) < 0.55) continue;
+    }
+    out.push({
+      startIndex,
+      endIndex,
+      from,
+      to,
+      reason: String(raw?.reason || '').trim().slice(0, 120),
+    });
+  }
+  return out;
+}
+
+function getSingleReplacementDiff(original, recognized) {
+  const source = normalizeProofreadComparable(recognized);
+  const target = normalizeProofreadComparable(original);
+  if (!source || !target || source === target) return null;
+  let prefix = 0;
+  while (prefix < source.length && prefix < target.length && source[prefix] === target[prefix]) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  while (
+    suffix < source.length - prefix
+    && suffix < target.length - prefix
+    && source[source.length - 1 - suffix] === target[target.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
+  const from = source.slice(prefix, source.length - suffix);
+  const to = target.slice(prefix, target.length - suffix);
+  if (!from || !to) return null;
+  if (from.length > 6 || to.length > 6) return null;
+  if (Math.abs(from.length - to.length) > 2) return null;
+  return { from, to };
+}
+
+function buildSentenceDiffProofreadCorrections(candidates, words = []) {
+  const out = [];
+  for (const candidate of Array.isArray(candidates) ? candidates : []) {
+    const diff = getSingleReplacementDiff(candidate.original, candidate.recognized);
+    if (!diff) continue;
+    const found = findPhraseRangeInWords(words, candidate, diff.from);
+    if (!found) continue;
+    out.push({
+      candidateId: candidate.id,
+      startIndex: found.startIndex,
+      endIndex: found.endIndex,
+      from: diff.from,
+      to: diff.to,
+      reason: '根据原文相似句定位到同音或近形识别错误',
+    });
+  }
+  return out;
+}
+
+const COMMON_CHINESE_SURNAMES = '赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜谢邹喻柏水窦章云苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳鲍史唐费廉岑薛雷贺倪汤滕殷罗毕郝邬安常乐于时傅皮卞齐康伍余元卜顾孟平黄和穆萧尹';
+
+function extractOriginalProperNames(originalText) {
+  const text = normalizeProofreadComparable(originalText);
+  const names = new Set();
+  for (let i = 0; i < text.length; i += 1) {
+    const first = text[i];
+    if (!COMMON_CHINESE_SURNAMES.includes(first)) continue;
+    for (let len = 2; len <= 4 && i + len <= text.length; len += 1) {
+      const name = text.slice(i, i + len);
+      if (/^[\u4e00-\u9fff]{2,4}$/.test(name)) names.add(name);
+    }
+  }
+  return Array.from(names).filter((name) => name.length >= 2).slice(0, 40);
+}
+
+function properNameSimilarity(expected, actual) {
+  const a = normalizeProofreadComparable(expected);
+  const b = normalizeProofreadComparable(actual);
+  if (!a || !b || a.length !== b.length || a === b) return 0;
+  let samePosition = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] === b[i]) samePosition += 1;
+  }
+  let overlap = 0;
+  const used = new Set();
+  for (const ch of a) {
+    const idx = b.split('').findIndex((item, pos) => item === ch && !used.has(pos));
+    if (idx >= 0) {
+      used.add(idx);
+      overlap += 1;
+    }
+  }
+  const surnameBonus = a[0] === b[0] ? 0.12 : 0;
+  return (samePosition / a.length) * 0.65 + (overlap / a.length) * 0.23 + surnameBonus;
+}
+
+function buildProperNameProofreadCorrections(words = [], originalText = '') {
+  const names = extractOriginalProperNames(originalText);
+  if (!names.length || !Array.isArray(words) || !words.length) return [];
+  const out = [];
+  for (const name of names) {
+    const len = name.length;
+    for (let i = 0; i + len <= words.length && out.length < 80; i += 1) {
+      const slice = words.slice(i, i + len);
+      if (slice.some((word) => word?.isGap)) continue;
+      const actual = normalizeProofreadComparable(joinWordTokens(slice.map((word) => word?.text || '')));
+      if (!actual || actual === name || actual.length !== len) continue;
+      if (properNameSimilarity(name, actual) < 0.66) continue;
+      out.push({
+        startIndex: i,
+        endIndex: i + len - 1,
+        from: actual,
+        to: name,
+        reason: '根据原文人名统一纠正近似识别结果',
+      });
+    }
+  }
+  return out;
+}
+
+function mergeProofreadCorrections(corrections = []) {
+  const seen = new Set();
+  const candidates = [];
+  for (const item of corrections) {
+    const startIndex = Number(item?.startIndex);
+    const endIndex = Number(item?.endIndex);
+    const to = String(item?.to || '').trim();
+    if (!Number.isInteger(startIndex) || !Number.isInteger(endIndex) || !to) continue;
+    const key = `${startIndex}:${endIndex}:${to}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push({
+      startIndex,
+      endIndex,
+      from: String(item?.from || '').trim(),
+      to,
+      reason: String(item?.reason || '').trim(),
+    });
+  }
+  const occupied = new Set();
+  const out = [];
+  candidates
+    .sort((a, b) => a.startIndex - b.startIndex || (b.endIndex - b.startIndex) - (a.endIndex - a.startIndex))
+    .forEach((item) => {
+      for (let i = item.startIndex; i <= item.endIndex; i += 1) {
+        if (occupied.has(i)) return;
+      }
+      for (let i = item.startIndex; i <= item.endIndex; i += 1) occupied.add(i);
+      out.push(item);
+    });
+  return out.sort((a, b) => a.startIndex - b.startIndex || a.endIndex - b.endIndex).slice(0, 120);
+}
+
+async function runOriginalProofread(words, config, originalText) {
+  const text = String(originalText || '').trim();
+  if (normalizeProofreadComparable(text).length < 4) {
+    throw new Error('请先粘贴至少 4 个有效文字后再校对');
+  }
+  const units = buildTranscriptUnits(words);
+  if (!units.length) {
+    throw new Error('转录内容为空，无法执行原文校对');
+  }
+  const candidates = buildProofreadCandidates(units, text);
+  const deterministic = mergeProofreadCorrections([
+    ...sanitizeProofreadCorrections(
+      { corrections: buildSentenceDiffProofreadCorrections(candidates, words) },
+      candidates,
+      words,
+    ),
+    ...buildProperNameProofreadCorrections(words, text),
+  ]);
+  if (!candidates.length) {
+    return {
+      corrections: deterministic,
+      summary: deterministic.length
+        ? `已根据专有名词规则修正 ${deterministic.length} 处疑似错误`
+        : '没有找到与原文足够相似的句子，未执行替换',
+    };
+  }
+  let aiCorrections = [];
+  let summary = '';
+  try {
+    const raw = await callLlmProvider(config, buildOriginalProofreadPrompt(candidates, text));
+    const parsed = extractJsonObject(raw);
+    if (!parsed) {
+      throw new Error('AI 未返回可用的校对结果');
+    }
+    aiCorrections = sanitizeProofreadCorrections(parsed, candidates, words);
+    summary = String(parsed.summary || parsed.note || '').trim().slice(0, 160);
+  } catch (err) {
+    if (!deterministic.length) throw err;
+    summary = `AI 校对失败，已应用本地确定性修正 ${deterministic.length} 处：${err.message || String(err)}`;
+  }
+  return {
+    corrections: mergeProofreadCorrections([...deterministic, ...aiCorrections]),
+    summary,
+  };
 }
 
 async function runLlmMarking(words, config) {
@@ -4239,7 +4946,7 @@ function sanitizeReviewMediaItems(items, kind) {
       ? 'queued'
       : (['queued', 'generating', 'done', 'error'].includes(rawStatus) ? rawStatus : '');
     const error = rawStatus === 'generating' && !hasGeneratedAsset
-      ? '?????????????'
+      ? '上次生成中断，已重置为可重试'
       : String(item?.error || '').slice(0, 500);
     return {
       id: String(item?.id || '').replace(/[^\w-]/g, '_').slice(0, 48),
@@ -4472,7 +5179,7 @@ function resolveStaticPath(urlPathname) {
 }
 
 function getReviewHtmlCompatibilityPatch() {
-  return '<script id="jaygo-compat-build-time-mapper">\n'
+  return '<script id="jaygo-compat-review-export-helpers">\n'
     + '(function(){\n'
     + '  if (typeof window.buildTimeMapper !== "function") {\n'
     + '    window.buildTimeMapper = function(deleteSegments) {\n'
@@ -4499,15 +5206,78 @@ function getReviewHtmlCompatibilityPatch() {
     + '      };\n'
     + '    };\n'
     + '  }\n'
+    + '  if (typeof window.appendSubtitleToken !== "function") {\n'
+    + '    window.appendSubtitleToken = function(base, token) {\n'
+    + '      var left = String(base || "").trim();\n'
+    + '      var right = String(token || "").trim();\n'
+    + '      if (!right) return left;\n'
+    + '      if (!left) return right;\n'
+    + '      if (/^[\\uFF0C\\u3002\\uFF01\\uFF1F\\uFF1B\\uFF1A,.!?;:\\u3001\\uFF09\\u3011\\u300B"\\\'\\u201D\\u2019]/.test(right)) return left + right;\n'
+    + '      if (/[\\uFF08\\u3010\\u300A"\\\'\\u201C\\u2018]$/.test(left)) return left + right;\n'
+    + '      if (/[\\u4e00-\\u9fff]$/.test(left) && /^[\\u4e00-\\u9fff]/.test(right)) return left + right;\n'
+    + '      return left + " " + right;\n'
+    + '    };\n'
+    + '  }\n'
+    + '  window.stripSubtitlePunctuation = function(text) {\n'
+    + '    return String(text || "").replace(/[\\uFF0C\\u3002\\uFF01\\uFF1F\\uFF1B\\uFF1A,.!?;:\\u3001]/g, "").replace(/\\s+/g, " ").trim();\n'
+    + '  };\n'
+    + '  window.shouldBreakSubtitleCue = function(index, text, start, end, next) {\n'
+    + '      var raw = String(text || "").trim();\n'
+    + '      var content = window.stripSubtitlePunctuation(raw);\n'
+    + '      if (!next) return true;\n'
+    + '      if (/[\\uFF0C,\\u3002\\uFF01\\uFF1F\\uFF1B\\uFF1A.!?;:]$/.test(raw)) return true;\n'
+    + '      if (typeof window.shouldParagraphBreakAfter === "function" && window.shouldParagraphBreakAfter(index) && content.length >= 2) return true;\n'
+    + '      return content.length >= 28;\n'
+    + '  };\n'
+    + '  window.normalizeExportCuesForSingleTrack = function(cues) {\n'
+    + '    var raw = (Array.isArray(cues) ? cues : []).map(function(cue){ return { start: Math.max(0, Number(cue && cue.start) || 0), end: Math.max(0, Number(cue && cue.end) || 0), text: window.stripSubtitlePunctuation(String((cue && cue.text) || "").trim()) }; })\n'
+    + '      .filter(function(cue){ return cue.text && cue.end > cue.start; }).sort(function(a,b){ return a.start - b.start; });\n'
+    + '    var merged = [];\n'
+    + '    raw.forEach(function(cue){\n'
+    + '      var last = merged[merged.length - 1];\n'
+    + '      var overlap = last ? last.end - cue.start : 0;\n'
+    + '      var cueDuration = cue.end - cue.start;\n'
+    + '      var lastDuration = last ? last.end - last.start : 0;\n'
+    + '      var mustMergeTinyOverlap = !!last && overlap > 0.001 && (cueDuration < 0.12 || lastDuration < 0.12) && (cue.text.length <= 2 || last.text.length <= 2);\n'
+    + '      if (mustMergeTinyOverlap) { last.end = Math.max(last.end, cue.end); last.text = window.appendSubtitleToken(last.text, cue.text); }\n'
+    + '      else merged.push({ start: cue.start, end: cue.end, text: cue.text });\n'
+    + '    });\n'
+    + '    var out = [];\n'
+    + '    var gap = 0.012;\n'
+    + '    for (var i = 0; i < merged.length; i += 1) {\n'
+    + '      var cue = merged[i];\n'
+    + '      var nextStart = i < merged.length - 1 ? merged[i + 1].start : Infinity;\n'
+    + '      var end = cue.end;\n'
+    + '      if (Number.isFinite(nextStart)) end = Math.min(end, Math.max(cue.start, nextStart - gap));\n'
+    + '      if (end - cue.start < 0.05) { if (out.length) out[out.length - 1].text = window.appendSubtitleToken(out[out.length - 1].text, cue.text); continue; }\n'
+    + '      out.push({ start: Number(cue.start.toFixed(3)), end: Number(end.toFixed(3)), text: cue.text });\n'
+    + '    }\n'
+    + '    return out;\n'
+    + '  };\n'
+    + '  try {\n'
+    + '    [\"btnShowDeleteDiagnostics\", \"btnCopyDiagnostics\", \"deleteDiagnosticsPanel\"].forEach(function(id) {\n'
+    + '      var el = document.getElementById(id);\n'
+    + '      if (el && el.parentNode) el.parentNode.removeChild(el);\n'
+    + '    });\n'
+    + '  } catch (err) {}\n'
     + '}());\n'
     + '</script>\n';
 }
 
 function injectReviewHtmlCompatibility(html) {
   const body = String(html || '');
-  if (!body.includes('buildExportCues') || body.includes('function buildTimeMapper') || body.includes('jaygo-compat-build-time-mapper')) {
+  if (!body.includes('buildExportCues') || body.includes('jaygo-compat-review-export-helpers')) {
     return body;
   }
+  const needsPatch = !body.includes('function buildTimeMapper')
+    || !body.includes('function appendSubtitleToken')
+    || !body.includes('function shouldBreakSubtitleCue')
+    || !body.includes('stripSubtitlePunctuation')
+    || body.includes('duration >= 3.8')
+    || body.includes('duration >= 2.8')
+    || body.includes('btnShowDeleteDiagnostics')
+    || body.includes('deleteDiagnosticsPanel');
+  if (!needsPatch) return body;
   const patch = getReviewHtmlCompatibilityPatch();
   if (body.includes('</body>')) return body.replace('</body>', patch + '</body>');
   return body + patch;
@@ -4726,6 +5496,24 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'POST' && pathname === '/api/llm-proofread-original') {
+      const config = getLlmConfig();
+      if (!config.ready) {
+        throw new Error(`LLM 配置不完整：缺少 ${config.missing.join(', ')}`);
+      }
+      const body = await readBody(req);
+      const payload = JSON.parse(body || '{}');
+      const words = Array.isArray(payload.words) ? payload.words : [];
+      if (!words.length) {
+        throw new Error('words 为空，无法执行原文校对');
+      }
+      appendCutLog(`Original proofread started: provider=${config.provider}, model=${config.model}, words=${words.length}`);
+      const result = await runOriginalProofread(words, config, payload.originalText);
+      appendCutLog(`Original proofread finished: corrections=${result.corrections.length}`);
+      writeJson(res, 200, { success: true, ...result });
+      return;
+    }
+
     if (req.method === 'POST' && pathname === '/api/llm-publish-suggestions') {
       const config = getLlmConfig();
       if (!config.ready) {
@@ -4880,10 +5668,13 @@ const server = http.createServer(async (req, res) => {
       }
       const ext = imageExtFromContentType(match[1]);
       const saved = await saveImageBuffer(buffer, item.id || path.basename(filename, path.extname(filename)) || 'local-image', ext);
+      const targetSize = normalizeImageSize(payload.aspectRatio || item.aspectRatio || item.size || '16:9');
       const nextItem = {
         ...item,
         source: 'local-upload',
         prompt: item.prompt || `Local uploaded image: ${filename}`,
+        aspectRatio: payload.aspectRatio || item.aspectRatio || '16:9',
+        size: targetSize,
       };
       appendCutLog(`Local image imported: ${saved.fileName}`);
       writeJson(res, 200, {
@@ -4892,7 +5683,7 @@ const server = http.createServer(async (req, res) => {
         image: {
           ...saved,
           model: 'local-upload',
-          size: normalizeImageSize(payload.aspectRatio || item.aspectRatio || '16:9'),
+          size: targetSize,
           sourceFileName: filename,
         },
       });
@@ -4965,30 +5756,41 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && pathname === '/api/jianying-draft-targets') {
       const configuredRoot = getConfiguredJianyingDraftRoot();
-      const configuredTemplates = getConfiguredJianyingTemplates().map((dir, index) => ({
-        name: `模板${index + 1}: ${path.basename(dir) || dir}`,
-        path: dir,
+      const templateEntries = getConfiguredJianyingTemplateEntries();
+      const configuredTemplates = templateEntries.filter((entry) => entry.valid).map((entry, index) => ({
+        name: `\u6a21\u677f${index + 1}: ${path.basename(entry.path) || entry.path}`,
+        path: entry.path,
         modified: 0,
         modifiedText: '',
         source: 'settings',
       }));
-      const roots = findJianyingDraftRoots(configuredRoot ? [configuredRoot] : []);
-      const detectedRoot = roots[0]?.path || '';
-      const autoDrafts = detectedRoot ? listJianyingDrafts(detectedRoot).slice(0, 80) : [];
+      const invalidTemplates = templateEntries.filter((entry) => !entry.valid).map((entry, index) => ({
+        name: `\u6a21\u677f${index + 1}: ${path.basename(entry.path) || entry.path}`,
+        path: entry.path,
+        reason: entry.reason || '模板不可用',
+        source: 'settings',
+      }));
+      const detectedRoot = findJianyingDraftRoots(configuredRoot ? [configuredRoot] : [])[0]?.path || '';
+      const roots = configuredRoot ? [{
+        path: configuredRoot,
+        label: looksLikeJianyingDraftRoot(configuredRoot) ? '\u8bbe\u7f6e\u7684\u526a\u6620\u8349\u7a3f\u76ee\u5f55' : '\u8bbe\u7f6e\u7684\u81ea\u5b9a\u4e49\u5bfc\u51fa\u76ee\u5f55',
+        source: 'settings',
+      }] : [];
       const seenDrafts = new Set();
-      const drafts = [...configuredTemplates, ...autoDrafts]
+      const drafts = configuredTemplates
         .filter((item) => {
           const key = String(item.path || '').toLowerCase();
           if (!key || seenDrafts.has(key)) return false;
           seenDrafts.add(key);
           return true;
         })
-        .slice(0, 80);
+        .slice(0, 5);
       writeJson(res, 200, {
         success: true,
         detectedRoot,
         configuredRoot,
         configuredTemplates,
+        invalidTemplates,
         roots,
         drafts,
       });
@@ -5119,11 +5921,24 @@ if (process.env.JAYGO_CUT_TEST_EXPORTS === '1') {
     resolveReferenceImageInputs,
     buildLlmPrompt,
     buildChatAdjustPrompt,
+    buildOriginalProofreadPrompt,
+    buildProofreadCandidates,
+    sanitizeProofreadCorrections,
+    getSingleReplacementDiff,
+    buildSentenceDiffProofreadCorrections,
+    buildProperNameProofreadCorrections,
+    buildJianyingSubtitleItems,
     buildJianyingFullDraftSpec,
     resolveMediaFilePathFromAsset,
     findJianyingDraftRoots,
     listJianyingDrafts,
+    looksLikeJianyingDraftDir,
+    resolveJianyingTemplateDir,
+    getConfiguredJianyingTemplateEntries,
+    getConfiguredJianyingTemplates,
+    isDraftPlacementPermissionError,
     resolveJianyingExportTarget,
+    rewriteDraftPathReferences,
     writeJianyingFullDraft,
     writeJianyingDraftExport,
     writeJianyingDraft,

@@ -461,6 +461,11 @@ const html = `<!doctype html>
       right: max(8px, calc((100vw - 1240px) / 2 - 410px));
       transform: translateX(8px);
     }
+    .floating-side.right:not(.log-side) {
+      height: auto;
+      min-height: 500px;
+      max-height: min(720px, calc(100vh - 88px));
+    }
     .floating-side.open {
       opacity: 1;
       pointer-events: auto;
@@ -896,16 +901,18 @@ const html = `<!doctype html>
       width: 100%;
       min-width: 0;
     }
-    #publishTitlesList {
+    #publishTitlesList,
+    #publishCoverTitlesList {
       margin: 0;
       padding-left: 22px;
       line-height: 1.5;
       font-size: 14px;
       overflow-y: auto;
-      min-height: 120px;
-      max-height: 240px;
+      min-height: 80px;
+      max-height: 180px;
     }
-    #publishTitlesList li {
+    #publishTitlesList li,
+    #publishCoverTitlesList li {
       margin: 0 0 4px 0;
       word-break: break-word;
     }
@@ -946,6 +953,7 @@ const html = `<!doctype html>
     #imageCardList,
     #videoAssetList,
     #publishTitlesList,
+    #publishCoverTitlesList,
     #publishKeywords,
     #llmChatHistory {
       scrollbar-color: color-mix(in oklab, var(--text-muted) 38%, transparent) transparent;
@@ -954,6 +962,7 @@ const html = `<!doctype html>
     #imageCardList::-webkit-scrollbar,
     #videoAssetList::-webkit-scrollbar,
     #publishTitlesList::-webkit-scrollbar,
+    #publishCoverTitlesList::-webkit-scrollbar,
     #publishKeywords::-webkit-scrollbar,
     #llmChatHistory::-webkit-scrollbar {
       width: 7px;
@@ -963,6 +972,7 @@ const html = `<!doctype html>
     #imageCardList::-webkit-scrollbar-track,
     #videoAssetList::-webkit-scrollbar-track,
     #publishTitlesList::-webkit-scrollbar-track,
+    #publishCoverTitlesList::-webkit-scrollbar-track,
     #publishKeywords::-webkit-scrollbar-track,
     #llmChatHistory::-webkit-scrollbar-track {
       background: transparent;
@@ -971,6 +981,7 @@ const html = `<!doctype html>
     #imageCardList::-webkit-scrollbar-thumb,
     #videoAssetList::-webkit-scrollbar-thumb,
     #publishTitlesList::-webkit-scrollbar-thumb,
+    #publishCoverTitlesList::-webkit-scrollbar-thumb,
     #publishKeywords::-webkit-scrollbar-thumb,
     #llmChatHistory::-webkit-scrollbar-thumb {
       border-radius: 999px;
@@ -1183,8 +1194,8 @@ const html = `<!doctype html>
       background: var(--log-bg);
       font-size: 13px;
       line-height: 1.45;
-      min-height: 112px;
-      max-height: min(220px, 24vh);
+      min-height: 150px;
+      max-height: min(280px, 28vh);
     }
     .ai-butler-status {
       display: inline-flex;
@@ -1232,7 +1243,8 @@ const html = `<!doctype html>
       background: var(--input-bg);
       color: var(--text-main);
       padding: 8px;
-      min-height: 76px;
+      min-height: 92px;
+      max-height: 150px;
       resize: vertical;
     }
     #contentViewport {
@@ -1371,6 +1383,24 @@ const html = `<!doctype html>
     .shortcut-card h3 {
       margin: 0 0 12px;
       font-size: 18px;
+    }
+    .proofread-card textarea {
+      width: 100%;
+      min-height: 220px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--input-bg);
+      color: var(--text-main);
+      padding: 10px;
+      resize: vertical;
+      line-height: 1.55;
+    }
+    .proofread-actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: 12px;
     }
     .shortcut-list {
       display: grid;
@@ -2024,7 +2054,6 @@ const html = `<!doctype html>
         <span class="status-chip"><span>模式</span><strong id="statCutMode">标准</strong></span>
       </div>
       <div id="exportStatus" class="meta export-status-inline"></div>
-      <div id="deleteDiagnosticsPanel" class="delete-diagnostics" hidden></div>
       <details class="fold-panel tool-fold" id="reviewToolFold">
         <summary>审核工具面板（点击展开）</summary>
         <div class="tool-tabs" role="tablist" aria-label="审核工具分组">
@@ -2061,6 +2090,7 @@ const html = `<!doctype html>
             <button id="btnReplaceOne" type="button">替换当前</button>
             <button id="btnReplaceAll" type="button">全部替换</button>
             <button id="btnApplyGlossary" type="button">应用词库纠错</button>
+            <button id="btnOriginalProofread" type="button">原文校对</button>
             <span id="glossarySummary" class="meta"></span>
             <span id="replaceStatus" class="meta replace-status"></span>
           </div>
@@ -2086,8 +2116,6 @@ const html = `<!doctype html>
         <div class="tool-panel" data-tool-panel="more" hidden>
           <div class="row tool-actions utility-actions">
             <span class="meta tool-section-title">工具</span>
-            <button id="btnShowDeleteDiagnostics" type="button">删除诊断</button>
-            <button id="btnCopyDiagnostics" type="button">复制诊断信息</button>
             <button id="btnShortcutHelp" type="button">快捷键指南</button>
           </div>
           <div class="legend" aria-label="标记颜色说明">
@@ -2125,6 +2153,19 @@ const html = `<!doctype html>
       </div>
     </div>
 
+    <div id="originalProofreadModal" class="shortcut-help" hidden>
+      <div class="shortcut-card proofread-card" role="dialog" aria-modal="true" aria-labelledby="originalProofreadTitle">
+        <h3 id="originalProofreadTitle">原文校对</h3>
+        <p class="meta">粘贴口播原文后，AI 会对照审核文本纠正人名、地名、专有名词和他/她/它等易错词；不会润色或改写文案。</p>
+        <textarea id="originalProofreadText" placeholder="在这里粘贴口播原文..."></textarea>
+        <div class="proofread-actions">
+          <button id="btnRunOriginalProofread" type="button" class="warn">开始校对并应用</button>
+          <button id="btnCloseOriginalProofread" type="button">取消</button>
+          <span id="originalProofreadStatus" class="meta"></span>
+        </div>
+      </div>
+    </div>
+
     <div class="card content-card">
       <div id="contentViewport">
         <div id="content"></div>
@@ -2149,22 +2190,27 @@ const html = `<!doctype html>
     <div class="row compact-row">
       <span class="meta">风格</span>
       <select id="publishStyle">
-        <option value="专业" selected>专业</option>
+        <option value="自媒体爆款" selected>自媒体爆款</option>
+        <option value="专业">专业</option>
         <option value="保守">保守</option>
         <option value="吸睛">吸睛</option>
       </select>
     </div>
-    <div id="publishStatus" class="meta">点击“生成建议”后会产出 10 个标题与简介。</div>
+    <div id="publishStatus" class="meta">点击“生成建议”后会产出 10 个视频标题、5 个封面标题、简介与话题参考。</div>
     <div class="panel-section">
-      <div class="panel-title">标题建议（10个）</div>
+      <div class="panel-title">视频标题（10个）</div>
       <ol id="publishTitlesList"></ol>
+    </div>
+    <div class="panel-section">
+      <div class="panel-title">封面标题（5个）</div>
+      <ol id="publishCoverTitlesList"></ol>
     </div>
     <div class="panel-section">
       <div class="panel-title">作品简介（可编辑）</div>
       <textarea id="publishDescription" placeholder="这里会生成简介建议"></textarea>
     </div>
     <div class="panel-section">
-      <div class="panel-title">关键词</div>
+      <div class="panel-title">话题参考</div>
       <div id="publishKeywords"></div>
     </div>
   </aside>
@@ -2383,10 +2429,8 @@ const html = `<!doctype html>
     const fillerWordAllowListEl = document.getElementById('fillerWordAllowList');
     const btnToggleVideoPreview = document.getElementById('btnToggleVideoPreview');
     const btnFocusReview = document.getElementById('btnFocusReview');
-    const btnShowDeleteDiagnostics = document.getElementById('btnShowDeleteDiagnostics');
-    const btnCopyDiagnostics = document.getElementById('btnCopyDiagnostics');
     const cutPrecisionModeEl = document.getElementById('cutPrecisionMode');
-    const deleteDiagnosticsPanelEl = document.getElementById('deleteDiagnosticsPanel');
+    const deleteDiagnosticsPanelEl = null;
     const btnCut = document.getElementById('btnCut');
     const btnExportJianyingDraft = document.getElementById('btnExportJianyingDraft');
     const jianyingQuickTargetEl = document.getElementById('jianyingQuickTarget');
@@ -2405,6 +2449,12 @@ const html = `<!doctype html>
     const btnReplaceOne = document.getElementById('btnReplaceOne');
     const btnReplaceAll = document.getElementById('btnReplaceAll');
     const btnApplyGlossary = document.getElementById('btnApplyGlossary');
+    const btnOriginalProofread = document.getElementById('btnOriginalProofread');
+    const originalProofreadModalEl = document.getElementById('originalProofreadModal');
+    const originalProofreadTextEl = document.getElementById('originalProofreadText');
+    const btnRunOriginalProofread = document.getElementById('btnRunOriginalProofread');
+    const btnCloseOriginalProofread = document.getElementById('btnCloseOriginalProofread');
+    const originalProofreadStatusEl = document.getElementById('originalProofreadStatus');
     const glossarySummaryEl = document.getElementById('glossarySummary');
     const replaceStatusEl = document.getElementById('replaceStatus');
     const btnShortcutHelp = document.getElementById('btnShortcutHelp');
@@ -2437,6 +2487,7 @@ const html = `<!doctype html>
     const publishStyleEl = document.getElementById('publishStyle');
     const publishStatusEl = document.getElementById('publishStatus');
     const publishTitlesListEl = document.getElementById('publishTitlesList');
+    const publishCoverTitlesListEl = document.getElementById('publishCoverTitlesList');
     const publishDescriptionEl = document.getElementById('publishDescription');
     const publishKeywordsEl = document.getElementById('publishKeywords');
     const imageCountEl = document.getElementById('imageCount');
@@ -3608,7 +3659,7 @@ const html = `<!doctype html>
         btnLlmChatSend.textContent = llmChatSubmitting ? '执行中...' : '让AI执行';
       }
       if (llmChatInputEl) llmChatInputEl.disabled = llmChatSubmitting;
-      setAiButlerStatus(llmChatSubmitting ? '执行中' : '待命', llmChatSubmitting ? 'busy' : '');
+      if (llmChatSubmitting) setAiButlerStatus('执行中', 'busy');
     }
 
     function getWordText(index) {
@@ -3848,6 +3899,32 @@ const html = `<!doctype html>
       addChatRow(msg.role, msg.text);
     }
 
+    function pushAiButlerProgress(text) {
+      const message = String(text || '').trim();
+      if (!message) return;
+      addChatRow('assistant', '执行过程：' + message);
+      setLlmChatStatus(message);
+    }
+
+    function buildAiButlerSummary(taskText, localActions, changed, data) {
+      const parts = [];
+      const actionCount = Array.isArray(localActions) ? localActions.length : 0;
+      const mediaActions = Array.isArray(data?.mediaActions)
+        ? data.mediaActions
+        : (Array.isArray(data?.media_actions) ? data.media_actions : []);
+      if (actionCount) parts.push('我已经执行了 ' + actionCount + ' 个本地动作');
+      if (Number(changed) > 0) parts.push('审核标记实际变更 ' + Number(changed) + ' 项');
+      if (mediaActions.length) parts.push('素材规划/调整 ' + mediaActions.length + ' 项');
+      const reason = String(data?.reason || '').trim();
+      const summary = String(data?.summary || '').trim();
+      if (summary) parts.push(summary);
+      else if (reason) parts.push(reason);
+      if (!parts.length) {
+        return '我已经理解了你的要求，但这次没有检测到可以直接落地的修改。你可以更具体地说，例如“删除后半段重复表达”或“重生成第 3 张配图”。';
+      }
+      return '处理完成：' + parts.join('，') + '。';
+    }
+
     function setProgrammaticScroll(active) {
       isProgrammaticScroll = !!active;
       if (!active) return;
@@ -3868,14 +3945,19 @@ const html = `<!doctype html>
 
     function renderPublishSuggestions(data) {
       const titles = Array.isArray(data?.titles) ? data.titles : [];
+      const coverTitles = Array.isArray(data?.coverTitles)
+        ? data.coverTitles
+        : (Array.isArray(data?.cover_titles) ? data.cover_titles : []);
       const descriptions = Array.isArray(data?.descriptions) ? data.descriptions : [];
-      const keywords = Array.isArray(data?.keywords) ? data.keywords : [];
+      const topics = Array.isArray(data?.topics)
+        ? data.topics
+        : (Array.isArray(data?.keywords) ? data.keywords : []);
 
       if (publishTitlesListEl) {
         publishTitlesListEl.innerHTML = '';
         if (!titles.length) {
           const li = document.createElement('li');
-          li.textContent = '暂无标题建议';
+          li.textContent = '暂无视频标题建议';
           publishTitlesListEl.appendChild(li);
         } else {
           titles.forEach((title) => {
@@ -3886,15 +3968,31 @@ const html = `<!doctype html>
         }
       }
 
+      if (publishCoverTitlesListEl) {
+        publishCoverTitlesListEl.innerHTML = '';
+        if (!coverTitles.length) {
+          const li = document.createElement('li');
+          li.textContent = '暂无封面标题建议';
+          publishCoverTitlesListEl.appendChild(li);
+        } else {
+          coverTitles.forEach((title) => {
+            const li = document.createElement('li');
+            li.textContent = String(title || '');
+            publishCoverTitlesListEl.appendChild(li);
+          });
+        }
+      }
+
       if (publishDescriptionEl) {
         publishDescriptionEl.value = descriptions[0] || '';
       }
       if (publishKeywordsEl) {
         publishKeywordsEl.innerHTML = '';
-        keywords.forEach((kw) => {
+        topics.forEach((kw) => {
           const chip = document.createElement('span');
           chip.className = 'keyword-chip';
-          chip.textContent = String(kw || '');
+          const text = String(kw || '').trim();
+          chip.textContent = text.startsWith('#') ? text : ('#' + text);
           publishKeywordsEl.appendChild(chip);
         });
       }
@@ -4236,6 +4334,40 @@ const html = `<!doctype html>
       };
     }
 
+    function appendSubtitleToken(base, token) {
+      const left = String(base || '').trim();
+      const right = String(token || '').trim();
+      if (!right) return left;
+      if (!left) return right;
+      if (/^[，。！？；：,.!?;:、）】》"'”’]/.test(right)) return left + right;
+      if (/[（【《"'“‘]$/.test(left)) return left + right;
+      if (/[\u4e00-\u9fff]$/.test(left) && /^[\u4e00-\u9fff]/.test(right)) return left + right;
+      return left + ' ' + right;
+    }
+
+    function stripSubtitlePunctuation(text) {
+      return String(text || '')
+        .replace(/[，。！？；：,.!?;:、]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    function getSubtitleBreakPunctuation(index) {
+      const inferred = String(inferPunctuation(index) || '').trim();
+      if (/[，,。！？；：.!?;:]$/.test(inferred)) return inferred.slice(-1);
+      const raw = String(getWordText(index) || '').trim();
+      const match = raw.match(/[，,。！？；：.!?;:]$/);
+      return match ? match[0] : '';
+    }
+
+    function shouldBreakSubtitleCue(index, text, start, end, next, breakPunctuation) {
+      const content = stripSubtitlePunctuation(text);
+      if (!next) return true;
+      if (breakPunctuation && /[，,。！？；：.!?;:]$/.test(String(breakPunctuation))) return true;
+      if (shouldParagraphBreakAfter(index) && content.length >= 2) return true;
+      return content.length >= 28;
+    }
+
     function buildExportCues() {
       const deleteSegments = mergedSegmentsFromSelection();
       const mapTime = buildTimeMapper(deleteSegments);
@@ -4252,7 +4384,8 @@ const html = `<!doctype html>
           end,
           outStart: mapTime(start),
           outEnd: mapTime(end),
-          text: text + (inferPunctuation(i) || ''),
+          text: stripSubtitlePunctuation(text),
+          breakPunctuation: getSubtitleBreakPunctuation(i),
         });
       });
 
@@ -4272,9 +4405,10 @@ const html = `<!doctype html>
         current.text = appendSubtitleToken(current.text, item.text);
         current.end = Math.max(current.end, item.outEnd);
         current.lastIndex = item.index;
-        if (shouldBreakSubtitleCue(item.index, current.text, current.start, current.end, next)) {
+        if (shouldBreakSubtitleCue(item.index, current.text, current.start, current.end, next, item.breakPunctuation)) {
           if (current.text.trim()) {
             if (current.end <= current.start) current.end = current.start + 0.35;
+            current.text = stripSubtitlePunctuation(current.text);
             cues.push(current);
           }
           current = null;
@@ -4282,9 +4416,54 @@ const html = `<!doctype html>
       }
       if (current && current.text.trim()) {
         if (current.end <= current.start) current.end = current.start + 0.35;
+        current.text = stripSubtitlePunctuation(current.text);
         cues.push(current);
       }
       return cues;
+    }
+
+    function normalizeExportCuesForSingleTrack(cues) {
+      const raw = (Array.isArray(cues) ? cues : [])
+        .map((cue) => ({
+          start: Math.max(0, Number(cue && cue.start) || 0),
+          end: Math.max(0, Number(cue && cue.end) || 0),
+          text: stripSubtitlePunctuation(String((cue && cue.text) || '').trim()),
+        }))
+        .filter((cue) => cue.text && cue.end > cue.start)
+        .sort((a, b) => a.start - b.start);
+      const merged = [];
+      raw.forEach((cue) => {
+        const last = merged[merged.length - 1];
+        const overlap = last ? last.end - cue.start : 0;
+        const cueDuration = cue.end - cue.start;
+        const lastDuration = last ? last.end - last.start : 0;
+        const mustMergeTinyOverlap = !!last
+          && overlap > 0.001
+          && (cueDuration < 0.12 || lastDuration < 0.12)
+          && (cue.text.length <= 2 || last.text.length <= 2);
+        if (mustMergeTinyOverlap) {
+          last.end = Math.max(last.end, cue.end);
+          last.text = appendSubtitleToken(last.text, cue.text);
+        } else {
+          merged.push({ ...cue });
+        }
+      });
+      const out = [];
+      const gap = 0.012;
+      for (let i = 0; i < merged.length; i += 1) {
+        const cue = merged[i];
+        const nextStart = i < merged.length - 1 ? merged[i + 1].start : Infinity;
+        let end = cue.end;
+        if (Number.isFinite(nextStart)) end = Math.min(end, Math.max(cue.start, nextStart - gap));
+        if (end - cue.start < 0.05) {
+          if (out.length) {
+            out[out.length - 1].text = appendSubtitleToken(out[out.length - 1].text, cue.text);
+          }
+          continue;
+        }
+        out.push({ start: Number(cue.start.toFixed(3)), end: Number(end.toFixed(3)), text: cue.text });
+      }
+      return out;
     }
 
     function fillJianyingDraftOptions(targetEl, options, mapValue) {
@@ -4330,6 +4509,7 @@ const html = `<!doctype html>
         }
         const roots = Array.isArray(data.roots) ? data.roots : [];
         const drafts = Array.isArray(data.drafts) ? data.drafts : [];
+        const invalidTemplates = Array.isArray(data.invalidTemplates) ? data.invalidTemplates : [];
         fillJianyingDraftOptions(jianyingDraftRootListEl, roots, (item) => item.path || '');
         fillJianyingDraftOptions(jianyingTemplateDraftListEl, drafts, (item) => item.path || '');
         if (data.detectedRoot && jianyingDraftRootEl && !jianyingDraftRootEl.value.trim()) {
@@ -4338,21 +4518,36 @@ const html = `<!doctype html>
         if (jianyingQuickTargetEl) {
           const current = jianyingQuickTargetEl.value || 'auto';
           jianyingQuickTargetEl.innerHTML = '';
-          const addOption = (value, label) => {
+          const addOption = (value, label, disabled) => {
             const option = document.createElement('option');
             option.value = value;
             option.textContent = label;
+            if (disabled) option.disabled = true;
             jianyingQuickTargetEl.appendChild(option);
           };
-          addOption('auto', data.detectedRoot ? '默认剪映目录' : '自动识别剪映目录');
-          addOption('project', '当前项目目录');
+          const configuredRoot = String(data.configuredRoot || '').trim();
+          const detectedRoot = String(data.detectedRoot || '').trim();
+          const samePath = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+          addOption('auto', configuredRoot
+            ? '\u81ea\u52a8\uff1a\u4f7f\u7528\u8bbe\u7f6e\u7684\u526a\u6620\u8349\u7a3f\u76ee\u5f55'
+            : (detectedRoot ? '\u81ea\u52a8\uff1a\u4f7f\u7528\u68c0\u6d4b\u5230\u7684\u526a\u6620\u8349\u7a3f\u76ee\u5f55' : '\u81ea\u52a8\u8bc6\u522b\u526a\u6620\u8349\u7a3f\u76ee\u5f55'));
+          addOption('project', '\u5f53\u524d\u9879\u76ee\u76ee\u5f55');
           roots.forEach((root, index) => {
             if (!root?.path) return;
-            addOption('root:' + root.path, (root.source === 'settings' ? '设置草稿目录' : '草稿目录' + (index + 1)) + '：' + root.path);
+            const rootPath = String(root.path || '').trim();
+            const sameAsAuto = samePath(rootPath, configuredRoot || detectedRoot);
+            const label = root.source === 'settings'
+              ? '\u6307\u5b9a\uff1a\u8bbe\u7f6e\u7684\u8349\u7a3f\u6839\u76ee\u5f55' + (sameAsAuto ? '\uff08\u540c\u81ea\u52a8\uff09' : '') + ': ' + rootPath
+              : '\u6307\u5b9a\uff1a\u68c0\u6d4b\u8349\u7a3f\u6839\u76ee\u5f55' + (index + 1) + ': ' + rootPath;
+            addOption('root:' + rootPath, label);
           });
           drafts.slice(0, 5).forEach((draft, index) => {
             if (!draft?.path) return;
-            addOption('template:' + draft.path, '模板' + (index + 1) + '：' + (draft.name || draft.path));
+            addOption('template:' + draft.path, '\u6a21\u677f' + (index + 1) + ': ' + (draft.name || draft.path));
+          });
+          invalidTemplates.slice(0, 5).forEach((draft, index) => {
+            if (!draft?.path) return;
+            addOption('invalid-template:' + draft.path, '\u6a21\u677f\u4e0d\u53ef\u7528' + (index + 1) + ': ' + (draft.reason || draft.path), true);
           });
           if ([...jianyingQuickTargetEl.options].some((option) => option.value === current)) {
             jianyingQuickTargetEl.value = current;
@@ -4360,14 +4555,15 @@ const html = `<!doctype html>
         }
         if (showMessage) {
           if (data.detectedRoot) {
-            setExportStatus('已识别剪映草稿目录：' + data.detectedRoot + (drafts.length ? '，可选模板草稿 ' + drafts.length + ' 个。' : '。'));
+            const extra = drafts.length ? '\uff0c\u5df2\u52a0\u8f7d\u8bbe\u7f6e\u6a21\u677f ' + drafts.length + ' \u4e2a' : (invalidTemplates.length ? '\uff0c\u6709 ' + invalidTemplates.length + ' \u4e2a\u6a21\u677f\u4e0d\u53ef\u7528' : '');
+            setExportStatus('\u5df2\u8bc6\u522b\u526a\u6620\u8349\u7a3f\u76ee\u5f55\uff1a' + data.detectedRoot + extra);
           } else {
-            setExportStatus('暂未自动识别到剪映草稿目录，可选择“当前项目目录”，或先到主页设置里配置剪映草稿目录。');
+            setExportStatus('\u6682\u672a\u8bc6\u522b\u5230\u526a\u6620\u8349\u7a3f\u76ee\u5f55\uff0c\u53ef\u9009\u62e9\u201c\u5f53\u524d\u9879\u76ee\u76ee\u5f55\u201d\uff0c\u6216\u5148\u5230\u4e3b\u8bbe\u7f6e\u91cc\u914d\u7f6e\u526a\u6620\u8349\u7a3f\u76ee\u5f55\u3002');
           }
         }
         return data;
       } catch (err) {
-        if (showMessage) setExportStatus('识别剪映目录失败：' + (err.message || String(err)));
+        if (showMessage) setExportStatus('\u8bc6\u522b\u526a\u6620\u76ee\u5f55\u5931\u8d25\uff1a' + (err.message || String(err)));
         return null;
       }
     }
@@ -4386,7 +4582,7 @@ const html = `<!doctype html>
       setExportStatus('\u6b63\u5728\u51c6\u5907\u526a\u6620\u5bfc\u51fa\u76ee\u6807...');
       try {
         await loadJianyingDraftTargets(false, 3500);
-        const cues = buildExportCues();
+        const cues = normalizeExportCuesForSingleTrack(buildExportCues());
         if (!cues.length) throw new Error('\u6ca1\u6709\u53ef\u5bfc\u51fa\u7684\u5b57\u5e55\uff0c\u8bf7\u68c0\u67e5\u662f\u5426\u5168\u90e8\u5185\u5bb9\u90fd\u88ab\u6807\u8bb0\u5220\u9664\u3002');
         const selection = getJianyingExportSelection();
         const preset = jianyingSubtitlePresetEl ? jianyingSubtitlePresetEl.value : 'clean';
@@ -4403,7 +4599,7 @@ const html = `<!doctype html>
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             fullDraft: true,
-            cues: cues.map((cue) => ({ start: cue.start, end: Math.max(cue.end, cue.start + 0.35), text: String(cue.text || '').trim() })),
+            cues: cues.map((cue) => ({ start: cue.start, end: cue.end, text: String(cue.text || '').trim() })),
             deleteSegments, sourceDurationSec, sourceVideoMeta,
             mediaAssets: { images: cloneMediaItems(imageItems), videos: cloneMediaItems(videoItems) },
             preset, templatePath: selection.templatePath, exportMode: selection.exportMode, targetRoot: selection.targetRoot,
@@ -4411,9 +4607,17 @@ const html = `<!doctype html>
           }),
         }, 120000);
         if (!response.ok || !data.success) throw new Error(data.error || ('HTTP ' + response.status));
-        const placementText = data.autoPlaced ? '\u5df2\u653e\u5165\u526a\u6620\u8349\u7a3f\u76ee\u5f55\uff0c\u6253\u5f00\u526a\u6620\u5373\u53ef\u67e5\u770b' : '\u5df2\u5bfc\u51fa\u5230\u9879\u76ee\u76ee\u5f55';
+        const exportRootSource = String(data.exportRootSource || '');
+        const placementText = data.autoPlaced
+          ? '\u5df2\u653e\u5165\u526a\u6620\u8349\u7a3f\u76ee\u5f55\uff0c\u6253\u5f00\u526a\u6620\u5373\u53ef\u67e5\u770b'
+          : (exportRootSource.includes('custom')
+            ? '\u5df2\u5bfc\u51fa\u5230\u81ea\u5b9a\u4e49\u76ee\u5f55'
+            : '\u5df2\u5bfc\u51fa\u5230\u9879\u76ee\u76ee\u5f55');
         const mediaText = data.fullDraft ? ('\uff0c\u4e3b\u89c6\u9891\u7247\u6bb5 ' + (data.keepSegments || 0) + ' \u6bb5\uff0c\u56fe\u7247 ' + (data.imageAssets || 0) + ' \u5f20\uff0c\u89c6\u9891\u7d20\u6750 ' + (data.videoAssets || 0) + ' \u6bb5') : '';
-        const message = placementText + '\uff1a' + data.draftDir + '\uff1b\u5b57\u5e55 ' + data.cues + ' \u6761' + mediaText;
+        const placementWarning = data.placementFailed
+          ? '\uff1b\u6ce8\u610f\uff1a\u526a\u6620\u8349\u7a3f\u76ee\u5f55\u53ef\u80fd\u88ab\u526a\u6620\u5360\u7528\uff0c\u5df2\u6539\u4e3a\u4fdd\u7559\u5b8c\u6574\u8349\u7a3f\u5230\u9879\u76ee\u76ee\u5f55\uff0c\u5173\u95ed\u526a\u6620\u540e\u53ef\u624b\u52a8\u590d\u5236'
+          : '';
+        const message = placementText + '\uff1a' + data.draftDir + '\uff1b\u5b57\u5e55 ' + data.cues + ' \u6761' + mediaText + placementWarning;
         setExportStatus(message);
         alert(message + (data.autoPlaced ? '\\n\\n\u5982\u679c\u526a\u6620\u5df2\u6253\u5f00\u4f46\u6ca1\u51fa\u73b0\u65b0\u9879\u76ee\uff0c\u8bf7\u91cd\u542f\u526a\u6620\u5237\u65b0\u9879\u76ee\u5217\u8868\u3002' : ''));
       } catch (err) {
@@ -4434,6 +4638,50 @@ const html = `<!doctype html>
       });
     }
 
+    function imageSizeForAspect(aspectRatio) {
+      const raw = String(aspectRatio || '').trim();
+      if (raw === '9:16') return { width: 1080, height: 1920 };
+      if (raw === '16:9') return { width: 1920, height: 1080 };
+      if (raw === '4:3') return { width: 1440, height: 1080 };
+      if (raw === '3:4') return { width: 1080, height: 1440 };
+      if (raw === '2:3') return { width: 1024, height: 1536 };
+      return { width: 1024, height: 1024 };
+    }
+
+    async function fileToSizedImageDataUrl(file, aspectRatio) {
+      if (/gif/i.test(file.type || '')) return fileToDataUrl(file);
+      const rawUrl = await fileToDataUrl(file);
+      const img = await new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error('\u56fe\u7247\u89e3\u7801\u5931\u8d25'));
+        image.src = rawUrl;
+      });
+      const target = imageSizeForAspect(aspectRatio);
+      const canvas = document.createElement('canvas');
+      canvas.width = target.width;
+      canvas.height = target.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return rawUrl;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const sourceRatio = img.naturalWidth / Math.max(1, img.naturalHeight);
+      const targetRatio = canvas.width / canvas.height;
+      let sx = 0;
+      let sy = 0;
+      let sw = img.naturalWidth;
+      let sh = img.naturalHeight;
+      if (sourceRatio > targetRatio) {
+        sw = img.naturalHeight * targetRatio;
+        sx = (img.naturalWidth - sw) / 2;
+      } else {
+        sh = img.naturalWidth / targetRatio;
+        sy = (img.naturalHeight - sh) / 2;
+      }
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg', 0.92);
+    }
+
     async function importLocalImageForItem(index, file) {
       const item = imageItems[index];
       if (!item || !file) return;
@@ -4446,7 +4694,8 @@ const html = `<!doctype html>
       item.status = 'generating';
       item.error = '';
       renderImageCards();
-      const dataUrl = await fileToDataUrl(file);
+      const targetAspect = item.aspectRatio || (imageAspectEl ? imageAspectEl.value : '16:9');
+      const dataUrl = await fileToSizedImageDataUrl(file, targetAspect);
       const response = await fetch('/api/import-image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -4454,7 +4703,7 @@ const html = `<!doctype html>
           filename: file.name || 'local-image',
           dataUrl,
           item,
-          aspectRatio: imageAspectEl ? imageAspectEl.value : item.aspectRatio,
+          aspectRatio: targetAspect,
         }),
       });
       const data = await response.json().catch(() => ({}));
@@ -6311,6 +6560,114 @@ const html = `<!doctype html>
       return count > 0;
     }
 
+    function setOriginalProofreadStatus(message) {
+      if (originalProofreadStatusEl) originalProofreadStatusEl.textContent = String(message || '');
+      if (message) setReplaceStatus(message);
+    }
+
+    function openOriginalProofread() {
+      if (!originalProofreadModalEl) return;
+      originalProofreadModalEl.hidden = false;
+      setOriginalProofreadStatus('');
+      setTimeout(() => {
+        if (originalProofreadTextEl) originalProofreadTextEl.focus();
+      }, 30);
+    }
+
+    function closeOriginalProofread() {
+      if (originalProofreadModalEl) originalProofreadModalEl.hidden = true;
+    }
+
+    function readOriginalProofreadText() {
+      const sources = [];
+      if (originalProofreadTextEl) {
+        sources.push(originalProofreadTextEl.value);
+        sources.push(originalProofreadTextEl.textContent);
+        sources.push(originalProofreadTextEl.innerText);
+      }
+      const active = document.activeElement;
+      if (active && active !== originalProofreadTextEl && originalProofreadModalEl && originalProofreadModalEl.contains(active)) {
+        sources.push(active.value);
+        sources.push(active.textContent);
+      }
+      for (const value of sources) {
+        const text = String(value || '').trim();
+        if (text) return text;
+      }
+      return '';
+    }
+
+    function normalizeProofreadRange(correction) {
+      let start = Number(correction && correction.startIndex);
+      let end = Number(correction && correction.endIndex);
+      if (!Number.isInteger(start) || !Number.isInteger(end)) return null;
+      if (end < start) {
+        const temp = start;
+        start = end;
+        end = temp;
+      }
+      start = Math.max(0, Math.min(WORDS.length - 1, start));
+      end = Math.max(0, Math.min(WORDS.length - 1, end));
+      return { start, end };
+    }
+
+    function applyOriginalProofreadCorrections(corrections) {
+      const list = Array.isArray(corrections) ? corrections : [];
+      let count = 0;
+      list.forEach((correction) => {
+        const range = normalizeProofreadRange(correction);
+        const replacement = String(correction && correction.to || '').trim();
+        if (!range || !replacement) return;
+        count += applyReplacementToMatch(range, replacement);
+      });
+      if (count > 0) {
+        refreshSearchMatches(false);
+        render();
+        syncCurrentToken();
+        updateSelectionStats();
+        scheduleReviewStateSave(150);
+      }
+      return count;
+    }
+
+    async function runOriginalProofread() {
+      if (!originalProofreadTextEl) return;
+      const originalText = readOriginalProofreadText();
+      if (originalText.replace(/[\s\p{P}\p{S}]/gu, '').length < 4) {
+        setOriginalProofreadStatus('请先粘贴至少 4 个有效文字后再校对');
+        return;
+      }
+      if (btnRunOriginalProofread) {
+        btnRunOriginalProofread.disabled = true;
+        btnRunOriginalProofread.textContent = '校对中...';
+      }
+      setOriginalProofreadStatus('AI 正在对照原文校对...');
+      try {
+        const { response, data } = await fetchJsonWithTimeout('/api/llm-proofread-original', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ words: WORDS, originalText }),
+        }, 90000);
+        if (!response.ok || !data.success) throw new Error(data.error || ('HTTP ' + response.status));
+        const corrections = Array.isArray(data.corrections) ? data.corrections : [];
+        if (!corrections.length) {
+          setOriginalProofreadStatus('AI 未发现需要校对的明显错误');
+          return;
+        }
+        pushSelectionUndo();
+        const applied = applyOriginalProofreadCorrections(corrections);
+        setOriginalProofreadStatus('已按原文校对并应用 ' + applied + ' 处');
+        if (applied > 0) closeOriginalProofread();
+      } catch (err) {
+        setOriginalProofreadStatus('原文校对失败：' + (err.message || String(err)));
+      } finally {
+        if (btnRunOriginalProofread) {
+          btnRunOriginalProofread.disabled = false;
+          btnRunOriginalProofread.textContent = '开始校对并应用';
+        }
+      }
+    }
+
     function applyFocusReviewMode(enabled) {
       const next = !!enabled;
       document.body.classList.toggle('review-focus-mode', next);
@@ -6743,7 +7100,7 @@ const html = `<!doctype html>
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             words: WORDS,
-            style: publishStyleEl ? publishStyleEl.value : '专业',
+            style: publishStyleEl ? publishStyleEl.value : '自媒体爆款',
             analysis: {
               topic: llmTopic,
               outline: llmOutline,
@@ -6756,7 +7113,11 @@ const html = `<!doctype html>
           throw new Error(data.error || ('HTTP ' + response.status));
         }
         renderPublishSuggestions(data);
-        setPublishStatus('已生成：标题 ' + Number((data.titles || []).length) + ' 条，简介 ' + Number((data.descriptions || []).length) + ' 条');
+        setPublishStatus(
+          '已生成：视频标题 ' + Number((data.titles || []).length)
+          + ' 条，封面标题 ' + Number((data.coverTitles || data.cover_titles || []).length)
+          + ' 条，话题 ' + Number((data.topics || data.keywords || []).length) + ' 个',
+        );
       } finally {
         setPublishLoading(false);
       }
@@ -6901,25 +7262,30 @@ const html = `<!doctype html>
       if (llmChatSubmitting) return;
       const text = String(llmChatInputEl ? llmChatInputEl.value : '').trim();
       if (!text) {
-        setLlmChatStatus('请输入调标记要求');
+        setLlmChatStatus('请输入你希望 AI 管家执行的任务。');
         return;
       }
       setLlmChatSubmitting(true);
       try {
         pushChatMessage('user', text);
         if (llmChatInputEl) llmChatInputEl.value = '';
-        setLlmChatStatus('AI管家正在理解并执行你的要求...');
+        setAiButlerStatus('理解任务', 'busy');
+        pushAiButlerProgress('正在理解你的指令，并先尝试执行不需要调用 AI 的本地操作。');
 
         const localActions = await runAiButlerLocalCommand(text);
         if (localActions.length) {
-          pushChatMessage('assistant', '已执行：' + localActions.join('；'));
-          setLlmChatStatus(localActions.join('；'));
+          pushAiButlerProgress('已完成本地操作：' + localActions.join('、'));
           if (isOperationalOnlyAiCommand(text, localActions)) {
-            setAiButlerStatus('已完成', 'ok');
+            const reply = buildAiButlerSummary(text, localActions, 0, { summary: '这是一个明确的操作指令，已直接执行完成。' });
+            pushChatMessage('assistant', reply);
+            setLlmChatStatus(reply);
+            setAiButlerStatus('完成', 'ok');
             return;
           }
         }
 
+        setAiButlerStatus('询问 AI', 'busy');
+        pushAiButlerProgress('需要结合全文语义判断，正在把当前审核文本、已选标记和素材状态交给 AI 分析。');
         const response = await fetch('/api/llm-chat-adjust', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -6950,21 +7316,12 @@ const html = `<!doctype html>
           llmOutline = String(analysis.outline || llmOutline || '').trim().slice(0, 120);
           llmMultiSpeaker = !!analysis.multiSpeaker;
         }
+        pushAiButlerProgress('AI 已返回结构化方案，正在把建议映射到审核文本和素材列表。');
         const changed = applyChatAdjustResult(data);
-        const reason = String(data.reason || '').trim();
-        const summary = String(data.summary || '').trim();
-        const msgParts = [
-          '已完成调整',
-          '新增 ' + Number((data.addIds || []).length) + ' 段',
-          '取消 ' + Number((data.removeIds || []).length) + ' 段',
-          '\u7d20\u6750\u52a8\u4f5c ' + Number((data.mediaActions || data.media_actions || []).length) + ' \u9879',
-          '实际变更 ' + changed + ' 项',
-          reason ? ('说明: ' + reason) : '',
-          summary ? ('摘要: ' + summary) : '',
-        ].filter(Boolean);
-        pushChatMessage('assistant', msgParts.join(' | '));
-        setLlmChatStatus('AI管家已完成调整');
-        setAiButlerStatus('已完成', 'ok');
+        const reply = buildAiButlerSummary(text, localActions, changed, data);
+        pushChatMessage('assistant', reply);
+        setLlmChatStatus(reply);
+        setAiButlerStatus('完成', 'ok');
       } finally {
         setLlmChatSubmitting(false);
       }
@@ -7521,6 +7878,11 @@ const html = `<!doctype html>
         return;
       }
       if (e.key === 'Escape') {
+        if (originalProofreadModalEl && !originalProofreadModalEl.hidden) {
+          closeOriginalProofread();
+          e.preventDefault();
+          return;
+        }
         if (shortcutHelpEl && !shortcutHelpEl.hidden) {
           closeShortcutHelp();
           e.preventDefault();
@@ -7572,8 +7934,6 @@ const html = `<!doctype html>
     });
     if (btnToggleVideoPreview) btnToggleVideoPreview.addEventListener('click', toggleVideoPreview);
     if (btnFocusReview) btnFocusReview.addEventListener('click', toggleFocusReviewMode);
-    if (btnShowDeleteDiagnostics) btnShowDeleteDiagnostics.addEventListener('click', renderDeleteDiagnostics);
-    if (btnCopyDiagnostics) btnCopyDiagnostics.addEventListener('click', copyCutDiagnostics);
     if (cutPrecisionModeEl) {
       cutPrecisionModeEl.addEventListener('change', () => {
         updateSelectionStats();
@@ -7747,6 +8107,14 @@ const html = `<!doctype html>
     if (btnReplaceOne) btnReplaceOne.addEventListener('click', replaceActiveMatch);
     if (btnReplaceAll) btnReplaceAll.addEventListener('click', replaceAllMatches);
     if (btnApplyGlossary) btnApplyGlossary.addEventListener('click', applyGlossaryCorrections);
+    if (btnOriginalProofread) btnOriginalProofread.addEventListener('click', openOriginalProofread);
+    if (btnRunOriginalProofread) btnRunOriginalProofread.addEventListener('click', runOriginalProofread);
+    if (btnCloseOriginalProofread) btnCloseOriginalProofread.addEventListener('click', closeOriginalProofread);
+    if (originalProofreadModalEl) {
+      originalProofreadModalEl.addEventListener('mousedown', (e) => {
+        if (e.target === originalProofreadModalEl) closeOriginalProofread();
+      });
+    }
     if (btnShortcutHelp) btnShortcutHelp.addEventListener('click', openShortcutHelp);
     if (btnCloseShortcutHelp) btnCloseShortcutHelp.addEventListener('click', closeShortcutHelp);
     if (shortcutHelpEl) {
@@ -8203,7 +8571,7 @@ const html = `<!doctype html>
       renderQualityWarnings();
       render();
       syncUndoButton();
-      renderPublishSuggestions({ titles: [], descriptions: [], keywords: [] });
+      renderPublishSuggestions({ titles: [], coverTitles: [], descriptions: [], topics: [] });
       renderVisualReference();
       renderImageCards();
       renderVideoAssetCards();

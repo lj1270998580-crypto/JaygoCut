@@ -357,9 +357,87 @@ function testJianyingFullDraftSpec() {
     const textTrack = spec.tracks.find((track) => track.name === 'Jaygo Cut 字幕');
     assert.ok(textTrack, 'full draft should include subtitle track');
     assert.strictEqual(textTrack.items.length, 2);
+    for (let i = 1; i < textTrack.items.length; i += 1) {
+      const prevEnd = textTrack.items[i - 1].start + textTrack.items[i - 1].duration;
+      assert.ok(textTrack.items[i].start >= prevEnd - 0.001, 'subtitle items should not overlap on one track');
+    }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+function testJianyingSubtitleItemsStayOnSingleTrack() {
+  const items = reviewServerTools.buildJianyingSubtitleItems([
+    { start: 0, end: 0.04, text: '你' },
+    { start: 0.05, end: 0.09, text: '好' },
+    { start: 0.11, end: 0.16, text: '吗' },
+    { start: 0.22, end: 0.70, text: '下一句' },
+  ], { fontSize: 9, color: '#fff' });
+  assert.ok(items.length >= 1, 'short subtitle cues should be kept instead of becoming invalid');
+  for (let i = 1; i < items.length; i += 1) {
+    const prevEnd = items[i - 1].start + items[i - 1].duration;
+    assert.ok(items[i].start >= prevEnd - 0.001, 'normalized subtitle cues must not overlap');
+  }
+  const readable = reviewServerTools.buildJianyingSubtitleItems([
+    { start: 0, end: 1.1, text: '第一句话' },
+    { start: 1.12, end: 2.1, text: '第二句话' },
+    { start: 2.15, end: 3.1, text: '第三句话' },
+  ]);
+  assert.strictEqual(readable.length, 3, 'normal adjacent subtitle cues should not be over-merged');
+}
+
+function testOriginalProofreadUsesMatchedCandidatesOnly() {
+  const units = [
+    { id: 1, text: '这个问题最近在网上爆火', startIndex: 0, endIndex: 9 },
+    { id: 2, text: '我们今天聊一聊规则', startIndex: 10, endIndex: 19 },
+    { id: 3, text: '她的选择很重要', startIndex: 20, endIndex: 27 },
+  ];
+  const candidates = reviewServerTools.buildProofreadCandidates(units, '这个问题最近在网上爆火。');
+  assert.ok(candidates.length >= 1, 'proofread should find a sentence-level candidate before asking AI');
+  assert.strictEqual(candidates[0].startIndex, 0);
+  assert.ok(candidates.every((candidate) => candidate.original.includes('这个问题')), 'one pasted sentence should not expose unrelated transcript units');
+
+  const words = '这个问题最近在网上爆火我们今天聊一聊规则她的选择很重要'
+    .split('')
+    .map((text) => ({ text }));
+  const unsafe = reviewServerTools.sanitizeProofreadCorrections({
+    corrections: [{ candidateId: candidates[0].id, startIndex: 20, endIndex: 20, from: '她', to: '他', reason: 'outside candidate' }],
+  }, candidates, words);
+  assert.strictEqual(unsafe.length, 0, 'proofread corrections outside the matched candidate should be rejected');
+
+  const safe = reviewServerTools.sanitizeProofreadCorrections({
+    corrections: [{ candidateId: candidates[0].id, startIndex: 0, endIndex: 1, from: '这个', to: '这个', reason: 'inside candidate' }],
+  }, candidates, words);
+  assert.strictEqual(safe.length, 1, 'proofread corrections inside the matched candidate should be allowed');
+}
+
+function testOriginalProofreadDeterministicCorrections() {
+  const words = '规则不是用来束缚王超燃说王朝然到了'
+    .split('')
+    .map((text, index) => ({ text, start: index * 0.1, end: index * 0.1 + 0.08, isGap: false }));
+  const units = [
+    { id: 1, text: '规则不是用来束缚', startIndex: 0, endIndex: 7 },
+  ];
+  const candidates = reviewServerTools.buildProofreadCandidates(units, '规则不是用来舒服。王超然');
+  const diffCorrections = reviewServerTools.sanitizeProofreadCorrections(
+    { corrections: reviewServerTools.buildSentenceDiffProofreadCorrections(candidates, words) },
+    candidates,
+    words,
+  );
+  assert.ok(
+    diffCorrections.some((item) => item.from === '束缚' && item.to === '舒服'),
+    'sentence diff proofread should correct close homophone phrase inside the matched sentence',
+  );
+
+  const nameCorrections = reviewServerTools.buildProperNameProofreadCorrections(words, '王超然');
+  assert.ok(
+    nameCorrections.some((item) => item.from === '王超燃' && item.to === '王超然'),
+    'proper-name proofread should correct near homophone variants such as 王超燃',
+  );
+  assert.ok(
+    nameCorrections.some((item) => item.from === '王朝然' && item.to === '王超然'),
+    'proper-name proofread should correct same-surname variants such as 王朝然',
+  );
 }
 
 function testJianyingDraftMediaPathFallbacks() {
@@ -390,6 +468,16 @@ function testJianyingDraftMediaPathFallbacks() {
       videoAssetPath,
       'video asset fileName/url should resolve to local video_assets path',
     );
+    assert.strictEqual(
+      reviewServerTools.resolveMediaFilePathFromAsset({ fileName: '', url: '/image_assets/' }, 'image'),
+      '',
+      'empty or directory-only image asset URLs should not resolve to the image_assets folder',
+    );
+    assert.strictEqual(
+      reviewServerTools.resolveMediaFilePathFromAsset({ filePath: imageAssetDir }, 'image'),
+      '',
+      'directory filePath should not be treated as a generated image file',
+    );
 
     const { spec } = reviewServerTools.buildJianyingFullDraftSpec({
       draftName: 'media_fallback_test',
@@ -404,20 +492,48 @@ function testJianyingDraftMediaPathFallbacks() {
       mediaAssets: {
         images: [
           { id: 'img_file_name', start: 0.5, end: 6.5, durationSec: 6, status: 'done', image: { fileName: imageName, url: `/image_assets/${encodeURIComponent(imageName)}` } },
+          { id: 'img_failed_old_state', start: 6.6, end: 9.6, durationSec: 3, status: 'error', image: { fileName: '', url: '/image_assets/' } },
         ],
         videos: [
           { id: 'vid_file_name', start: 5.2, end: 8.2, durationSec: 3, status: 'done', video: { fileName: videoName, url: `/video_assets/${encodeURIComponent(videoName)}` } },
+          { id: 'vid_failed_old_state', start: 8.3, end: 9.3, durationSec: 1, status: 'error', video: { fileName: '', url: '/video_assets/' } },
         ],
       },
     });
     const imageTrack = spec.tracks.find((track) => track.name === 'Jaygo Cut 图片素材');
     const videoTrack = spec.tracks.find((track) => track.name === 'Jaygo Cut 视频素材');
+    assert.strictEqual(imageTrack.items.length, 1, 'failed historical image assets without files should be skipped');
+    assert.strictEqual(videoTrack.items.length, 1, 'failed historical video assets without files should be skipped');
     assert.strictEqual(imageTrack.items[0].path, imageAssetPath);
     assert.strictEqual(videoTrack.items[0].path, videoAssetPath);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(imageAssetPath, { force: true });
     fs.rmSync(videoAssetPath, { force: true });
+  }
+}
+
+function testJianyingDraftPathReferencesAreRewritten() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jaygo-jianying-path-rewrite-'));
+  try {
+    const staging = path.join(dir, '_staging', 'JaygoCut_tmp');
+    const finalDraft = path.join(dir, 'JaygoCut_final');
+    fs.mkdirSync(staging, { recursive: true });
+    const staleMedia = path.join(staging, 'assets', 'video', 'source.mp4');
+    const finalMedia = path.join(finalDraft, 'assets', 'video', 'source.mp4');
+    fs.writeFileSync(path.join(staging, 'draft_info.json'), JSON.stringify({
+      materials: [
+        { path: staleMedia },
+        { path: staleMedia.replace(/\\/g, '/') },
+      ],
+    }), 'utf8');
+    const changed = reviewServerTools.rewriteDraftPathReferences(staging, staging, finalDraft);
+    const content = fs.readFileSync(path.join(staging, 'draft_info.json'), 'utf8');
+    assert.ok(changed >= 1, 'path rewrite should update at least one draft metadata file');
+    assert.ok(!content.includes('_staging'), 'draft metadata must not keep stale staging paths');
+    assert.ok(content.includes(finalMedia) || content.includes(finalMedia.replace(/\\/g, '/')), 'draft metadata should point to the final draft media path');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 
@@ -501,9 +617,12 @@ function testGeneratedReviewInlineScriptSyntax() {
   assert.ok(!html.includes('data-tool-panel="export"'), 'Jianying export should move out of the hidden tools panel');
   assert.ok(html.includes('id="jianyingQuickTarget"'), 'review page should expose a compact Jianying target selector next to export');
   assert.ok(html.includes('id="btnExportJianyingDraft"'), 'review page should expose Jianying export next to the main cut action');
+  assert.ok(html.includes('id="btnOriginalProofread"'), 'review page should expose original-script proofreading in text correction tools');
+  assert.ok(html.includes('/api/llm-proofread-original'), 'review page should call the original-script proofreading endpoint');
   assert.ok(!html.includes('id="btnExportSrt"'), 'review page should remove redundant SRT export');
   assert.ok(!html.includes('id="btnExportTxt"'), 'review page should remove redundant TXT export');
   assert.ok(html.includes('fullDraft: true'), 'review page should request full Jianying draft export');
+  assert.ok(!html.includes('Math.max(cue.end, cue.start + 0.35)'), 'review page should not force subtitle cue overlap before Jianying export');
   assert.ok(html.includes('/api/jianying-draft-targets'), 'review page should auto-detect Jianying draft targets');
   assert.ok(html.includes('exportMode,'), 'review page should send Jianying export mode to the server');
   assert.ok(html.includes('targetRoot,'), 'review page should send selected Jianying draft root to the server');
@@ -604,9 +723,15 @@ function testGeneratedReviewInlineScriptSyntax() {
   assert.ok(html.includes('The source video is a visual preview only'), 'video preview should not drive review audio playback');
   assert.ok(html.includes('media.volume = 0'), 'generated video overlay preview should be muted at volume zero');
   assert.ok(html.includes('smoothSkipTo(target)'), 'selected delete segment playback should not hard-seek abruptly');
-  assert.ok(html.includes('id="btnShowDeleteDiagnostics"'), 'review page should expose delete diagnostics button');
   assert.ok(html.includes('id="cutPrecisionMode"'), 'review page should expose cut precision mode selector');
-  assert.ok(html.includes('id="btnCopyDiagnostics"'), 'review page should expose copy diagnostics button');
+  assert.ok(!html.includes('id="btnShowDeleteDiagnostics"'), 'delete diagnostics should not consume review text space');
+  assert.ok(!html.includes('id="btnCopyDiagnostics"'), 'copy diagnostics should move out of the main review UI');
+  assert.ok(!html.includes('id="deleteDiagnosticsPanel"'), 'delete diagnostics should not render a large blocking panel');
+  assert.ok(html.includes('stripSubtitlePunctuation'), 'Jianying subtitle export should remove punctuation from exported subtitle text');
+  assert.ok(html.includes('getSubtitleBreakPunctuation'), 'Jianying subtitle export should split by sentence punctuation, including commas');
+  assert.ok(!html.includes('duration >= 3.8'), 'Jianying subtitle export should not split primarily by duration');
+  assert.ok(!html.includes('duration >= 2.8'), 'Jianying subtitle export should not use the old over-sensitive split threshold');
+  assert.ok(!/AI管家[\s\S]{0,240}\?{3,}/.test(html), 'AI butler status/progress text should not contain garbled question marks');
   assert.ok(html.includes('/api/review-state/backup'), 'review page should force a backup before cut');
   assert.ok(html.includes('/api/cut-preflight'), 'review page should run preflight before cut');
   assert.ok(html.includes('id="replaceFindText"'), 'review page should expose keyword search input');
@@ -683,7 +808,15 @@ function testReviewServerProvidesSafeSourceVideoRoute() {
   assert.ok(server.includes('autoVideoCountForUnits'), 'video material planning should support automatic count matching');
   assert.ok(server.includes('rawStatus === \'generating\' && !hasGeneratedAsset'), 'review state should recover interrupted media generation as retryable cards');
   assert.ok(server.includes('injectReviewHtmlCompatibility'), 'review server should patch old review pages with compatibility helpers');
-  assert.ok(server.includes('jaygo-compat-build-time-mapper'), 'old review pages should receive a Jianying time-mapper compatibility patch');
+  assert.ok(server.includes('jaygo-compat-review-export-helpers'), 'old review pages should receive Jianying export helper compatibility patches');
+  assert.ok(server.includes('window.appendSubtitleToken'), 'old review pages should receive subtitle join compatibility patches');
+  assert.ok(server.includes('window.shouldBreakSubtitleCue'), 'old review pages should receive subtitle split compatibility patches');
+  assert.ok(server.includes('duration >= 3.8'), 'old review page compatibility patch should use readable short-sentence subtitle splitting');
+  assert.ok(server.includes("body.includes('duration >= 2.8')"), 'old review pages with stale subtitle splitting should be patched');
+  assert.ok(server.includes('btnShowDeleteDiagnostics'), 'old review pages should remove the large delete diagnostics entry through compatibility patching');
+  assert.ok(server.includes('_staging'), 'full Jianying draft export should compile outside the live draft root first');
+  assert.ok(server.includes('.jaygo_tmp_'), 'full Jianying draft export should atomically place completed drafts to avoid duplicate partial drafts');
+  assert.ok(server.includes('buildProofreadCandidates'), 'original-script proofreading should be constrained to matched sentence candidates');
   assert.ok(server.includes('videoDurationToGenerationParams'), 'review server should map planned video durations to stable Agnes frame counts');
   assert.ok(server.includes("mode: 'ti2vid'"), 'Agnes video requests should explicitly use the Agnes text-to-video mode');
   assert.ok(server.includes('formatMediaItemsForChat'), 'LLM chat prompt should include existing media cards');
@@ -819,7 +952,11 @@ testAgnesVideoPlanningAndOverlayWiring();
 testLlmMarkingPromptIsConservative();
 testJianyingDraftExport();
 testJianyingFullDraftSpec();
+testJianyingSubtitleItemsStayOnSingleTrack();
+testOriginalProofreadUsesMatchedCandidatesOnly();
+testOriginalProofreadDeterministicCorrections();
 testJianyingDraftMediaPathFallbacks();
+testJianyingDraftPathReferencesAreRewritten();
 testJianyingDraftRootExportTarget();
 testCutPrecisionModeAdjustsOnlySubmittedSegments();
 testDeleteSegmentDiagnosticsFindsRisks();
