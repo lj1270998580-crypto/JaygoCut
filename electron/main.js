@@ -533,11 +533,26 @@ function getHistoryFilePath() {
   return path.join(app.getPath('userData'), 'history.json');
 }
 
+function getEditingKnowledgeFilePath() {
+  return path.join(app.getPath('userData'), 'editing_knowledge.json');
+}
+
 function getEnvFilePath() {
   if (app.isPackaged) {
     return path.join(app.getPath('userData'), '.env');
   }
   return path.join(REPO_ROOT, '.env');
+}
+
+function readEditingKnowledgeSummary() {
+  try {
+    const file = getEditingKnowledgeFilePath();
+    if (!fs.existsSync(file)) return '';
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return String(data.summary || '').trim().slice(0, 2400);
+  } catch {
+    return '';
+  }
 }
 
 function buildRuntimeEnv(settings) {
@@ -587,6 +602,8 @@ function buildRuntimeEnv(settings) {
     ).trim(),
     VIDEO_MODEL: String(settings.videoModel || '').trim(),
     TERM_GLOSSARY: String(settings.termGlossary || ''),
+    JAYGO_KNOWLEDGE_FILE: getEditingKnowledgeFilePath(),
+    JAYGO_USER_STYLE_SUMMARY: readEditingKnowledgeSummary(),
     JIANYING_DRAFT_ROOT: String(settings.jianyingDraftRoot || '').trim(),
     JIANYING_TEMPLATE_PATHS: JSON.stringify(normalizeDirList(settings.jianyingTemplatePaths, 5)),
   };
@@ -692,6 +709,142 @@ async function relinkHistoryEntryVideo(target) {
   const next = relinkHistoryVideo(list, target, result.filePaths[0]);
   await saveHistory(next);
   return next.map((item) => annotateHistoryEntry(item));
+}
+
+function collectReviewLearningFiles(projectDir) {
+  const root = String(projectDir || '').trim();
+  if (!root || !fs.existsSync(root)) return {};
+  const out = {};
+  const stack = [{ dir: root, depth: 0 }];
+  while (stack.length) {
+    const current = stack.pop();
+    if (!current || current.depth > 5) continue;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(current.dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const full = path.join(current.dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!/^(node_modules|dist|release|out|tmp|temp)$/i.test(entry.name)) {
+          stack.push({ dir: full, depth: current.depth + 1 });
+        }
+      } else if (entry.name === 'review_state.json') {
+        out.reviewState = out.reviewState || full;
+      } else if (entry.name === 'subtitles_words.json') {
+        out.words = out.words || full;
+      }
+      if (out.reviewState && out.words) return out;
+    }
+  }
+  return out;
+}
+
+function readJsonIfExists(file) {
+  try {
+    if (!file || !fs.existsSync(file)) return null;
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function normalizeLearningWords(data) {
+  const source = Array.isArray(data) ? data : (Array.isArray(data?.words) ? data.words : []);
+  return source
+    .map((word, index) => ({
+      index,
+      text: String(word?.text || word?.word || '').trim(),
+      isGap: !!word?.isGap,
+    }))
+    .filter((word) => word.text);
+}
+
+function buildKnowledgeSummary(snapshot) {
+  const learnedCount = Number(snapshot.learnedCount || 0);
+  const deletedTop = Object.entries(snapshot.deletedTokenCounts || {})
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 16)
+    .map(([token, count]) => `${token}(${count})`)
+    .join('、');
+  const reasonTop = Object.entries(snapshot.reasonCounts || {})
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([reason, count]) => `${reason}(${count})`)
+    .join('、');
+  const corrections = (snapshot.corrections || []).slice(-20)
+    .map((item) => `${item.from}->${item.to}`)
+    .join('、');
+  return [
+    `已学习 ${learnedCount} 个历史审核草稿。`,
+    deletedTop ? `用户常删词/短语：${deletedTop}。` : '',
+    reasonTop ? `历史删除类型倾向：${reasonTop}。` : '',
+    corrections ? `常见文字纠错：${corrections}。` : '',
+    'AI分析应优先匹配用户过去保留主线、删除口癖/弱重复/跑题段的习惯；不确定时少删并给出低风险建议。',
+  ].filter(Boolean).join('\n').slice(0, 2400);
+}
+
+async function rebuildEditingKnowledge() {
+  const knowledgeFile = getEditingKnowledgeFilePath();
+  const current = readJsonIfExists(knowledgeFile) || {};
+  const learnedKeys = current.learnedKeys && typeof current.learnedKeys === 'object' ? current.learnedKeys : {};
+  const snapshot = {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    learnedKeys,
+    learnedCount: Number(current.learnedCount || 0),
+    deletedTokenCounts: current.deletedTokenCounts && typeof current.deletedTokenCounts === 'object' ? current.deletedTokenCounts : {},
+    reasonCounts: current.reasonCounts && typeof current.reasonCounts === 'object' ? current.reasonCounts : {},
+    corrections: Array.isArray(current.corrections) ? current.corrections.slice(-80) : [],
+  };
+
+  const history = await loadHistory();
+  let changed = false;
+  for (const entry of history) {
+    const projectDir = String(entry?.projectDir || '').trim();
+    const files = collectReviewLearningFiles(projectDir);
+    if (!files.reviewState || !files.words) continue;
+    let stat = null;
+    try {
+      stat = fs.statSync(files.reviewState);
+    } catch {
+      continue;
+    }
+    const key = `${files.reviewState}|${stat.size}|${Math.floor(stat.mtimeMs)}`;
+    if (snapshot.learnedKeys[key]) continue;
+    const state = readJsonIfExists(files.reviewState) || {};
+    const words = normalizeLearningWords(readJsonIfExists(files.words));
+    if (!words.length) continue;
+    const selected = Array.isArray(state.selectedIndices) ? state.selectedIndices : [];
+    const llmReasons = state.llmReasons && typeof state.llmReasons === 'object' ? state.llmReasons : {};
+    for (const rawIndex of selected) {
+      const index = Number(rawIndex);
+      if (!Number.isInteger(index) || !words[index] || words[index].isGap) continue;
+      const token = words[index].text.slice(0, 12);
+      if (token) snapshot.deletedTokenCounts[token] = (snapshot.deletedTokenCounts[token] || 0) + 1;
+      const reason = String(llmReasons[String(index)] || '').slice(0, 24);
+      if (reason) snapshot.reasonCounts[reason] = (snapshot.reasonCounts[reason] || 0) + 1;
+    }
+    const overrides = state.textOverrides && typeof state.textOverrides === 'object' ? state.textOverrides : {};
+    for (const [idx, to] of Object.entries(overrides)) {
+      const index = Number(idx);
+      const from = words[index]?.text || '';
+      const target = String(to || '').trim();
+      if (from && target && from !== target && from.length <= 8 && target.length <= 8) {
+        snapshot.corrections.push({ from, to: target });
+      }
+    }
+    snapshot.learnedKeys[key] = true;
+    snapshot.learnedCount += 1;
+    changed = true;
+  }
+  if (!changed && current.summary) return current;
+  snapshot.summary = buildKnowledgeSummary(snapshot);
+  await ensureDir(path.dirname(knowledgeFile));
+  await fsp.writeFile(knowledgeFile, `${JSON.stringify(snapshot, null, 2)}\n`, 'utf8');
+  return snapshot;
 }
 
 function taskSnapshot() {
@@ -2795,6 +2948,9 @@ app.whenReady().then(async () => {
   app.setName(APP_NAME);
   app.setAppUserModelId(APP_ID);
   createMainWindow();
+  rebuildEditingKnowledge().catch((err) => {
+    console.warn('Failed to rebuild editing knowledge:', err.message || err);
+  });
 
   ipcMain.handle('settings:get', async () => loadSettings());
   ipcMain.handle('settings:save', async (_event, settings) => saveSettings(settings));

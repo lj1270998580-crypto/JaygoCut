@@ -59,9 +59,11 @@ const AGNES_API_BASE_URL = 'https://apihub.agnes-ai.com/v1';
 const AGNES_IMAGE_MODEL = 'agnes-image-2.1-flash';
 const AGNES_VIDEO_MODEL = 'agnes-video-v2.0';
 const AGNES_MIN_REQUEST_INTERVAL_MS = 3200;
+const AGNES_VIDEO_MIN_REQUEST_INTERVAL_MS = 60000;
 const JIANYING_DRAFT_EXPORT_DIR_NAME = 'jianying_drafts';
 
 let lastAgnesRequestAt = 0;
+let lastAgnesVideoRequestAt = 0;
 
 let currentCutJob = {
   jobId: null,
@@ -133,6 +135,30 @@ function envValue(fileEnv, name, fallback = '') {
     return process.env[name];
   }
   return fallback;
+}
+
+function loadEditingKnowledgeSummary() {
+  const direct = String(process.env.JAYGO_USER_STYLE_SUMMARY || '').trim();
+  if (direct) return direct.slice(0, 2400);
+  const file = String(process.env.JAYGO_KNOWLEDGE_FILE || '').trim();
+  if (!file) return '';
+  try {
+    if (!fs.existsSync(file)) return '';
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return String(data.summary || '').trim().slice(0, 2400);
+  } catch {
+    return '';
+  }
+}
+
+function buildEditingKnowledgePromptBlock() {
+  const summary = loadEditingKnowledgeSummary();
+  if (!summary) return '';
+  return [
+    '用户历史剪辑知识库（仅作风格参考，不可替代当前文本判断）：',
+    summary,
+    '使用方式：优先学习用户常删的口癖、弱重复、跑题习惯；但当前文本若承载观点/事实/因果/情绪推进，必须保留。',
+  ].join('\n');
 }
 
 function getRuntimeInfo() {
@@ -577,8 +603,10 @@ function buildPublishSuggestionPrompt(units, analysis, style) {
     `梗概: ${String(analysis?.outline || '').trim() || '未知'}`,
     `风格: ${mode}`,
     '请先理解全文的核心冲突、人物关系、情绪钩子、反差点、结果悬念和用户痛点。',
-    '生成 10 个视频主标题：每个不超过30字，必须使用10种不同句式，不要重复同一种模板。',
-    '生成 5 个封面标题：每个不超过18字，短、狠、清晰，适合放在封面上。',
+    '生成 10 个视频主标题：每个不超过30字，必须使用10种不同爆款句式，不要重复同一种模板。',
+    '10种句式必须分别覆盖：反差冲突、结果前置、问题悬念、认知颠覆、避坑提醒、情绪共鸣、故事转折、身份代入、行动建议、金句总结。',
+    '主标题要触及人性：害怕错过、渴望变好、被误解、反常识、选择成本、努力是否值得、关系/成长/利益的真实冲突。',
+    '生成 5 个封面标题：每个不超过20字，必须是完整一句话，直接命中主题，适合放在封面上。',
     '生成 3 个作品简介：每个不超过140字，适合发布页简介。',
     '生成 8-12 个话题参考：必须以 # 开头，贴合内容主题、情绪、人群、场景或平台搜索习惯。',
     '爆款句式参考：反差冲突、问题悬念、结果前置、认知颠覆、避坑提醒、情绪共鸣、故事转折、身份代入、行动建议、金句总结。',
@@ -708,6 +736,7 @@ function buildLlmPrompt(chunkUnits, context = {}) {
   const outline = String(context.outline || '').trim();
   const multiSpeaker = context.multiSpeaker ? 'true' : 'false';
   const mainSpeakerHint = String(context.mainSpeakerHint || '').trim();
+  const editingKnowledge = String(context.userStyleSummary || '').trim() || buildEditingKnowledgePromptBlock();
   const precisionRules = [
     'You are a senior short-form talking-head editor. Improve rhythm, but protect meaning first.',
     'Before marking anything, infer the role of this chunk in the whole script: hook, setup, point, proof, example, contrast, conclusion, or off-topic chat.',
@@ -745,6 +774,7 @@ function buildLlmPrompt(chunkUnits, context = {}) {
     `全局梗概参考: ${outline || '未知'}`,
     `是否多人对话(预判): ${multiSpeaker}`,
     `主讲人线索(预判): ${mainSpeakerHint || '未知'}`,
+    editingKnowledge ? `\n${editingKnowledge}` : '',
     '',
     '输出 JSON（只返回 JSON，不要 markdown）：',
     '{"analysis":{"topic":"","outline":"","multiSpeaker":false,"mainSpeakerHint":""},',
@@ -1358,7 +1388,7 @@ function buildFallbackPublishCoverTitles(units, analysis) {
     `关键在这里`,
     `看完就懂了`,
     `这点很重要`,
-  ].map((title) => trimByChars(title, 18));
+  ].map((title) => trimByChars(title, 20));
 }
 
 function buildFallbackPublishDescriptions(units, analysis) {
@@ -1419,7 +1449,7 @@ async function runLlmPublishSuggestions(words, config, style, inputAnalysis) {
     .concat(Array.isArray(parsed.tags) ? parsed.tags : []);
 
   let titles = sanitizeTitles(titlesRaw);
-  let coverTitles = sanitizeTitles(coverTitlesRaw, 5, 18);
+  let coverTitles = sanitizeTitles(coverTitlesRaw, 5, 20);
   let descriptions = sanitizeDescriptions(descriptionsRaw);
   let topics = sanitizeKeywords(topicsRaw);
 
@@ -1427,7 +1457,7 @@ async function runLlmPublishSuggestions(words, config, style, inputAnalysis) {
     titles = sanitizeTitles(buildFallbackPublishTitles(units, analysis));
   }
   if (!coverTitles.length) {
-    coverTitles = sanitizeTitles(buildFallbackPublishCoverTitles(units, analysis), 5, 18);
+    coverTitles = sanitizeTitles(buildFallbackPublishCoverTitles(units, analysis), 5, 20);
   }
   if (!descriptions.length) {
     descriptions = buildFallbackPublishDescriptions(units, analysis);
@@ -1502,6 +1532,10 @@ function buildImagePlanPrompt(units, analysis, style, count, existingRanges = []
     'B. 选择真正适合配图的节点：开头钩子、观点冲突、人物行动、案例画面、情绪转折、结尾记忆点；不要机械平均取句。',
     'C. 给每个节点做导演转译：把原文含义转成可拍/可画的场景，不要直接把原句写进提示词。',
     'D. 最后自检：每个 prompt 必须包含人物/主体、地点、动作、道具或环境、情绪、镜头构图、光线/色彩、统一画风。',
+    '导演转译示例：',
+    '原文“哪怕她摔了一跤” => prompt“主角在街边人行道不小心摔倒，手里的包散落，路人回头看，中景”。',
+    '原文“偶尔的惬意” => prompt“主角坐在沙发上喝咖啡看电视，窗外午后阳光，放松表情”。',
+    '原文“收到了别人打赏” => prompt“主角低头看手机，屏幕显示收到10元打赏，惊喜又克制，近景”。',
     '硬性要求：',
     `1. 生成 ${targetCount} 个配图点，配图点要服务视频理解和节奏，不要只因为某句话出现就配图。`,
     '2. 每个配图点必须对应文本中的时间范围，不能脱离原文编造事实；展示时长必须控制在 5-10 秒之间，优先 6-8 秒。',
@@ -1511,7 +1545,7 @@ function buildImagePlanPrompt(units, analysis, style, count, existingRanges = []
     '6. 严禁把 textBasis 或原文句子直接塞进 prompt；prompt 必须是画面故事描述。',
     '7. sceneStory 必须回答：谁/什么主体，在什么地点，正在做什么，画面里有哪些道具或背景，情绪是什么。',
     '8. camera 必须回答：远景/中景/近景/特写、俯拍/平视/侧逆光、主体位置、留白。',
-    '9. prompt 用中文为主，可夹带必要英文风格词；不要出现字幕、文字排版、水印、logo。',
+    '9. prompt 必须是简短中文分镜，80 个汉字以内，不要抽象口号，不要长篇解释，不要出现字幕、文字排版、水印、logo。',
     '10. negativePrompt 用于排除：低清、变形、文字乱码、多余手指、水印、logo、畸形脸、人物服饰不一致、角色身份漂移、风格不统一。',
     `视觉风格：${visualStyle}`,
     `主题参考：${String(analysis?.topic || '').trim() || '未知'}`,
@@ -1807,6 +1841,27 @@ function buildDirectorFallbackScene(textBasis, title, purpose, index) {
   };
 }
 
+function normalizeStoryboardCue(text) {
+  return trimByChars(String(text || '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/[“”"'‘’]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim(), 52);
+}
+
+function buildConciseChineseScenePrompt(options = {}) {
+  const sceneStory = normalizeStoryboardCue(options.sceneStory || options.visual || options.textBasis || options.title || '主角面对一个关键选择');
+  const camera = normalizeStoryboardCue(options.camera || '中景，平视镜头，主体清楚，背景简洁');
+  const styleAnchor = normalizeStoryboardCue(options.styleAnchor || '统一画风');
+  const kind = String(options.kind || 'image');
+  const hasReference = !!options.hasReference;
+  const referenceHint = hasReference ? '参考人物和场景资产，' : '';
+  const motionHint = kind === 'video' ? '，轻微自然运动，镜头稳定' : '';
+  const noText = kind === 'video' ? '，无字幕无文字无水印' : '，无文字无水印';
+  const prompt = `${referenceHint}画面故事：${sceneStory}，镜头构图：${camera}${motionHint}，${styleAnchor}${noText}`;
+  return trimByChars(prompt.replace(/，+/g, '，').replace(/^，|，$/g, ''), kind === 'video' ? 180 : 120);
+}
+
 function sanitizeImagePlanItems(parsed, units, count, analysis, fallbackStyle) {
   const targetCount = Math.max(4, Math.min(12, Number(count) || 8));
   const visualBible = buildVisualBibleText(parsed, analysis, fallbackStyle);
@@ -1845,21 +1900,16 @@ function sanitizeImagePlanItems(parsed, units, count, analysis, fallbackStyle) {
     if (!visual || hasDirectTranscriptCopy(visual, textBasis) || !hasDirectorVisualLanguage(visual)) {
       visual = trimByChars(sceneStory, 160);
     }
-    const basePrompt = trimByChars([
-      sceneStory ? `画面故事：${sceneStory}` : '',
-      visual ? `画面描述：${visual}` : '',
-      camera ? `镜头构图：${camera}` : '',
-      rawPrompt && rawPrompt !== textBasis && !hasDirectTranscriptCopy(rawPrompt, textBasis) && hasDirectorVisualLanguage(rawPrompt)
-        ? `生成提示：${rawPrompt}`
-        : '',
-    ].filter(Boolean).join('；') || `把该配图点转写为一个具体故事画面：同一主角在统一场景中用动作和道具表达内容，不出现文字。`, 1000);
-    const prompt = trimByChars([
-      visualBible ? `全片统一视觉设定：${visualBible}` : '',
-      styleAnchor ? `用户选择画风：${styleAnchor}，所有图片必须严格保持这一种画风，不要混入其他风格` : '',
-      `当前配图点：${basePrompt}`,
-      '这是视频分镜插图，不是文字海报；必须画出人物、地点、动作、情绪、前景背景和镜头构图。',
-      '保持同一主角身份、脸型发型、服饰道具、时代地域、色彩系统和绘画笔触；只改变当前镜头的动作、构图和场景细节；画面无文字、无字幕、无水印、无 logo。',
-    ].filter(Boolean).join('。'), 1300);
+    const prompt = buildConciseChineseScenePrompt({
+      sceneStory,
+      visual,
+      camera,
+      styleAnchor: `用户选择画风：${styleAnchor || visualBible || '统一画风'}`,
+      textBasis,
+      title,
+      kind: 'image',
+      hasReference: !!visualBible,
+    });
     if (!prompt) continue;
     out.push({
       id,
@@ -1967,7 +2017,11 @@ function buildVideoPlanPrompt(units, analysis, style, count, aspectRatio, existi
     '请先理解主题、人物、文化语境、情绪和叙事结构，再选择真正需要画面辅助的节点。',
     '选择原则：优先开头钩子、观点冲突、案例画面、人物行动、情绪转折、结尾记忆点；不要机械平均切分。',
     '每个视频素材点必须有明确 start/end，代表它覆盖主视频画面的字幕时间范围。范围必须控制在 3-8 秒，优先 4-6 秒，由你根据语义节奏判断。',
-    'videoPrompt 必须是可拍摄/可生成的视频画面描述：人物或主体、地点、动作、镜头运动、光线、风格、情绪、环境细节；禁止直接复制原文句子。',
+    'videoPrompt 必须是 100 个汉字以内的中文视频分镜：人物或主体、地点、动作、镜头运动、光线、风格、情绪、环境细节；禁止直接复制原文句子。',
+    '导演转译示例：',
+    '原文“哪怕她摔了一跤” => videoPrompt“主角在街边人行道摔倒，包散落一地，路人回头，手持中景轻微推进”。',
+    '原文“偶尔的惬意” => videoPrompt“主角坐在沙发上喝咖啡看电视，午后阳光洒进客厅，慢速横移”。',
+    '原文“收到了别人打赏” => videoPrompt“主角低头看手机收到10元打赏，表情惊喜又克制，近景轻推”。',
     '如文本是中国语境，用中国人物、服饰、空间和生活场景；如是海外故事，要匹配对应国家/时代/建筑/服饰。',
     'If there are multiple independent stories/cases/time periods/visual worlds, every media item must include storyId and storyTitle matching the visual reference asset story group.',
     '输出只允许 JSON，不要 markdown。',
@@ -2023,13 +2077,15 @@ function sanitizeVideoPlanItems(parsed, units, count, analysis, fallbackStyle, a
       camera = fallbackScene.camera;
     }
     const rawPrompt = trimByChars(String(item.videoPrompt || item.prompt || '').replace(/\s+/g, ' '), 1000);
-    const videoPrompt = trimByChars([
-      visualBible ? `Consistent visual bible: ${visualBible}` : '',
-      styleAnchor ? `Style: ${styleAnchor}` : '',
-      `Scene story: ${sceneStory}`,
-      `Camera: ${camera}; slow natural motion, stable cinematic B-roll, no subtitles, no text, no watermark, no logo.`,
-      rawPrompt && !hasDirectTranscriptCopy(rawPrompt, textBasis) ? `Additional direction: ${rawPrompt}` : '',
-    ].filter(Boolean).join(' '), 1400);
+    const videoPrompt = buildConciseChineseScenePrompt({
+      sceneStory,
+      camera,
+      styleAnchor: `用户选择风格：${styleAnchor || visualBible || '统一风格'}`,
+      textBasis,
+      title,
+      kind: 'video',
+      hasReference: !!visualBible,
+    });
     if (!videoPrompt) continue;
     out.push({
       id,
@@ -2499,7 +2555,13 @@ async function waitAgnesRequestSlot(label = 'agnes') {
 }
 
 async function waitAgnesVideoRequestSlot() {
-  return waitAgnesRequestSlot('video');
+  const now = Date.now();
+  const waitMs = Math.max(0, AGNES_VIDEO_MIN_REQUEST_INTERVAL_MS - (now - lastAgnesVideoRequestAt));
+  if (waitMs > 0) {
+    appendCutLog('[video] Waiting ' + waitMs + 'ms to respect Agnes video RPM 1 limit');
+    await sleep(waitMs);
+  }
+  lastAgnesVideoRequestAt = Date.now();
 }
 
 async function pollAgnesVideoResult(config, videoId) {
@@ -2552,8 +2614,8 @@ async function pollAgnesVideoResult(config, videoId) {
       throw new Error(`Agnes video generation failed: ${text.slice(0, 300)}`);
     }
     appendCutLog(`[video] waiting Agnes video ${videoId}, attempt ${attempt}, status=${status || 'pending'}, endpoint=${queryUrl}`);
-    // Polling stays below the Agnes 20 RPM free limit while supporting both documented and compatibility endpoints.
-    await sleep(5000);
+    // Video generation is limited to 1 request per minute on the free Agnes plan.
+    await sleep(1000);
   }
   throw new Error(`Agnes video generation timed out. Last response: ${lastText.slice(0, 240)}`);
 }
@@ -3396,6 +3458,8 @@ function collectJianyingMediaItems(payload = {}, kind, deleteSegments) {
   const sanitized = sanitizeReviewMediaItems(rawItems, kind);
   const mapTime = (time) => mapDraftTimeAfterDeletes(time, deleteSegments);
   return sanitized.map((item, index) => {
+    const rawStatus = String(item.status || '').toLowerCase();
+    if (rawStatus && !['done', 'ready', 'imported'].includes(rawStatus)) return null;
     const filePath = getDraftAssetFilePath(item, kind);
     if (!isUsableMediaFilePath(filePath)) return null;
     const originalStart = Number(item.start);
@@ -4251,8 +4315,11 @@ function buildOriginalProofreadPrompt(candidates, originalText) {
     '不要润色，不要改写语序，不要新增内容，不要删除口播中真实存在但原文没有的口头表达；只在能从原文明确判断时纠正。',
     '系统已经先做过句子相似度匹配。你只能在下方候选句里校对，严禁修改候选句之外的任何内容。',
     '如果用户只提供了一句话，只能修正与这句话高度相似的候选句；没有把握就返回空 corrections。',
+    '硬性规则：只能做关键词级纠错，from 和 to 必须字数相同，建议 1-8 个汉字；不要把词替换成句子，也不要把句子替换成词。',
+    '示例：识别“规则不是用来束缚”，原文“规则不是用来舒服”，只返回 from="束缚" to="舒服"，不能替换整句。',
+    '示例：原文有人名“王超然”，可把全文相似人名“王超燃/王朝然”改成“王超然”，但仍必须保持同等字数。',
     '返回严格 JSON，不要 Markdown：{"corrections":[{"candidateId":数字,"startIndex":数字,"endIndex":数字,"from":"识别稿原词","to":"正确文字","reason":"简短中文理由"}],"summary":"中文摘要"}',
-    'startIndex/endIndex 必须落在候选句的 startIndex/endIndex 范围内。每条 to 建议不超过 30 个汉字。',
+    'startIndex/endIndex 必须落在候选句的 startIndex/endIndex 范围内。每条 to 最多 8 个汉字，且必须和 from 字数相同。',
     '',
     '候选句如下，每行是一个 JSON 对象：',
     candidateText || '(没有足够相似的候选句，请返回空 corrections)',
@@ -4277,6 +4344,25 @@ function findPhraseRangeInWords(words, candidate, phrase) {
     }
   }
   return null;
+}
+
+const MAX_PROOFREAD_KEYWORD_CHARS = 8;
+
+function normalizeProofreadTargetText(words, startIndex, endIndex) {
+  if (!Array.isArray(words)) return '';
+  return joinWordTokens(words.slice(startIndex, endIndex + 1).map((word) => word?.text || ''));
+}
+
+function isSafeKeywordProofreadReplacement(targetText, from, to) {
+  const targetComparable = normalizeProofreadComparable(targetText);
+  const fromComparable = normalizeProofreadComparable(from || targetText);
+  const toComparable = normalizeProofreadComparable(to);
+  if (!targetComparable || !toComparable) return false;
+  if (toComparable === targetComparable) return false;
+  if (targetComparable.length > MAX_PROOFREAD_KEYWORD_CHARS) return false;
+  if (toComparable.length !== targetComparable.length) return false;
+  if (fromComparable && fromComparable.length !== targetComparable.length) return false;
+  return true;
 }
 
 function sanitizeProofreadCorrections(parsed, candidates, words = []) {
@@ -4310,8 +4396,9 @@ function sanitizeProofreadCorrections(parsed, candidates, words = []) {
     const originalComparable = normalizeProofreadComparable(candidate.original);
     const toComparable = normalizeProofreadComparable(to);
     if (toComparable && !originalComparable.includes(toComparable)) continue;
+    const targetText = normalizeProofreadTargetText(words, startIndex, endIndex);
+    if (!isSafeKeywordProofreadReplacement(targetText, from, to)) continue;
     if (from) {
-      const targetText = joinWordTokens(words.slice(startIndex, endIndex + 1).map((word) => word?.text || ''));
       if (targetText && proofreadTextSimilarity(targetText, from) < 0.55) continue;
     }
     out.push({
@@ -4344,8 +4431,8 @@ function getSingleReplacementDiff(original, recognized) {
   const from = source.slice(prefix, source.length - suffix);
   const to = target.slice(prefix, target.length - suffix);
   if (!from || !to) return null;
-  if (from.length > 6 || to.length > 6) return null;
-  if (Math.abs(from.length - to.length) > 2) return null;
+  if (from.length > MAX_PROOFREAD_KEYWORD_CHARS || to.length > MAX_PROOFREAD_KEYWORD_CHARS) return null;
+  if (from.length !== to.length) return null;
   return { from, to };
 }
 
@@ -4523,6 +4610,7 @@ async function runLlmMarking(words, config) {
     outline: '',
     multiSpeaker: false,
     mainSpeakerHint: '',
+    userStyleSummary: loadEditingKnowledgeSummary(),
   };
   let structure = {
     sections: [],

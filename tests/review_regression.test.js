@@ -254,7 +254,8 @@ function testAgnesVideoPlanningAndOverlayWiring() {
   }, [{ id: 'u1', start: 10, end: 15, text: '这里需要一个观点冲突的 B-roll 画面' }], 1, { topic: '测试主题' }, '电影写实', '16:9');
   assert.strictEqual(items.length, 1);
   assert.strictEqual(items[0].type, 'video');
-  assert.ok(items[0].videoPrompt.includes('Scene story'), 'video prompt should be transformed into visual scene language');
+  assert.ok(items[0].videoPrompt.includes('画面故事'), 'video prompt should be transformed into Chinese storyboard language');
+  assert.ok(items[0].videoPrompt.includes('镜头构图'), 'video prompt should include camera language');
 }
 
 function testLlmMarkingPromptIsConservative() {
@@ -405,10 +406,15 @@ function testOriginalProofreadUsesMatchedCandidatesOnly() {
   }, candidates, words);
   assert.strictEqual(unsafe.length, 0, 'proofread corrections outside the matched candidate should be rejected');
 
-  const safe = reviewServerTools.sanitizeProofreadCorrections({
+  const noChange = reviewServerTools.sanitizeProofreadCorrections({
     corrections: [{ candidateId: candidates[0].id, startIndex: 0, endIndex: 1, from: '这个', to: '这个', reason: 'inside candidate' }],
   }, candidates, words);
-  assert.strictEqual(safe.length, 1, 'proofread corrections inside the matched candidate should be allowed');
+  assert.strictEqual(noChange.length, 0, 'proofread should reject no-op replacements even inside matched candidates');
+
+  const unsafeLength = reviewServerTools.sanitizeProofreadCorrections({
+    corrections: [{ candidateId: candidates[0].id, startIndex: 0, endIndex: 1, from: '这个', to: '这个问题', reason: 'too broad' }],
+  }, candidates, words);
+  assert.strictEqual(unsafeLength.length, 0, 'proofread should reject word-to-sentence replacements');
 }
 
 function testOriginalProofreadDeterministicCorrections() {
@@ -774,6 +780,9 @@ function testTermGlossaryParsingAndSettingsWiring() {
   assert.ok(main.includes('AGNES_VIDEO_MODEL'), 'main settings should provide Agnes video model defaults');
   assert.ok(main.includes('VIDEO_API_BASE_URL'), 'runtime env should pass video generation config');
   assert.ok(main.includes('JAYGO_ENV_FILE'), 'runtime env should pass the live user env file to review servers');
+  assert.ok(main.includes('JAYGO_KNOWLEDGE_FILE'), 'runtime env should pass the local editing knowledge file');
+  assert.ok(main.includes('JAYGO_USER_STYLE_SUMMARY'), 'runtime env should pass learned editing style summary');
+  assert.ok(main.includes('rebuildEditingKnowledge'), 'app startup should rebuild the local editing knowledge base');
   assert.ok(main.includes('REVIEW_TEMPLATE_VERSION'), 'main process should know when old review HTML needs regeneration');
   assert.ok(main.includes('TERM_GLOSSARY'), 'runtime env should pass term glossary to review generation');
   assert.ok(html.includes('id="termGlossary"'), 'settings page should expose term glossary textarea');
@@ -803,8 +812,10 @@ function testReviewServerProvidesSafeSourceVideoRoute() {
   assert.ok(server.includes('buildAgnesVideoStatusEndpoint'), 'review server should also support the documented /v1/videos/{id} polling endpoint');
   assert.ok(server.includes('remixed_from_video_id'), 'review server should detect Agnes completed video URL fields');
   assert.ok(server.includes('envValue(fileEnv'), 'review server should prefer the live env file over stale process env values');
-  assert.ok(server.includes('AGNES_MIN_REQUEST_INTERVAL_MS'), 'review server should throttle all Agnes image/video requests under the RPM limit');
+  assert.ok(server.includes('AGNES_MIN_REQUEST_INTERVAL_MS'), 'review server should throttle Agnes image requests under the RPM limit');
+  assert.ok(server.includes('AGNES_VIDEO_MIN_REQUEST_INTERVAL_MS = 60000'), 'Agnes video requests should respect the current 1 RPM limit');
   assert.ok(server.includes("waitAgnesRequestSlot('image')"), 'Agnes image requests should share the RPM throttle');
+  assert.ok(server.includes('waitAgnesVideoRequestSlot'), 'Agnes video requests should use an independent slow throttle');
   assert.ok(server.includes('autoVideoCountForUnits'), 'video material planning should support automatic count matching');
   assert.ok(server.includes('rawStatus === \'generating\' && !hasGeneratedAsset'), 'review state should recover interrupted media generation as retryable cards');
   assert.ok(server.includes('injectReviewHtmlCompatibility'), 'review server should patch old review pages with compatibility helpers');
@@ -826,6 +837,10 @@ function testReviewServerProvidesSafeSourceVideoRoute() {
   assert.ok(server.includes('media_actions'), 'LLM chat should support image/video media action plans');
   assert.ok(server.includes('mediaAssets = {}'), 'LLM chat should accept current media state without breaking old review pages');
   assert.ok(server.includes('allowedMotionEffects'), 'review server should sanitize media overlay motion effects');
+  assert.ok(server.includes('buildConciseChineseScenePrompt'), 'image/video prompts should be compressed into short Chinese storyboard prompts');
+  assert.ok(server.includes('原文“哪怕她摔了一跤”'), 'media planning prompts should teach concrete director translation examples');
+  assert.ok(server.includes("rawStatus && !['done', 'ready', 'imported'].includes(rawStatus)"), 'Jianying export should skip failed or unfinished generated media');
+  assert.ok(server.includes('from 和 to 必须字数相同'), 'original proofreading should enforce equal-length keyword replacements');
   const cutVideo = fs.readFileSync(path.join(__dirname, '..', 'talkcut', 'scripts', 'cut_video.js'), 'utf8');
   assert.ok(cutVideo.includes('loadMediaOverlays'), 'cut script should read media overlay plans');
   assert.ok(cutVideo.includes('runFfmpegOverlay'), 'cut script should apply generated media overlays');

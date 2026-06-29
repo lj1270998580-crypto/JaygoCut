@@ -4261,7 +4261,7 @@ const html = `<!doctype html>
           const retryBtn = document.createElement('button');
           retryBtn.type = 'button';
           retryBtn.textContent = item.status === 'generating' ? '\u751f\u6210\u4e2d...' : '\u91cd\u65b0\u751f\u6210';
-          retryBtn.disabled = item.status === 'generating' || videoGenerating;
+          retryBtn.disabled = item.status === 'generating';
           retryBtn.dataset.videoRetry = String(index);
           actions.appendChild(retryBtn);
 
@@ -4353,10 +4353,15 @@ const html = `<!doctype html>
     }
 
     function getSubtitleBreakPunctuation(index) {
-      const inferred = String(inferPunctuation(index) || '').trim();
-      if (/[，,。！？；：.!?;:]$/.test(inferred)) return inferred.slice(-1);
+      // Export should be sentence-driven, not gap-driven. The visual preview may infer
+      // commas from tiny ASR pauses, but Jianying drafts should only split on explicit
+      // user/AI punctuation or punctuation already present in corrected text.
+      if (llmPunctByIndex.has(index)) {
+        const punct = String(llmPunctByIndex.get(index) || '').trim();
+        if (/[，。！？；：,.!?;:]$/.test(punct)) return punct.slice(-1);
+      }
       const raw = String(getWordText(index) || '').trim();
-      const match = raw.match(/[，,。！？；：.!?;:]$/);
+      const match = raw.match(/[，。！？；：,.!?;:]$/);
       return match ? match[0] : '';
     }
 
@@ -4601,7 +4606,10 @@ const html = `<!doctype html>
             fullDraft: true,
             cues: cues.map((cue) => ({ start: cue.start, end: cue.end, text: String(cue.text || '').trim() })),
             deleteSegments, sourceDurationSec, sourceVideoMeta,
-            mediaAssets: { images: cloneMediaItems(imageItems), videos: cloneMediaItems(videoItems) },
+            mediaAssets: {
+              images: cloneMediaItems(imageItems).filter((item) => mediaItemHasGeneratedFile(item, 'image') && String(item.status || 'done').toLowerCase() !== 'error'),
+              videos: cloneMediaItems(videoItems).filter((item) => mediaItemHasGeneratedFile(item, 'video') && String(item.status || 'done').toLowerCase() !== 'error'),
+            },
             preset, templatePath: selection.templatePath, exportMode: selection.exportMode, targetRoot: selection.targetRoot,
             draftName: 'JaygoCut_' + new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14),
           }),
@@ -5018,35 +5026,45 @@ const html = `<!doctype html>
       item.status = 'generating';
       item.error = '';
       renderVideoAssetCards();
-      const referenceAssets = getReferenceAssetsForItem(item, 1);
-      const requestItem = prepareReferenceAwareMediaItem(item, referenceAssets, 'video');
-      const response = await fetch('/api/generate-video', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          item: requestItem,
-          retry,
-          aspectRatio: videoAssetAspectEl ? videoAssetAspectEl.value : item.aspectRatio,
-          durationSec: item.durationSec || 5,
-          numFrames: item.numFrames,
-          frameRate: item.frameRate,
-          referenceImage: referenceImagesFromAssets(referenceAssets),
-        }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || ('HTTP ' + response.status));
+      try {
+        const referenceAssets = getReferenceAssetsForItem(item, 1);
+        const requestItem = prepareReferenceAwareMediaItem(item, referenceAssets, 'video');
+        const response = await fetch('/api/generate-video', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            item: requestItem,
+            retry,
+            aspectRatio: videoAssetAspectEl ? videoAssetAspectEl.value : item.aspectRatio,
+            durationSec: item.durationSec || 5,
+            numFrames: item.numFrames,
+            frameRate: item.frameRate,
+            referenceImage: referenceImagesFromAssets(referenceAssets),
+          }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || ('HTTP ' + response.status));
+        }
+        videoItems[index] = {
+          ...item,
+          ...(data.item || {}),
+          video: data.video,
+          status: 'done',
+          error: '',
+        };
+        normalizeVideoItemTiming(videoItems[index]);
+        renderVideoAssetCards();
+        scheduleReviewStateSave(200);
+      } catch (err) {
+        if (videoItems[index]) {
+          videoItems[index].status = 'error';
+          videoItems[index].error = err.message || String(err);
+          renderVideoAssetCards();
+          scheduleReviewStateSave(200);
+        }
+        throw err;
       }
-      videoItems[index] = {
-        ...item,
-        ...(data.item || {}),
-        video: data.video,
-        status: 'done',
-        error: '',
-      };
-      normalizeVideoItemTiming(videoItems[index]);
-      renderVideoAssetCards();
-      scheduleReviewStateSave(200);
     }
 
     async function generateVideoAssets() {

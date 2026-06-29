@@ -906,7 +906,7 @@ $('saveSettings').addEventListener('click', async () => {
     const saved = await window.talkcut.saveSettings(getSettingsFromForm());
     applySettingsToForm(saved);
     if (els.settingsSaveStatus) {
-      els.settingsSaveStatus.textContent = `已保存（${new Date().toLocaleTimeString()}）`;
+      els.settingsSaveStatus.textContent = `保存成功（${new Date().toLocaleTimeString()}）`;
     }
     scheduleAutoLlmTest();
   } catch (err) {
