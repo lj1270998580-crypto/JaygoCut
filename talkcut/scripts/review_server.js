@@ -3235,6 +3235,17 @@ function normalizeCueList(cues) {
     .sort((a, b) => a.start - b.start);
 }
 
+function stripJianyingSubtitlePunctuation(text) {
+  return String(text || '')
+    .replace(/[\uFF0C\u3002\uFF01\uFF1F\uFF1B\uFF1A,.!?;:\u3001]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function hasJianyingSubtitleBreak(text) {
+  return /[\uFF0C,\u3002\uFF01\uFF1F\uFF1B\uFF1A.!?;:]$/.test(String(text || '').trim());
+}
+
 function appendJianyingSubtitleText(base, token) {
   const left = String(base || '').trim();
   const right = String(token || '').trim();
@@ -3248,34 +3259,42 @@ function appendJianyingSubtitleText(base, token) {
 
 function buildJianyingSubtitleItems(cues, textStyle = {}) {
   const normalized = normalizeCueList(cues);
-  const merged = [];
+  const normalizedCues = [];
   for (const cue of normalized) {
     const start = Number(cue.start);
     const end = Number(cue.end);
     const text = String(cue.text || '').trim();
     if (!text || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
-    const last = merged[merged.length - 1];
+    const last = normalizedCues[normalizedCues.length - 1];
     const overlap = last ? last.end - start : 0;
     const lastDuration = last ? last.end - last.start : 0;
     const tinyCurrent = end - start < 0.28;
     const tinyPrevious = lastDuration > 0 && lastDuration < 0.28;
-    const shouldMerge = !!last && overlap > 0.001 && (tinyCurrent || tinyPrevious || text.length <= 2 || last.text.length <= 2);
+    const sameSentenceOverlap = !!last && overlap > 0.001 && !hasJianyingSubtitleBreak(last.rawText);
+    const shouldMerge = sameSentenceOverlap && (tinyCurrent || tinyPrevious || text.length <= 2 || last.text.length <= 2);
     if (shouldMerge) {
       last.end = Math.max(last.end, end);
-      last.text = appendJianyingSubtitleText(last.text, text);
+      last.rawText = appendJianyingSubtitleText(last.rawText, text);
+      last.text = stripJianyingSubtitlePunctuation(last.rawText);
     } else {
-      merged.push({ start, end, text });
+      normalizedCues.push({
+        start,
+        end,
+        rawText: text,
+        text: stripJianyingSubtitlePunctuation(text),
+      });
     }
   }
 
   const items = [];
   const minReadable = 0.12;
   const gap = 0.012;
-  for (let i = 0; i < merged.length; i += 1) {
-    const cue = merged[i];
+  for (let i = 0; i < normalizedCues.length; i += 1) {
+    const cue = normalizedCues[i];
+    if (!cue.text) continue;
     let start = Number(cue.start);
     let end = Number(cue.end);
-    const nextStart = i < merged.length - 1 ? Number(merged[i + 1].start) : Infinity;
+    const nextStart = i < normalizedCues.length - 1 ? Number(normalizedCues[i + 1].start) : Infinity;
     if (Number.isFinite(nextStart)) {
       end = Math.min(end, Math.max(start, nextStart - gap));
     }
@@ -3290,7 +3309,7 @@ function buildJianyingSubtitleItems(cues, textStyle = {}) {
     if (duration < 0.05) continue;
     items.push({
       ref: `subtitle_${items.length + 1}`,
-      text: String(cue.text || '').trim(),
+      text: cue.text,
       start: Number(start.toFixed(3)),
       duration: Number(duration.toFixed(3)),
       ...textStyle,
@@ -3573,7 +3592,7 @@ function runCapcutCliCompile(specPath, draftDir, templateDir = '') {
       encoding: 'utf8',
       env: { ...process.env, ...runner.extraEnv },
       windowsHide: true,
-      timeout: 120000,
+      timeout: 420000,
     },
   );
   if (result.error) throw result.error;
@@ -4788,7 +4807,7 @@ async function runLlmMarking(words, config) {
   }
 
   const normalized = normalizeSelectedIndices(words, rawIndices);
-  if (successfulChunks === 0) {
+  if (successfulChunks === 0 && !selectedItems.length) {
     throw new Error(firstChunkError || 'LLM returned no usable chunk result');
   }
   return {
@@ -4799,7 +4818,9 @@ async function runLlmMarking(words, config) {
     chunkCount: chunks.length,
     successfulChunks,
     failedChunks,
-    summary: summaryText,
+    summary: summaryText || (successfulChunks === 0
+      ? `AI model did not return usable chunks; rule fallback was used. ${firstChunkError || ''}`.trim()
+      : ''),
     analysis,
     structure,
     punctuationByIndex,
@@ -4812,6 +4833,7 @@ async function runLlmMarking(words, config) {
       selfCheckIgnored,
       heuristicFallbackUsed,
       heuristicFallbackCount: heuristicFallbackItems.length,
+      firstChunkError,
       hardKeepCount: hardKeepSet.size,
       structureSectionCount: Array.isArray(structure.sections) ? structure.sections.length : 0,
       stepProbe: steps.probe,
@@ -5315,7 +5337,7 @@ function getReviewHtmlCompatibilityPatch() {
     + '      if (!next) return true;\n'
     + '      if (/[\\uFF0C,\\u3002\\uFF01\\uFF1F\\uFF1B\\uFF1A.!?;:]$/.test(raw)) return true;\n'
     + '      if (typeof window.shouldParagraphBreakAfter === "function" && window.shouldParagraphBreakAfter(index) && content.length >= 2) return true;\n'
-    + '      return content.length >= 28;\n'
+    + '      return content.length >= 18;\n'
     + '  };\n'
     + '  window.normalizeExportCuesForSingleTrack = function(cues) {\n'
     + '    var raw = (Array.isArray(cues) ? cues : []).map(function(cue){ return { start: Math.max(0, Number(cue && cue.start) || 0), end: Math.max(0, Number(cue && cue.end) || 0), text: window.stripSubtitlePunctuation(String((cue && cue.text) || "").trim()) }; })\n'
@@ -5361,6 +5383,7 @@ function injectReviewHtmlCompatibility(html) {
     || !body.includes('function appendSubtitleToken')
     || !body.includes('function shouldBreakSubtitleCue')
     || !body.includes('stripSubtitlePunctuation')
+    || body.includes('content.length >= 28')
     || body.includes('duration >= 3.8')
     || body.includes('duration >= 2.8')
     || body.includes('btnShowDeleteDiagnostics')
@@ -5915,10 +5938,34 @@ const server = http.createServer(async (req, res) => {
       const mediaOverlays = Array.isArray(payload?.overlays) ? payload.overlays : [];
       if (!Array.isArray(deleteList)) throw new Error('delete list must be an array');
 
-      const normalized = deleteList.map((seg) => ({
-        start: Number(seg.start),
-        end: Number(seg.end),
-      })).filter((seg) => Number.isFinite(seg.start) && Number.isFinite(seg.end) && seg.end > seg.start && seg.start >= 0);
+      const normalizeCutKind = (value) => {
+        const raw = String(value || '').toLowerCase();
+        if (raw.includes('silence') || raw.includes('gap')) return 'silence';
+        if (raw.includes('filler') || raw.includes('utterance')) return 'filler';
+        if (raw.includes('repeat')) return 'repeat';
+        if (raw.includes('llm') || raw.includes('ai')) return 'llm';
+        if (raw.includes('mixed')) return 'mixed';
+        if (raw.includes('manual')) return 'manual';
+        return '';
+      };
+      const normalized = deleteList.map((seg) => {
+        const sourceKinds = Array.isArray(seg.sourceKinds)
+          ? Array.from(new Set(seg.sourceKinds.map(normalizeCutKind).filter(Boolean)))
+          : [];
+        const kind = normalizeCutKind(seg.kind || seg.category || seg.type) || sourceKinds[0] || 'manual';
+        if (!sourceKinds.length) sourceKinds.push(kind);
+        return {
+          start: Number(seg.start),
+          end: Number(seg.end),
+          kind,
+          sourceKinds,
+          minIdx: Number.isFinite(Number(seg.minIdx)) ? Number(seg.minIdx) : undefined,
+          maxIdx: Number.isFinite(Number(seg.maxIdx)) ? Number(seg.maxIdx) : undefined,
+          precisionMode: ['conservative', 'standard', 'clean'].includes(String(seg.precisionMode || '').toLowerCase())
+            ? String(seg.precisionMode).toLowerCase()
+            : undefined,
+        };
+      }).filter((seg) => Number.isFinite(seg.start) && Number.isFinite(seg.end) && seg.end > seg.start && seg.start >= 0);
 
       if (!normalized.length) {
         throw new Error('delete list is empty');

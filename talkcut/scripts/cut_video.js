@@ -8,6 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync, spawnSync } = require('child_process');
+const { refineDeleteSegmentsForExport } = require('./review_segment_utils');
 
 const INPUT = process.argv[2];
 const DELETE_JSON = process.argv[3];
@@ -99,13 +100,16 @@ function parseMs(value, fallback) {
 
 function buildAdjustedDeleteSegments(deleteSegs, options) {
   const adjusted = [];
+  const minCandidateSec = Number.isFinite(Number(options.minCandidateSec))
+    ? Math.max(0.01, Number(options.minCandidateSec))
+    : Math.min(0.03, options.minDeleteSec);
   for (const seg of deleteSegs) {
     const start = Math.max(0, seg.start + options.timelineOffsetSec - options.expandSec);
     const end = Math.min(options.duration, seg.end + options.timelineOffsetSec + options.expandSec);
     const rawDuration = Math.max(0, end - start);
 
-    if (rawDuration >= options.minDeleteSec) {
-      adjusted.push({ start, end });
+    if (rawDuration >= minCandidateSec) {
+      adjusted.push({ ...seg, start, end });
     }
   }
   return adjusted;
@@ -753,6 +757,8 @@ const CUT_EXPAND_MS = parseMs(configValue(envConfig, 'CUT_EXPAND_MS', '0'), 0);
 const CUT_KEEP_PADDING_MS = parseMs(configValue(envConfig, 'CUT_KEEP_PADDING_MS', '0'), 0);
 const CUT_MIN_DELETE_MS = parseMs(configValue(envConfig, 'CUT_MIN_DELETE_MS', '200'), 200);
 const CROSSFADE_MS = parseMs(configValue(envConfig, 'CROSSFADE_MS', '30'), 30);
+const CUT_MERGE_GAP_MS = parseMs(configValue(envConfig, 'CUT_MERGE_GAP_MS', '120'), 120);
+const CUT_MIN_KEEP_GAP_MS = parseMs(configValue(envConfig, 'CUT_MIN_KEEP_GAP_MS', '120'), 120);
 const sourceFrameRate = detectSourceFrameRate(INPUT, 30);
 const configuredExportFps = configValue(envConfig, 'CUT_EXPORT_FPS', '');
 const outputFrameRate = configuredExportFps
@@ -763,9 +769,11 @@ const expandSec = CUT_EXPAND_MS / 1000;
 const keepPaddingSec = CUT_KEEP_PADDING_MS / 1000;
 const minDeleteSec = CUT_MIN_DELETE_MS / 1000;
 const crossfadeSec = CROSSFADE_MS / 1000;
+const mergeGapSec = CUT_MERGE_GAP_MS / 1000;
+const minKeepGapSec = CUT_MIN_KEEP_GAP_MS / 1000;
 console.log(`导出帧率: ${outputFpsFilter}fps（源视频 ${formatFpsForFilter(sourceFrameRate)}fps）`);
 
-console.log(`⚙️ 优化参数: 边界保留=${CUT_KEEP_PADDING_MS}ms, 最小删除=${CUT_MIN_DELETE_MS}ms, 额外扩展=${CUT_EXPAND_MS}ms, 音频接缝淡化=${CROSSFADE_MS}ms`);
+console.log(`⚙️ 优化参数: 边界保留=${CUT_KEEP_PADDING_MS}ms, 最小删除=${CUT_MIN_DELETE_MS}ms, 额外扩展=${CUT_EXPAND_MS}ms, 音频接缝淡化=${CROSSFADE_MS}ms, 短间隙合并=${CUT_MERGE_GAP_MS}ms`);
 
 // 读取并处理删除片段
 const deleteSegsRaw = readJsonFileSafe(DELETE_JSON);
@@ -773,16 +781,32 @@ if (!Array.isArray(deleteSegsRaw)) {
   throw new Error('删除列表格式错误：应为数组 JSON（[{start,end}, ...]）');
 }
 const deleteSegs = deleteSegsRaw
-  .map((seg) => ({
-    start: Number(seg?.start),
-    end: Number(seg?.end),
-  }))
+  .map((seg) => {
+    const sourceKinds = Array.isArray(seg?.sourceKinds) ? seg.sourceKinds.map(String).filter(Boolean) : [];
+    const kind = String(seg?.kind || seg?.category || seg?.type || sourceKinds[0] || 'manual');
+    if (!sourceKinds.length) sourceKinds.push(kind);
+    return {
+      start: Number(seg?.start),
+      end: Number(seg?.end),
+      kind,
+      sourceKinds,
+      minIdx: Number.isFinite(Number(seg?.minIdx)) ? Number(seg.minIdx) : undefined,
+      maxIdx: Number.isFinite(Number(seg?.maxIdx)) ? Number(seg.maxIdx) : undefined,
+      precisionMode: String(seg?.precisionMode || '').toLowerCase(),
+    };
+  })
   .filter((seg) => Number.isFinite(seg.start) && Number.isFinite(seg.end) && seg.end > seg.start)
   .sort((a, b) => a.start - b.start);
 
 if (!deleteSegs.length) {
   throw new Error('删除列表为空或无有效时间段');
 }
+
+const firstSegmentMode = deleteSegs
+  .map((seg) => seg.precisionMode)
+  .find((mode) => ['conservative', 'standard', 'clean'].includes(mode));
+const configuredCutMode = String(configValue(envConfig, 'CUT_PRECISION_MODE', firstSegmentMode || 'standard')).toLowerCase();
+const cutPrecisionMode = ['conservative', 'standard', 'clean'].includes(configuredCutMode) ? configuredCutMode : 'standard';
 
 const audioReference = findAudioReferencePath();
 const timelineMetadata = readTimelineMetadata();
@@ -803,6 +827,7 @@ const adjustedSegs = buildAdjustedDeleteSegments(deleteSegs, {
   duration,
   expandSec,
   minDeleteSec,
+  minCandidateSec: 0.03,
 });
 
 if (adjustedSegs.length === 0 && deleteSegs.length > 0) {
@@ -810,14 +835,15 @@ if (adjustedSegs.length === 0 && deleteSegs.length > 0) {
 }
 
 // 合并重叠的删除段
-const mergedSegs = [];
-for (const seg of adjustedSegs) {
-  if (mergedSegs.length === 0 || seg.start > mergedSegs[mergedSegs.length - 1].end) {
-    mergedSegs.push({ ...seg });
-  } else {
-    mergedSegs[mergedSegs.length - 1].end = Math.max(mergedSegs[mergedSegs.length - 1].end, seg.end);
-  }
-}
+const boundaryRefine = refineDeleteSegmentsForExport(adjustedSegs, {
+  durationSec: duration,
+  mode: cutPrecisionMode,
+  mergeGapSec,
+  minKeepGapSec,
+  minDeleteSec,
+});
+const mergedSegs = boundaryRefine.segments;
+console.log(`Boundary refine: mode=${boundaryRefine.stats.mode}, input=${boundaryRefine.stats.inputCount}, output=${boundaryRefine.stats.outputCount}, mergedCloseGaps=${boundaryRefine.stats.mergedCloseGaps}, deleteDelta=${boundaryRefine.stats.durationDeltaSec}s`);
 
 // 计算保留片段
 const keepSegs = [];

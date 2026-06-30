@@ -9,6 +9,7 @@ const {
   buildReviewDeleteSegments,
   applyCutPrecisionMode,
   diagnoseDeleteSegments,
+  refineDeleteSegmentsForExport,
 } = require('../talkcut/scripts/review_segment_utils');
 const { parseTermGlossary } = require('../talkcut/scripts/term_glossary');
 process.env.JAYGO_CUT_TEST_EXPORTS = '1';
@@ -102,6 +103,27 @@ function testCutPrecisionModeAdjustsOnlySubmittedSegments() {
   const conservative = applyCutPrecisionMode(segments, 'conservative', 5);
   assert.ok(conservative[0].start > segments[0].start, 'conservative mode should trim the leading edge');
   assert.ok(conservative[0].end < segments[0].end, 'conservative mode should trim the trailing edge');
+}
+
+function testExportBoundaryRefinementUsesSegmentKinds() {
+  const refined = refineDeleteSegmentsForExport([
+    { start: 1.000, end: 1.120, kind: 'filler', sourceKinds: ['filler'], precisionMode: 'standard' },
+    { start: 1.200, end: 1.300, kind: 'manual', sourceKinds: ['manual'], precisionMode: 'standard' },
+    { start: 3.000, end: 3.400, kind: 'silence', sourceKinds: ['silence'], precisionMode: 'standard' },
+  ], {
+    durationSec: 5,
+    mode: 'standard',
+    mergeGapSec: 0.12,
+    minKeepGapSec: 0.12,
+    minDeleteSec: 0.05,
+  });
+
+  assert.strictEqual(refined.stats.inputCount, 3);
+  assert.strictEqual(refined.stats.outputCount, 2, 'close speech-like delete segments should merge into one stable cut');
+  assert.ok(refined.segments[0].start < 0.94, 'filler cuts should start early enough to avoid leading syllable residue');
+  assert.ok(refined.segments[0].end > 1.34, 'speech-like cuts should keep enough tail padding to avoid trailing residue');
+  assert.ok(refined.segments[1].start > 3.0, 'pure silence cuts should be conservative at the leading edge');
+  assert.ok(refined.segments[1].end < 3.4, 'pure silence cuts should be conservative at the trailing edge');
 }
 
 function testDeleteSegmentDiagnosticsFindsRisks() {
@@ -385,6 +407,18 @@ function testJianyingSubtitleItemsStayOnSingleTrack() {
     { start: 2.15, end: 3.1, text: '第三句话' },
   ]);
   assert.strictEqual(readable.length, 3, 'normal adjacent subtitle cues should not be over-merged');
+
+  const sentenceDriven = reviewServerTools.buildJianyingSubtitleItems([
+    { start: 0, end: 1.0, text: '\u89c4\u5219\u4e0d\u662f\u7528\u6765\u675f\u7f1a\uff0c' },
+    { start: 1.01, end: 2.0, text: '\u800c\u662f\u8ba9\u4f60\u66f4\u81ea\u7531\u3002' },
+    { start: 2.01, end: 3.0, text: '\u6240\u4ee5\u4e0d\u8981\u653e\u5f03\u3002' },
+  ]);
+  assert.strictEqual(sentenceDriven.length, 3, 'commas and sentence punctuation should keep Jianying subtitles as separate readable cues');
+  assert.deepStrictEqual(
+    sentenceDriven.map((item) => item.text),
+    ['\u89c4\u5219\u4e0d\u662f\u7528\u6765\u675f\u7f1a', '\u800c\u662f\u8ba9\u4f60\u66f4\u81ea\u7531', '\u6240\u4ee5\u4e0d\u8981\u653e\u5f03'],
+    'exported Jianying subtitle text should remove punctuation',
+  );
 }
 
 function testOriginalProofreadUsesMatchedCandidatesOnly() {
@@ -822,7 +856,7 @@ function testReviewServerProvidesSafeSourceVideoRoute() {
   assert.ok(server.includes('jaygo-compat-review-export-helpers'), 'old review pages should receive Jianying export helper compatibility patches');
   assert.ok(server.includes('window.appendSubtitleToken'), 'old review pages should receive subtitle join compatibility patches');
   assert.ok(server.includes('window.shouldBreakSubtitleCue'), 'old review pages should receive subtitle split compatibility patches');
-  assert.ok(server.includes('duration >= 3.8'), 'old review page compatibility patch should use readable short-sentence subtitle splitting');
+  assert.ok(server.includes('content.length >= 18'), 'old review page compatibility patch should use readable sentence splitting');
   assert.ok(server.includes("body.includes('duration >= 2.8')"), 'old review pages with stale subtitle splitting should be patched');
   assert.ok(server.includes('btnShowDeleteDiagnostics'), 'old review pages should remove the large delete diagnostics entry through compatibility patching');
   assert.ok(server.includes('_staging'), 'full Jianying draft export should compile outside the live draft root first');
@@ -866,7 +900,7 @@ function testTextFilesStayUtf8Readable() {
     assert.ok(!/[鏇鐨涓绔搴]/.test(text), `${rel} should not contain common mojibake characters`);
   }
   const releaseNotes = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'release-notes.json'), 'utf8').replace(/^\uFEFF/, ''));
-  assert.ok(releaseNotes.notes.includes('剪映草稿'), 'release notes should stay readable Chinese UTF-8');
+  assert.ok(releaseNotes.notes.includes('\u526a\u6620\u8349\u7a3f'), 'release notes should stay readable Chinese UTF-8');
 }
 
 function testReviewStateBackupWriter() {
@@ -974,6 +1008,7 @@ testJianyingDraftMediaPathFallbacks();
 testJianyingDraftPathReferencesAreRewritten();
 testJianyingDraftRootExportTarget();
 testCutPrecisionModeAdjustsOnlySubmittedSegments();
+testExportBoundaryRefinementUsesSegmentKinds();
 testDeleteSegmentDiagnosticsFindsRisks();
 testGeneratedReviewInlineScriptSyntax();
 testReviewStateBackupWriter();

@@ -155,6 +155,167 @@ function mergeSegments(segments) {
   }));
 }
 
+function normalizeCutKind(value) {
+  const raw = String(value || '').toLowerCase();
+  if (raw.includes('silence') || raw.includes('gap')) return 'silence';
+  if (raw.includes('filler') || raw.includes('utterance')) return 'filler';
+  if (raw.includes('repeat')) return 'repeat';
+  if (raw.includes('llm') || raw.includes('ai')) return 'llm';
+  if (raw.includes('manual')) return 'manual';
+  if (raw.includes('mixed')) return 'mixed';
+  return '';
+}
+
+function collectCutKinds(seg) {
+  const kinds = new Set();
+  const push = (value) => {
+    const kind = normalizeCutKind(value);
+    if (kind) kinds.add(kind);
+  };
+  push(seg?.kind);
+  push(seg?.category);
+  push(seg?.type);
+  if (Array.isArray(seg?.sourceKinds)) seg.sourceKinds.forEach(push);
+  if (seg?.hasFiller) push('filler');
+  if (seg?.hasSpeech === false) push('silence');
+  if (!kinds.size) kinds.add('manual');
+  return Array.from(kinds);
+}
+
+function normalizeCutSegments(segments, durationSec) {
+  const maxDuration = Number.isFinite(Number(durationSec)) && Number(durationSec) > 0
+    ? Number(durationSec)
+    : Number.POSITIVE_INFINITY;
+  return (Array.isArray(segments) ? segments : [])
+    .map((seg) => {
+      const start = Math.max(0, Number(seg?.start));
+      const end = Math.min(maxDuration, Number(seg?.end));
+      const sourceKinds = collectCutKinds(seg);
+      return {
+        ...seg,
+        start,
+        end,
+        kind: normalizeCutKind(seg?.kind || seg?.category || seg?.type) || sourceKinds[0] || 'manual',
+        sourceKinds,
+      };
+    })
+    .filter((seg) => Number.isFinite(seg.start) && Number.isFinite(seg.end) && seg.end > seg.start)
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+}
+
+function joinCutKinds(a, b) {
+  return Array.from(new Set([...(a || []), ...(b || [])].map(normalizeCutKind).filter(Boolean)));
+}
+
+function mergeCutSegments(segments, mergeGapSec = 0) {
+  const merged = [];
+  let mergedCloseGaps = 0;
+  for (const seg of segments) {
+    if (!merged.length || seg.start > merged[merged.length - 1].end + mergeGapSec) {
+      merged.push({ ...seg, sourceKinds: collectCutKinds(seg) });
+      continue;
+    }
+    const last = merged[merged.length - 1];
+    if (seg.start > last.end) mergedCloseGaps += 1;
+    last.end = Math.max(last.end, seg.end);
+    last.minIdx = Number.isFinite(Number(last.minIdx)) && Number.isFinite(Number(seg.minIdx))
+      ? Math.min(Number(last.minIdx), Number(seg.minIdx))
+      : last.minIdx;
+    last.maxIdx = Number.isFinite(Number(last.maxIdx)) && Number.isFinite(Number(seg.maxIdx))
+      ? Math.max(Number(last.maxIdx), Number(seg.maxIdx))
+      : last.maxIdx;
+    last.sourceKinds = joinCutKinds(last.sourceKinds, collectCutKinds(seg));
+    last.kind = last.sourceKinds.includes('mixed') || last.sourceKinds.length > 1
+      ? 'mixed'
+      : (last.sourceKinds[0] || last.kind || 'manual');
+  }
+  return {
+    segments: merged.map((seg) => ({
+      ...seg,
+      start: Number(seg.start.toFixed(3)),
+      end: Number(seg.end.toFixed(3)),
+    })),
+    mergedCloseGaps,
+  };
+}
+
+function getBoundaryPolicy(sourceKinds, mode = 'standard') {
+  const kinds = Array.isArray(sourceKinds) ? sourceKinds : ['manual'];
+  const hasSpeechLike = kinds.some((kind) => ['filler', 'repeat', 'llm', 'manual', 'mixed'].includes(kind));
+  let lead = 0.035;
+  let tail = 0.065;
+
+  if (kinds.includes('filler')) {
+    lead = Math.max(lead, 0.075);
+    tail = Math.max(tail, 0.115);
+  }
+  if (kinds.includes('repeat')) {
+    lead = Math.max(lead, 0.055);
+    tail = Math.max(tail, 0.085);
+  }
+  if (kinds.includes('llm')) {
+    lead = Math.max(lead, 0.045);
+    tail = Math.max(tail, 0.075);
+  }
+  if (!hasSpeechLike && kinds.includes('silence')) {
+    return { lead: -0.012, tail: -0.012 };
+  }
+
+  const selectedMode = ['conservative', 'standard', 'clean'].includes(mode) ? mode : 'standard';
+  const factor = selectedMode === 'clean' ? 1.35 : (selectedMode === 'conservative' ? 0.55 : 1);
+  return {
+    lead: lead * factor,
+    tail: tail * factor,
+  };
+}
+
+function refineDeleteSegmentsForExport(segments, options = {}) {
+  const durationSec = Number(options.durationSec);
+  const maxDuration = Number.isFinite(durationSec) && durationSec > 0 ? durationSec : Number.POSITIVE_INFINITY;
+  const mode = ['conservative', 'standard', 'clean'].includes(options.mode) ? options.mode : 'standard';
+  const mergeGapSec = Math.max(0, Number.isFinite(Number(options.mergeGapSec)) ? Number(options.mergeGapSec) : 0.09);
+  const minKeepGapSec = Math.max(0, Number.isFinite(Number(options.minKeepGapSec)) ? Number(options.minKeepGapSec) : 0.12);
+  const minDeleteSec = Math.max(0.03, Number.isFinite(Number(options.minDeleteSec)) ? Number(options.minDeleteSec) : 0.05);
+  const normalized = normalizeCutSegments(segments, maxDuration);
+
+  const beforeDurationSec = normalized.reduce((sum, seg) => sum + (seg.end - seg.start), 0);
+  const adjusted = normalized.map((seg) => {
+    const sourceKinds = collectCutKinds(seg);
+    const policy = getBoundaryPolicy(sourceKinds, mode);
+    let start = seg.start - policy.lead;
+    let end = seg.end + policy.tail;
+    if (policy.lead < 0) start = seg.start - policy.lead;
+    if (policy.tail < 0) end = seg.end + policy.tail;
+    start = Math.max(0, start);
+    end = Math.min(maxDuration, end);
+    return {
+      ...seg,
+      start,
+      end,
+      sourceKinds,
+      kind: sourceKinds.length > 1 ? 'mixed' : (sourceKinds[0] || 'manual'),
+      precisionMode: mode,
+    };
+  }).filter((seg) => seg.end - seg.start >= minDeleteSec);
+
+  const mergedResult = mergeCutSegments(adjusted, Math.max(mergeGapSec, minKeepGapSec));
+  const finalSegments = mergedResult.segments;
+  const afterDurationSec = finalSegments.reduce((sum, seg) => sum + (seg.end - seg.start), 0);
+
+  return {
+    segments: finalSegments,
+    stats: {
+      inputCount: normalized.length,
+      outputCount: finalSegments.length,
+      mergedCloseGaps: mergedResult.mergedCloseGaps,
+      beforeDurationSec: Number(beforeDurationSec.toFixed(3)),
+      afterDurationSec: Number(afterDurationSec.toFixed(3)),
+      durationDeltaSec: Number((afterDurationSec - beforeDurationSec).toFixed(3)),
+      mode,
+    },
+  };
+}
+
 function applyCutPrecisionMode(segments, mode = 'standard', durationSec) {
   const normalized = normalizeSegments(segments, durationSec);
   const selectedMode = ['conservative', 'standard', 'clean'].includes(mode) ? mode : 'standard';
@@ -278,5 +439,6 @@ module.exports = {
   applyCutPrecisionMode,
   buildReviewDeleteSegments,
   diagnoseDeleteSegments,
+  refineDeleteSegmentsForExport,
   normalizeBoundarySettings,
 };

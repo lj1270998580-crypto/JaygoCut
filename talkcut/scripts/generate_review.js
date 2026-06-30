@@ -4353,16 +4353,17 @@ const html = `<!doctype html>
     }
 
     function getSubtitleBreakPunctuation(index) {
-      // Export should be sentence-driven, not gap-driven. The visual preview may infer
-      // commas from tiny ASR pauses, but Jianying drafts should only split on explicit
-      // user/AI punctuation or punctuation already present in corrected text.
+      // Export should be sentence-driven. Prefer explicit user/AI punctuation, then use
+      // the same inferred punctuation shown on the review page so ASR text without
+      // punctuation does not become one over-merged Jianying subtitle.
       if (llmPunctByIndex.has(index)) {
         const punct = String(llmPunctByIndex.get(index) || '').trim();
         if (/[，。！？；：,.!?;:]$/.test(punct)) return punct.slice(-1);
       }
       const raw = String(getWordText(index) || '').trim();
       const match = raw.match(/[，。！？；：,.!?;:]$/);
-      return match ? match[0] : '';
+      if (match) return match[0];
+      return inferPunctuation(index) || '';
     }
 
     function shouldBreakSubtitleCue(index, text, start, end, next, breakPunctuation) {
@@ -4370,7 +4371,7 @@ const html = `<!doctype html>
       if (!next) return true;
       if (breakPunctuation && /[，,。！？；：.!?;:]$/.test(String(breakPunctuation))) return true;
       if (shouldParagraphBreakAfter(index) && content.length >= 2) return true;
-      return content.length >= 28;
+      return content.length >= 18;
     }
 
     function buildExportCues() {
@@ -4613,7 +4614,7 @@ const html = `<!doctype html>
             preset, templatePath: selection.templatePath, exportMode: selection.exportMode, targetRoot: selection.targetRoot,
             draftName: 'JaygoCut_' + new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14),
           }),
-        }, 120000);
+        }, 420000);
         if (!response.ok || !data.success) throw new Error(data.error || ('HTTP ' + response.status));
         const exportRootSource = String(data.exportRootSource || '');
         const placementText = data.autoPlaced
@@ -7356,6 +7357,19 @@ const html = `<!doctype html>
       const fillerEntryOverlapSec = Math.max(speechEntryOverlapSec, Math.min(0.12, speechEntryOverlapSec + fillerBoostSec));
       const boundaryGuardSec = 0.005;
       const minDeleteSec = 0.05;
+      function tokenCutKind(idx, word) {
+        if (word?.isGap) return 'silence';
+        const autoKind = tokenAutoCategory(idx);
+        if (autoKind === 'filler') return 'filler';
+        if (autoKind === 'repeat') return 'repeat';
+        if (llmSuggested.has(idx) || llmReasonByIndex.has(idx)) return 'llm';
+        return 'manual';
+      }
+
+      function mergeKinds(a, b) {
+        return Array.from(new Set([...(a || []), ...(b || [])].filter(Boolean)));
+      }
+
       const segs = Array.from(selected)
         .map((i) => ({ idx: Number(i), word: WORDS[i] }))
         .filter((item) => Number.isInteger(item.idx) && item.word)
@@ -7365,6 +7379,8 @@ const html = `<!doctype html>
           end: Number(w.end),
           hasSpeech: !w.isGap,
           hasFiller: tokenAutoCategory(idx) === 'filler',
+          kind: tokenCutKind(idx, w),
+          sourceKinds: [tokenCutKind(idx, w)],
         }))
         .filter((s) => Number.isFinite(s.start) && Number.isFinite(s.end) && s.end > s.start)
         .sort((a, b) => a.idx - b.idx || a.start - b.start);
@@ -7392,6 +7408,8 @@ const html = `<!doctype html>
           last.hasSpeech = !!(last.hasSpeech || s.hasSpeech);
           last.hasFiller = !!(last.hasFiller || s.hasFiller);
           last.maxIdx = Math.max(last.maxIdx, s.idx);
+          last.sourceKinds = mergeKinds(last.sourceKinds, s.sourceKinds);
+          last.kind = last.sourceKinds.length > 1 ? 'mixed' : (last.sourceKinds[0] || last.kind || 'manual');
         } else {
           merged.push({ ...s, minIdx: s.idx, maxIdx: s.idx });
         }
@@ -7452,6 +7470,12 @@ const html = `<!doctype html>
           adjusted.push({
             start: Number(start.toFixed(3)),
             end: Number(end.toFixed(3)),
+            kind: s.kind || (s.hasSpeech ? 'manual' : 'silence'),
+            sourceKinds: Array.isArray(s.sourceKinds) && s.sourceKinds.length ? s.sourceKinds : [s.hasSpeech ? 'manual' : 'silence'],
+            minIdx: s.minIdx,
+            maxIdx: s.maxIdx,
+            hasSpeech: !!s.hasSpeech,
+            hasFiller: !!s.hasFiller,
           });
         }
       }
@@ -7465,9 +7489,19 @@ const html = `<!doctype html>
         .map((seg) => ({
           start: Math.max(0, Number(seg.start)),
           end: Math.min(maxDuration, Number(seg.end)),
+          kind: seg.kind || seg.category || seg.type || 'manual',
+          sourceKinds: Array.isArray(seg.sourceKinds) ? seg.sourceKinds : [seg.kind || seg.category || seg.type || 'manual'],
+          minIdx: Number.isFinite(Number(seg.minIdx)) ? Number(seg.minIdx) : undefined,
+          maxIdx: Number.isFinite(Number(seg.maxIdx)) ? Number(seg.maxIdx) : undefined,
+          hasSpeech: seg.hasSpeech,
+          hasFiller: seg.hasFiller,
         }))
         .filter((seg) => Number.isFinite(seg.start) && Number.isFinite(seg.end) && seg.end > seg.start)
         .sort((a, b) => a.start - b.start || a.end - b.end);
+    }
+
+    function mergeDeleteKinds(a, b) {
+      return Array.from(new Set([...(a || []), ...(b || [])].filter(Boolean)));
     }
 
     function mergeDeleteSegments(segments) {
@@ -7477,9 +7511,19 @@ const html = `<!doctype html>
           merged.push({ ...seg });
           continue;
         }
-        merged[merged.length - 1].end = Math.max(merged[merged.length - 1].end, seg.end);
+        const last = merged[merged.length - 1];
+        last.end = Math.max(last.end, seg.end);
+        last.sourceKinds = mergeDeleteKinds(last.sourceKinds, seg.sourceKinds);
+        last.kind = last.sourceKinds.length > 1 ? 'mixed' : (last.sourceKinds[0] || last.kind || 'manual');
+        if (Number.isFinite(Number(seg.minIdx))) {
+          last.minIdx = Number.isFinite(Number(last.minIdx)) ? Math.min(Number(last.minIdx), Number(seg.minIdx)) : Number(seg.minIdx);
+        }
+        if (Number.isFinite(Number(seg.maxIdx))) {
+          last.maxIdx = Number.isFinite(Number(last.maxIdx)) ? Math.max(Number(last.maxIdx), Number(seg.maxIdx)) : Number(seg.maxIdx);
+        }
       }
       return merged.map((seg) => ({
+        ...seg,
         start: Number(seg.start.toFixed(3)),
         end: Number(seg.end.toFixed(3)),
       }));
@@ -7488,20 +7532,10 @@ const html = `<!doctype html>
     function applyCutPrecisionModeToSegments(segments) {
       const mode = cutPrecisionModeEl ? String(cutPrecisionModeEl.value || 'standard') : 'standard';
       const normalized = normalizeDeleteSegments(segments);
-      if (mode === 'standard') return mergeDeleteSegments(normalized);
-      const duration = getAudioTotalDuration();
-      const maxDuration = duration > 0 ? duration : Number.POSITIVE_INFINITY;
-      const adjusted = normalized.map((seg) => {
-        const len = seg.end - seg.start;
-        if (mode === 'clean') {
-          const lead = len < 0.16 ? 0.025 : 0.04;
-          const tail = len < 0.16 ? 0.035 : 0.06;
-          return { start: Math.max(0, seg.start - lead), end: Math.min(maxDuration, seg.end + tail) };
-        }
-        const trim = Math.min(0.025, Math.max(0, (len - 0.06) / 2));
-        return { start: seg.start + trim, end: seg.end - trim };
-      }).filter((seg) => seg.end - seg.start >= 0.03);
-      return mergeDeleteSegments(adjusted);
+      return mergeDeleteSegments(normalized).map((seg) => ({
+        ...seg,
+        precisionMode: ['conservative', 'standard', 'clean'].includes(mode) ? mode : 'standard',
+      }));
     }
 
     function setPreviewSegment(seg) {
