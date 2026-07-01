@@ -710,19 +710,19 @@ function buildChatAdjustPrompt(units, selectedUnitIds, userMessage, history, ana
     hist ? `最近对话:\n${hist}` : '最近对话: 无',
     '',
     '',
-    'Media adjustment rules:',
-    'You may also adjust planned images/videos when the user asks about illustration, picture, image, video, B-roll, material, timing, duration, prompt, retry, or regeneration.',
-    'Return media_actions only as a plan. Do not claim files are generated. Do not call external tools.',
-    'Allowed action types: add_image, update_image, move_image, delete_image, regenerate_image, add_video, update_video, move_video, delete_video, regenerate_video.',
-    'Image duration must be 5-10 seconds. Video duration must be 3-8 seconds. Avoid overlapping media ranges whenever possible.',
-    'For add/update/regenerate, write concrete visual prompts with scene, subject, action, setting, mood, lens, and style. Do not merely repeat transcript text.',
-    'If changing an existing card, use its exact id. If adding a new card, provide a new readable id.',
-    'If the user says "第2张图", "第二张图片", "第1段视频", or similar ordinal wording, map it to the Existing media items ordinal and return either the exact id or index.',
+    '媒体调整规则：',
+    '当用户提到配图、图片、视频、B-roll、素材、时间、时长、提示词、重试、重生成时，你可以返回 media_actions 调整计划。',
+    'media_actions 只是计划，不要声称文件已经生成，也不要调用外部工具。',
+    '允许的动作：add_image、update_image、move_image、delete_image、regenerate_image、add_video、update_video、move_video、delete_video、regenerate_video。',
+    '图片时长 5-10 秒；视频时长 3-8 秒；尽量避开已有素材范围。',
+    '新增/更新/重生成时，prompt 必须是中文具体分镜：主体、地点、动作、环境、情绪、镜头和画风，不要直接复述字幕。',
+    '修改已有卡片时使用准确 id；新增卡片时给一个可读 id。',
+    '用户说“第2张图”“第二张图片”“第1段视频”等序号时，要对应下方现有素材序号。',
     '',
-    `Existing media items (kind#index|id|start-end|status|title|purpose|prompt):\n${mediaList}`,
+    `现有素材（kind#index|id|start-end|status|title|purpose|prompt）：\n${mediaList}`,
     '',
     '输出 JSON（只返回 JSON）：',
-    '{"add_ids":[12,13],"remove_ids":[2,3],"media_actions":[{"type":"update_image","id":"img_01","start":12.5,"durationSec":7,"title":"scene title","purpose":"why this visual helps","prompt":"concrete visual prompt","negativePrompt":"optional","regenerate":true}],"reason":"Chinese, <=60 chars","summary":"Chinese, <=80 chars","scope":"head|middle|tail|full"}',
+    '{"add_ids":[12,13],"remove_ids":[2,3],"media_actions":[{"type":"update_image","id":"img_01","start":12.5,"durationSec":7,"title":"具体分镜标题","purpose":"为什么需要这张图","prompt":"中文具体画面提示词","negativePrompt":"可选负面词","regenerate":true}],"reason":"中文，60字内","summary":"中文，80字内","scope":"head|middle|tail|full"}',
     '',
     `文本单元（本次可用 ${scopedUnits.length} 条，id|start-end|text）：`,
     list,
@@ -869,13 +869,136 @@ function extractJsonObject(text) {
   return null;
 }
 
+const LLM_HTTP_TIMEOUT_MS = Math.max(8000, Number(process.env.JAYGO_LLM_HTTP_TIMEOUT_MS) || 90000);
+const LLM_MARK_JOB_TTL_MS = 30 * 60 * 1000;
+const llmMarkJobs = new Map();
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = LLM_HTTP_TIMEOUT_MS, label = 'LLM') {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || LLM_HTTP_TIMEOUT_MS));
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      throw new Error(`${label} request timed out after ${Math.round((Number(timeoutMs) || LLM_HTTP_TIMEOUT_MS) / 1000)}s`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function createLlmMarkJobRecord(config, words) {
+  const now = Date.now();
+  return {
+    jobId: `llm-${now}-${Math.random().toString(36).slice(2, 8)}`,
+    state: 'queued',
+    phase: 'queued',
+    message: 'AI 分析任务已排队',
+    progress: 0,
+    startedAt: now,
+    updatedAt: now,
+    finishedAt: null,
+    provider: config.provider,
+    model: config.model,
+    wordsCount: Array.isArray(words) ? words.length : 0,
+    unitCount: 0,
+    chunkCount: 0,
+    currentChunk: 0,
+    successfulChunks: 0,
+    failedChunks: 0,
+    result: null,
+    error: '',
+  };
+}
+
+function updateLlmMarkJob(job, patch = {}) {
+  Object.assign(job, patch, { updatedAt: Date.now() });
+  return job;
+}
+
+function serializeLlmMarkJob(job) {
+  if (!job) return { success: false, state: 'not_found', error: 'AI 分析任务不存在或已过期' };
+  return {
+    success: true,
+    jobId: job.jobId,
+    state: job.state,
+    phase: job.phase,
+    message: job.message,
+    progress: job.progress,
+    startedAt: job.startedAt,
+    updatedAt: job.updatedAt,
+    finishedAt: job.finishedAt,
+    provider: job.provider,
+    model: job.model,
+    wordsCount: job.wordsCount,
+    unitCount: job.unitCount,
+    chunkCount: job.chunkCount,
+    currentChunk: job.currentChunk,
+    successfulChunks: job.successfulChunks,
+    failedChunks: job.failedChunks,
+    result: job.result,
+    error: job.error,
+  };
+}
+
+function cleanupLlmMarkJobs() {
+  const now = Date.now();
+  for (const [jobId, job] of llmMarkJobs.entries()) {
+    if (now - Number(job.updatedAt || job.startedAt || 0) > LLM_MARK_JOB_TTL_MS) {
+      llmMarkJobs.delete(jobId);
+    }
+  }
+}
+
+function startLlmMarkJob(words, config) {
+  cleanupLlmMarkJobs();
+  const job = createLlmMarkJobRecord(config, words);
+  llmMarkJobs.set(job.jobId, job);
+
+  setImmediate(async () => {
+    try {
+      appendCutLog(`AI analysis job started: job=${job.jobId}, provider=${config.provider}, model=${config.model}, words=${words.length}`);
+      const result = await runLlmMarking(words, config, (progress) => {
+        updateLlmMarkJob(job, {
+          state: 'running',
+          ...progress,
+        });
+      });
+      updateLlmMarkJob(job, {
+        state: 'finished',
+        phase: 'finished',
+        message: `AI 分析完成：建议 ${result.selectedUnitCount} 段，标记 ${result.indices.length} 项`,
+        progress: 100,
+        successfulChunks: result.successfulChunks,
+        failedChunks: result.failedChunks,
+        result,
+        finishedAt: Date.now(),
+      });
+      appendCutLog(`AI analysis job finished: job=${job.jobId}, suggestions=${result.selectedUnitCount}, indices=${result.indices.length}`);
+    } catch (err) {
+      updateLlmMarkJob(job, {
+        state: 'failed',
+        phase: 'failed',
+        message: 'AI 分析失败',
+        progress: 100,
+        error: err.message || String(err),
+        finishedAt: Date.now(),
+      });
+      appendCutLog(`AI analysis job failed: job=${job.jobId}, error=${err.message || String(err)}`);
+    }
+  });
+
+  return job;
+}
+
 async function callOpenAiCompatible(config, prompt) {
   if (!OPENAI_COMPATIBLE_PROVIDERS.has(config.provider)) {
     throw new Error(`Unsupported OpenAI-compatible provider: ${config.provider}`);
   }
 
   const endpoint = buildOpenAiCompletionsEndpoint(config.baseUrl);
-  const res = await fetch(endpoint, {
+  const res = await fetchWithTimeout(endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -892,7 +1015,7 @@ async function callOpenAiCompatible(config, prompt) {
         { role: 'user', content: prompt },
       ],
     }),
-  });
+  }, LLM_HTTP_TIMEOUT_MS, 'LLM');
 
   if (!res.ok) {
     const body = await res.text();
@@ -918,7 +1041,7 @@ async function callAnthropicMessages(config, prompt) {
   });
 
   const requestOnce = async (maxTokens, strict = false) => {
-    const res = await fetch(endpoint, {
+    const res = await fetchWithTimeout(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -926,7 +1049,7 @@ async function callAnthropicMessages(config, prompt) {
         'anthropic-version': process.env.ANTHROPIC_API_VERSION || '2023-06-01',
       },
       body: JSON.stringify(makeBody(maxTokens, strict)),
-    });
+    }, LLM_HTTP_TIMEOUT_MS, 'Anthropic');
 
     if (!res.ok) {
       const body = await res.text();
@@ -1347,6 +1470,11 @@ async function resolveAnalysis(units, config, inputAnalysis = {}) {
     return analysis;
   }
   try {
+    reportProgress({
+      phase: 'probe',
+      message: '正在理解全文主题和主线',
+      progress: 8,
+    });
     const probeRaw = await callLlmProvider(config, buildTopicProbePrompt(units));
     const probeParsed = extractJsonObject(probeRaw);
     if (probeParsed) {
@@ -1526,7 +1654,7 @@ function buildImagePlanPrompt(units, analysis, style, count, existingRanges = []
   return [
     '你是短视频口播内容的导演、分镜师和 AI 图片提示词专家。',
     '任务：把口播文本翻译成一组能插入视频的配图分镜。你不是摘抄字幕的人，而是把抽象观点导演成具体画面的人。',
-    'If there are multiple independent stories/cases/time periods/visual worlds, every media item must include storyId and storyTitle matching the visual reference asset story group.',
+    '如果文本包含多个独立故事或案例，必须用 storyId 和 storyTitle 分组；同一故事的人物和场景要一致，不同故事可以有不同人物场景。',
     '必须按这个思考流程执行，但最终只输出 JSON：',
     'A. 先读完整文本，判断主题、情绪、文化地域、是否有人物故事。',
     'B. 选择真正适合配图的节点：开头钩子、观点冲突、人物行动、案例画面、情绪转折、结尾记忆点；不要机械平均取句。',
@@ -1550,7 +1678,7 @@ function buildImagePlanPrompt(units, analysis, style, count, existingRanges = []
     `视觉风格：${visualStyle}`,
     `主题参考：${String(analysis?.topic || '').trim() || '未知'}`,
     `梗概参考：${String(analysis?.outline || '').trim() || '未知'}`,
-    'Existing image/video media ranges. Avoid all listed ranges and never overlap with them. If value is none, ignore:',
+    '已存在的图片/视频/删除时间范围如下。配图点必须避开这些范围；如果为 none 则忽略：',
     'delete|... 是最终视频不会出现的时间段，不能把这些内容作为配图依据，也不能把配图放进这些时间范围。',
     blockedRangesText,
     '输出 JSON（只返回 JSON，不要 markdown）：',
@@ -1598,29 +1726,29 @@ function normalizeVisualReferenceAssetType(value, fallback = 'scene') {
 
 function normalizeVisualReferenceAsset(asset, index = 0, style = '', analysis = {}) {
   const type = normalizeVisualReferenceAssetType(asset?.type || asset?.kind || asset?.assetType, index === 0 ? 'character' : 'scene');
-  const titleFallback = type === 'character' ? `Character asset ${index + 1}` : `Scene asset ${index + 1}`;
+  const titleFallback = type === 'character' ? `人物参考 ${index + 1}` : `场景参考 ${index + 1}`;
   const title = trimByChars(String(asset?.title || asset?.name || titleFallback).replace(/\s+/g, ' '), 48);
   const storyId = String(asset?.storyId || asset?.story_id || asset?.storyGroup || asset?.group || 'story_01').replace(/[^\w-]/g, '_').slice(0, 48) || 'story_01';
   const storyTitle = trimByChars(String(asset?.storyTitle || asset?.story_title || asset?.groupTitle || asset?.storyName || 'Story 1').replace(/\s+/g, ' '), 60);
-  const topic = trimByChars(String(analysis?.topic || 'short-form story').replace(/\s+/g, ' '), 80);
+  const topic = trimByChars(String(analysis?.topic || '口播故事').replace(/\s+/g, ' '), 80);
   const outline = trimByChars(String(analysis?.outline || '').replace(/\s+/g, ' '), 160);
-  const styleText = trimByChars(String(style || asset?.style || 'consistent editorial illustration').replace(/\s+/g, ' '), 120);
+  const styleText = trimByChars(String(style || asset?.style || '统一自媒体插画风格').replace(/\s+/g, ' '), 120);
   const rawPrompt = trimByChars(String(asset?.prompt || asset?.visualPrompt || asset?.description || '').replace(/\s+/g, ' '), 900);
   const promptPrefix = type === 'character'
-    ? 'Create a clean white-background character reference sheet, front view, side view, three-quarter view, consistent face, hair, age, outfit, accessories, full body and bust details.'
-    : 'Create an environment-only scene reference image with no people, no characters, no readable text, showing the location, lighting, props, color palette, era, weather, and spatial layout.';
+    ? '生成白底人物设定参考图：同一个人物的正面、侧面、四分之三角度，脸型、发型、年龄、服装、配饰一致，包含半身和全身。'
+    : '生成纯场景设定参考图：只画环境，不出现人物，不出现文字，明确地点、光线、道具、色彩、年代、天气和空间布局。';
   const prompt = trimByChars([
     promptPrefix,
-    rawPrompt || `Topic: ${topic}. Outline: ${outline || topic}.`,
-    `Style: ${styleText}.`,
-    'This is a visual reference asset for later image and video shots; keep it clear, reusable, consistent, no subtitles, no watermark, no logo.',
+    rawPrompt || `主题：${topic}。梗概：${outline || topic}。`,
+    `画风：${styleText}。`,
+    '这是后续图片和视频分镜的视觉参考资产；要求清晰、可复用、人物和场景一致，无字幕、无水印、无logo。',
   ].filter(Boolean).join(' '), 1200);
   const negativePrompt = trimByChars(String(
     asset?.negativePrompt
     || asset?.negative_prompt
     || (type === 'scene'
-      ? 'people, character, portrait, text, watermark, logo, low quality, distorted geometry'
-      : 'text, watermark, logo, extra fingers, distorted face, inconsistent outfit, low quality')
+      ? '人物，角色，肖像，文字，水印，logo，低清，空间畸形'
+      : '文字，水印，logo，多余手指，畸形脸，服装不一致，低清')
   ).replace(/\s+/g, ' '), 320);
   return {
     id: String(asset?.id || `${type}_${String(index + 1).padStart(2, '0')}`).replace(/[^\w-]/g, '_').slice(0, 48),
@@ -1726,19 +1854,19 @@ function buildVisualReferencePrompt(units, analysis = {}, style = '') {
     .map((u) => `${u.id}|${Number(u.start || 0).toFixed(2)}-${Number(u.end || 0).toFixed(2)}|${String(u.text || '').slice(0, 120)}`)
     .join('\n');
   return [
-    'You are a short-video art director. Plan reusable visual reference assets before generating B-roll images or videos.',
-    'Read the transcript and infer the story culture, protagonist, recurring locations, time period, clothing, props, and emotional tone.',
-    'Return 2 to 8 assets. Use character assets only when a recurring person or narrator embodiment is useful. Use scene assets for recurring environments.',
-    'If transcript contains multiple unrelated stories, cases, time periods or visual worlds, split them into story groups first. Every asset must include storyId and storyTitle.',
-    'Character asset rule: prompt must be a white-background multi-view character sheet: front, side, three-quarter, consistent face, hair, outfit and accessories.',
-    'Scene asset rule: prompt must show the environment only, no people, no characters, no readable text. Describe location, light, props, era, layout and color palette.',
-    'Do not copy transcript sentences as prompts. Make reusable visual design prompts that future shots can reference.',
-    `Chosen style: ${String(style || 'consistent editorial illustration')}`,
-    `Topic: ${String(analysis?.topic || '') || 'unknown'}`,
-    `Outline: ${String(analysis?.outline || '') || 'unknown'}`,
-    'Return JSON only:',
-    '{"visualReference":{"title":"...","negativePrompt":"...","stories":[{"storyId":"story_01","storyTitle":"Story 1","assets":[{"id":"character_01","type":"character","storyId":"story_01","storyTitle":"Story 1","title":"...","prompt":"..."},{"id":"scene_01","type":"scene","storyId":"story_01","storyTitle":"Story 1","title":"...","prompt":"..."}]}]}}',
-    'Transcript units:',
+    '你是短视频美术指导。生成图片或视频素材前，先规划可复用的人物/场景参考资产。',
+    '请阅读全文，判断故事文化语境、主角、常出现地点、时代、服装、道具和情绪基调。',
+    '返回 2 到 8 个资产。只有存在反复出现的人物或叙述代表时才生成人物资产；反复出现的空间才生成场景资产。',
+    '如果文本包含多个互不相关的故事、案例、时间段或视觉世界，先拆成 storyId/storyTitle 分组，每个资产必须带 storyId 和 storyTitle。',
+    '人物资产规则：prompt 必须是白底多视角人物设定图，包含正面、侧面、四分之三角度，脸型、发型、服装、配饰一致。',
+    '场景资产规则：prompt 只画环境，不出现人物和可读文字；描述地点、光线、道具、年代、空间布局和色彩。',
+    '不要复制字幕原句当提示词；要写未来分镜可引用的视觉设定。',
+    `用户选择画风：${String(style || '统一自媒体插画风格')}`,
+    `主题：${String(analysis?.topic || '') || '未知'}`,
+    `梗概：${String(analysis?.outline || '') || '未知'}`,
+    '只返回 JSON：',
+    '{"visualReference":{"title":"...","negativePrompt":"...","stories":[{"storyId":"story_01","storyTitle":"故事1","assets":[{"id":"character_01","type":"character","storyId":"story_01","storyTitle":"故事1","title":"...","prompt":"..."},{"id":"scene_01","type":"scene","storyId":"story_01","storyTitle":"故事1","title":"...","prompt":"..."}]}]}}',
+    '文本单元：',
     list,
   ].join('\n');
 }
@@ -1819,25 +1947,39 @@ function hasDirectorVisualLanguage(text) {
 }
 
 function buildDirectorFallbackScene(textBasis, title, purpose, index) {
-  const cue = trimByChars(String(title || purpose || '口播观点'), 28);
-  const normalizedPurpose = String(purpose || '');
-  const opening = index === 0 || /封面|开头|钩子/.test(normalizedPurpose);
-  const ending = /结尾|总结/.test(normalizedPurpose);
-  const conflict = /冲突|转折|问题|观点|案例/.test(normalizedPurpose);
-  const scene = opening
-    ? '一位统一设定的叙事主角站在整洁但有生活痕迹的室内空间，桌面摆着与主题相关的物件'
-    : ending
-      ? '同一位主角走到窗边或开阔空间，回望前面出现过的关键道具，形成收束感'
-      : conflict
-        ? '同一位主角面对两个形成对比的环境或道具，一侧代表旧状态，一侧代表新选择'
-        : '同一位主角在统一场景中用动作和道具表达这个观点';
+  const raw = String([textBasis, title, purpose].filter(Boolean).join(' '));
+  const cue = trimByChars(String(textBasis || title || purpose || '关键内容').replace(/\s+/g, ' '), 34);
+  const lowerPurpose = String(purpose || '').trim();
+  const opening = index === 0 || /封面|开头|钩子|引入/.test(lowerPurpose);
+  const ending = /结尾|总结|收束|升华/.test(lowerPurpose);
+  const templates = [
+    { re: /摔|跌倒|摔倒|受挫|狼狈|失败|绊|倒下/, sceneStory: '主角在人行道边不慎摔倒，包和文件散落在地，路人回头看，主角一只手撑地准备站起来', camera: '中景平视，镜头轻微前推，地面散落物做前景，傍晚自然光' },
+    { re: /打赏|收款|到账|收入|赚钱|钱|红包|奖励|转账/, sceneStory: '主角坐在小桌前低头看手机，屏幕弹出到账提醒但不可读，旁边放着笔记本和水杯，表情惊喜又克制', camera: '手机近景到人物中近景，柔和室内灯光，浅景深' },
+    { re: /惬意|放松|休息|咖啡|舒服|轻松|治愈/, sceneStory: '主角窝在客厅沙发上喝热咖啡看电视，窗外午后阳光照进来，桌上有书和毯子', camera: '固定中景，阳光侧逆光，画面温暖安静' },
+    { re: /手机|评论|消息|爆火|热搜|通知|流量|粉丝/, sceneStory: '夜晚书桌前，主角盯着手机，屏幕消息不断弹出但不可读，手机冷光照亮脸部，桌面有凌乱便签', camera: '俯拍手机特写切到人物侧脸中近景，低照度氛围' },
+    { re: /规则|束缚|选择|自由|边界|规矩|控制|限制/, sceneStory: '主角站在贴满便签的白板前，左手拿旧规则清单，右手把新的选择路线画在纸上', camera: '中景平视，白板虚化不可读，人物动作清楚' },
+    { re: /努力|坚持|生命|意义|成长|改变|目标|未来|希望/, sceneStory: '清晨窗边，主角整理背包和笔记本，桌上放着计划表但文字不可读，阳光从窗帘缝里照进来', camera: '中近景，缓慢推镜，清晨金色光线' },
+    { re: /冲突|争议|压力|焦虑|问题|质疑|矛盾|痛苦|难受/, sceneStory: '主角站在拥挤街口停下脚步，周围人影快速经过，主角握紧手机显得犹豫又有压力', camera: '中景手持轻晃，背景运动模糊，冷暖对比光' },
+    { re: /吃|饭|餐|食物|美食|胃口|餐厅/, sceneStory: '主角坐在小餐馆靠窗位置吃面，热气升起，手机放在桌边，表情从疲惫慢慢变平静', camera: '餐桌侧面中近景，暖色店内灯光，浅景深' },
+    { re: /工作|上班|办公室|电脑|开会|老板|同事/, sceneStory: '主角坐在办公室电脑前整理资料，旁边同事模糊经过，桌面有文件夹和便利贴', camera: '桌面前景中景，平视镜头，冷白办公光' },
+  ];
+  const matched = templates.find((item) => item.re.test(raw));
+  if (matched) return matched;
+  if (opening) {
+    return {
+      sceneStory: '主角在窗边或书桌前拿起关键道具，像是即将讲述一个真实故事，环境里有手机、笔记本和生活物件',
+      camera: '中近景平视，主体略偏左，背景留白，开场建立人物和环境',
+    };
+  }
+  if (ending) {
+    return {
+      sceneStory: '主角走到窗边或天台边缘回望城市，手里拿着前面出现过的关键道具，情绪从紧张转为笃定',
+      camera: '中景到大全景，柔和侧逆光，主体在三分线位置，画面有收束感',
+    };
+  }
   return {
-    sceneStory: `${scene}，用具体动作和环境隐喻表达这一段的核心含义：${cue}，画面不出现任何文字，情绪清晰，人物服饰与前后分镜一致`,
-    camera: opening
-      ? '中近景，平视镜头，主体略偏左，背景留出空间展示环境和道具'
-      : ending
-        ? '中景到大全景，柔和侧逆光，主体在画面三分线位置，留出呼吸感'
-        : '中景，平视或轻微俯拍，主体动作清楚，前景道具引导视线，背景简洁',
+    sceneStory: `主角在真实生活场景中处理和“${cue}”相关的一件具体小事，动作清楚，有道具，有环境，不出现任何文字`,
+    camera: '中景平视，主体动作明确，前景道具引导视线，背景简洁',
   };
 }
 
@@ -1855,11 +1997,19 @@ function buildConciseChineseScenePrompt(options = {}) {
   const styleAnchor = normalizeStoryboardCue(options.styleAnchor || '统一画风');
   const kind = String(options.kind || 'image');
   const hasReference = !!options.hasReference;
-  const referenceHint = hasReference ? '参考人物和场景资产，' : '';
-  const motionHint = kind === 'video' ? '，轻微自然运动，镜头稳定' : '';
-  const noText = kind === 'video' ? '，无字幕无文字无水印' : '，无文字无水印';
-  const prompt = `${referenceHint}画面故事：${sceneStory}，镜头构图：${camera}${motionHint}，${styleAnchor}${noText}`;
-  return trimByChars(prompt.replace(/，+/g, '，').replace(/^，|，$/g, ''), kind === 'video' ? 180 : 120);
+  const referenceHint = hasReference
+    ? '参考已匹配的人物或场景资产，只沿用身份、服饰、场景基调，不把所有参考图硬塞进画面。'
+    : '';
+  const motionHint = kind === 'video' ? '轻微自然运动，镜头稳定，人物动作连贯。' : '';
+  const prompt = [
+    referenceHint,
+    '画面故事：' + sceneStory + '。',
+    '镜头构图：' + camera + '。',
+    '视觉风格：' + styleAnchor + '。',
+    motionHint,
+    '无字幕、无可读文字、无水印、无logo。',
+  ].filter(Boolean).join('');
+  return trimByChars(prompt.replace(/\s+/g, ' ').trim(), kind === 'video' ? 260 : 220);
 }
 
 function sanitizeImagePlanItems(parsed, units, count, analysis, fallbackStyle) {
@@ -1967,22 +2117,17 @@ function buildFallbackImagePlan(units, analysis, count, style = '') {
   if (!units.length) return items;
   const topic = String(analysis?.topic || '口播内容').trim() || '口播内容';
   const styleAnchor = String(style || '彩铅故事插画，纸张纹理，温暖克制色彩').trim();
-  const visualBible = `文化语境按原文判断，统一使用同一位自媒体叙事主角；人物发型、脸型、服饰、道具保持一致；画风统一为${styleAnchor}`;
+  const visualBible = `统一人物和世界观；人物发型、脸型、服饰、关键道具保持一致；画风统一为${styleAnchor}`;
   for (let i = 0; i < targetCount; i += 1) {
     const unit = units[Math.min(units.length - 1, Math.floor((i / Math.max(1, targetCount - 1)) * Math.max(0, units.length - 1)))];
     const title = `配图 ${i + 1}：${trimByChars(unit.text, 18)}`;
-    const sceneStory = `同一位叙事主角在统一场景中，通过动作、表情和环境道具表现“${trimByChars(unit.text, 42)}”这一内容，不出现任何文字`;
-    const camera = i === 0
-      ? '中近景，主体居中，开场建立人物和环境'
-      : (i === targetCount - 1 ? '中景偏大全景，留出结尾总结的空间感' : '中景或特写，突出动作和情绪转折');
-    const prompt = [
-      `全片统一视觉设定：${visualBible}`,
-      `用户选择画风：${styleAnchor}，所有图片必须严格保持这一种画风`,
-      `围绕“${topic}”的中文自媒体口播视频配图`,
-      `画面故事：${sceneStory}`,
-      `镜头构图：${camera}`,
-      '主体明确，适合作为视频 B-roll，不要把原文当作文字写进画面，无文字，无字幕，无水印，无 logo，人物和服饰保持上下文一致',
-    ].join('，');
+    const director = buildDirectorFallbackScene(unit.text, title, i === 0 ? '开头钩子' : (i === targetCount - 1 ? '结尾总结' : '观点画面'), i);
+    const prompt = buildConciseChineseScenePrompt({
+      kind: 'image',
+      sceneStory: director.sceneStory,
+      camera: director.camera,
+      styleAnchor: `${styleAnchor}。${visualBible}。围绕“${topic}”的中文自媒体口播配图`,
+    });
     items.push({
       id: `img_${String(i + 1).padStart(2, '0')}`,
       timeRange: formatSecondsRange(unit.start, unit.start + 7),
@@ -1992,9 +2137,9 @@ function buildFallbackImagePlan(units, analysis, count, style = '') {
       title,
       purpose: i === 0 ? '开头铺垫' : (i === targetCount - 1 ? '结尾总结' : '观点说明'),
       textBasis: trimByChars(unit.text, 80),
-      sceneStory,
-      camera,
-      visual: trimByChars(sceneStory, 120),
+      sceneStory: director.sceneStory,
+      camera: director.camera,
+      visual: trimByChars(director.sceneStory, 120),
       prompt,
       negativePrompt: '低清，模糊，文字，水印，logo，畸形，变形，多余手指，人物服饰不一致，角色年龄变化，地域文化错位',
       keywords: sanitizeKeywords([topic]),
@@ -2006,10 +2151,10 @@ function buildFallbackImagePlan(units, analysis, count, style = '') {
 function buildVideoPlanPrompt(units, analysis, style, count, aspectRatio, existingRanges = []) {
   const list = units
     .slice(0, 220)
-    .map((u) => `${u.id}|${u.start.toFixed(2)}-${u.end.toFixed(2)}|${u.text}`)
+    .map((u) => String(u.id) + '|' + u.start.toFixed(2) + '-' + u.end.toFixed(2) + '|' + u.text)
     .join('\n');
   const targetCount = Math.max(1, Math.min(5, Number(count) || 3));
-  const visualStyle = String(style || '').trim() || 'cinematic realistic B-roll, consistent character and scene';
+  const visualStyle = String(style || '').trim() || '电影感真实生活 B-roll，人物和场景保持一致';
   const blockedRangesText = formatExistingRangesForPrompt(existingRanges);
   return [
     '你是短视频口播内容的导演、分镜师和 AI 视频提示词专家。',
@@ -2023,16 +2168,16 @@ function buildVideoPlanPrompt(units, analysis, style, count, aspectRatio, existi
     '原文“偶尔的惬意” => videoPrompt“主角坐在沙发上喝咖啡看电视，午后阳光洒进客厅，慢速横移”。',
     '原文“收到了别人打赏” => videoPrompt“主角低头看手机收到10元打赏，表情惊喜又克制，近景轻推”。',
     '如文本是中国语境，用中国人物、服饰、空间和生活场景；如是海外故事，要匹配对应国家/时代/建筑/服饰。',
-    'If there are multiple independent stories/cases/time periods/visual worlds, every media item must include storyId and storyTitle matching the visual reference asset story group.',
+    '如果文本里有多个独立故事、案例、时间段或视觉世界，每个视频素材点必须带 storyId 和 storyTitle，用来匹配对应的人物场景参考资产。',
     '输出只允许 JSON，不要 markdown。',
-    `生成 ${targetCount} 个视频素材点。`,
-    `用户选择风格：${visualStyle}`,
-    `目标比例：${aspectRatio || '16:9'}`,
-    'Existing image/video media ranges. Avoid all listed ranges and never overlap with them. If value is none, ignore:',
-    'delete|... is removed from the final video. Do not plan video materials from deleted content or place materials inside deleted ranges.',
+    '生成 ' + targetCount + ' 个视频素材点。',
+    '用户选择风格：' + visualStyle,
+    '目标比例：' + (aspectRatio || '16:9'),
+    '已有图片/视频素材范围如下，必须避开，不能和任意范围重叠；如果为 none 则忽略：',
+    'delete|... 表示最终视频会删除的内容。不要从已删除内容规划视频素材，也不要把素材放入删除范围。',
     blockedRangesText,
-    `主题参考：${String(analysis?.topic || '').trim() || '未知'}`,
-    `梗概参考：${String(analysis?.outline || '').trim() || '未知'}`,
+    '主题参考：' + (String(analysis?.topic || '').trim() || '未知'),
+    '梗概参考：' + (String(analysis?.outline || '').trim() || '未知'),
     'JSON 格式：',
     '{"topic":"...","items":[{"id":"vid_01","start":10.0,"end":15.0,"durationSec":5,"timeRange":"00:10-00:15","title":"...","purpose":"开头钩子/B-roll/案例画面/转场/结尾","textBasis":"对应原文依据，不超过40字","directorIntent":"为什么这里需要视频素材","sceneStory":"具体画面故事","camera":"镜头运动和构图","videoPrompt":"完整视频生成提示词","negativePrompt":"负面提示词"}]}',
     '文本单元（id|start-end|text）：',
@@ -2108,7 +2253,7 @@ function sanitizeVideoPlanItems(parsed, units, count, analysis, fallbackStyle, a
       camera,
       videoPrompt,
       prompt: videoPrompt,
-      negativePrompt: trimByChars(String(item.negativePrompt || item.negative_prompt || 'low quality, blurry, text, subtitles, watermark, logo, distorted face, inconsistent character, wrong culture').replace(/\s+/g, ' '), 320),
+      negativePrompt: trimByChars(String(item.negativePrompt || item.negative_prompt || '低清，模糊，字幕，文字，水印，logo，畸形脸，人物身份漂移，服饰不一致，地域文化错位，画风不统一').replace(/\s+/g, ' '), 320),
     });
     if (out.length >= targetCount) break;
   }
@@ -2133,11 +2278,13 @@ function buildFallbackVideoPlan(units, analysis, count, style = '', aspectRatio 
       generationDurationSec: Number(generation.generationDurationSec.toFixed(2)),
       timeRange: formatSecondsRange(item.start, end),
       aspectRatio,
-      videoPrompt: trimByChars([
-        `Style: ${style || 'cinematic realistic B-roll'}.`,
-        `Scene story: ${item.sceneStory}.`,
-        `Camera: ${item.camera}; slow natural camera movement, stable action, no subtitles, no text, no watermark, no logo.`,
-      ].join(' '), 1400),
+      videoPrompt: buildConciseChineseScenePrompt({
+        kind: 'video',
+        sceneStory: item.sceneStory,
+        camera: item.camera || '中景平视，轻微自然运镜',
+        styleAnchor: style || '电影感真实生活 B-roll，人物和场景保持一致',
+        hasReference: false,
+      }),
     };
   });
 }
@@ -2622,7 +2769,7 @@ async function pollAgnesVideoResult(config, videoId) {
 
 async function callVideoGenerationApi(config, item, options = {}) {
   if (!config.ready) {
-    throw new Error(`Video generation config incomplete: missing ${config.missing.join(', ')}`);
+    throw new Error('Video generation config incomplete: missing ' + config.missing.join(', '));
   }
   const prompt = String(item?.videoPrompt || item?.prompt || '').trim();
   if (!prompt) throw new Error('Video prompt is empty');
@@ -2640,16 +2787,19 @@ async function callVideoGenerationApi(config, item, options = {}) {
     height: size.height,
     num_frames: numFrames,
     frame_rate: frameRate,
-    negative_prompt: String(item?.negativePrompt || item?.negative_prompt || 'low quality, blurry, text, watermark, logo, distorted face, inconsistent character').trim(),
-    extra_body: {
-      mode: 'ti2vid',
-    },
+    negative_prompt: String(item?.negativePrompt || item?.negative_prompt || '低清，模糊，文字，水印，logo，畸形，变形，人物不一致，画风不一致，字幕').trim(),
+    extra_body: { mode: 'ti2vid' },
   };
   const referenceInput = options.referenceImage || item?.referenceImage || item?.visualReference || item?.reference;
+  const hasReferenceInput = Array.isArray(referenceInput) ? referenceInput.length > 0 : !!referenceInput;
   const publicReferenceImage = resolvePublicReferenceImageInput(referenceInput);
+  let referenceWarning = '';
   if (publicReferenceImage) {
     requestBody.image = publicReferenceImage;
     requestBody.extra_body.image = publicReferenceImage;
+  } else if (hasReferenceInput) {
+    referenceWarning = 'Agnes 视频参考图需要公网 URL；当前参考图是本地文件或 data URL，已自动按中文分镜降级生成。';
+    appendCutLog('[video] Agnes video reference image is local/data URL; Agnes requires a public URL for image-to-video, falling back to text-to-video.');
   }
 
   const postCreate = async (body) => {
@@ -2659,17 +2809,14 @@ async function callVideoGenerationApi(config, item, options = {}) {
       try {
         const response = await fetch(config.endpoint, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${config.apiKey}`,
-          },
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + config.apiKey },
           body: JSON.stringify(body),
         });
         const bodyText = await response.text();
         return { response, bodyText };
       } catch (err) {
         lastError = err;
-        appendCutLog(`[video] Agnes create network error (${attempt}/2): ${err.message || String(err)}`);
+        appendCutLog('[video] Agnes create network error (' + attempt + '/2): ' + (err.message || String(err)));
         if (attempt < 2) await sleep(3500);
       }
     }
@@ -2679,30 +2826,23 @@ async function callVideoGenerationApi(config, item, options = {}) {
   let { response: res, bodyText: text } = await postCreate(requestBody);
   if (!res.ok && publicReferenceImage && /invalid\s+image|incorrect\s+padding|image/i.test(text)) {
     appendCutLog('[video] Agnes rejected the reference image; retrying text-to-video without image reference.');
+    referenceWarning = 'Agnes 拒绝了参考图，已自动改用文本生成。';
     delete requestBody.image;
     if (requestBody.extra_body) delete requestBody.extra_body.image;
     ({ response: res, bodyText: text } = await postCreate(requestBody));
   }
-  if (!res.ok) {
-    throw new Error(`Agnes video create failed: HTTP ${res.status} ${text.slice(0, 300)}`);
-  }
+  if (!res.ok) throw new Error('Agnes video create failed: HTTP ' + res.status + ' ' + text.slice(0, 300));
   let json = {};
-  try {
-    json = JSON.parse(text);
-  } catch {
-    throw new Error(`Agnes video create returned non-JSON: ${text.slice(0, 120)}`);
-  }
+  try { json = JSON.parse(text); } catch { throw new Error('Agnes video create returned non-JSON: ' + text.slice(0, 120)); }
   let videoUrl = findVideoUrlFromResponse(json);
   const videoId = findVideoIdFromResponse(json);
   if (!videoUrl) {
-    if (!videoId) {
-      throw new Error(`Agnes video create did not return video_id: ${text.slice(0, 300)}`);
-    }
-    appendCutLog(`[video] Agnes video queued: ${videoId}`);
+    if (!videoId) throw new Error('Agnes video create did not return video_id: ' + text.slice(0, 300));
+    appendCutLog('[video] Agnes video queued: ' + videoId);
     videoUrl = await pollAgnesVideoResult(config, videoId);
   }
   const videoRes = await fetch(videoUrl);
-  if (!videoRes.ok) throw new Error(`Video asset download failed: HTTP ${videoRes.status}`);
+  if (!videoRes.ok) throw new Error('Video asset download failed: HTTP ' + videoRes.status);
   const buffer = Buffer.from(await videoRes.arrayBuffer());
   const saved = await saveVideoBuffer(buffer, item.id || videoId || 'video', videoExtFromContentType(videoRes.headers.get('content-type'), videoUrl));
   return {
@@ -2716,285 +2856,670 @@ async function callVideoGenerationApi(config, item, options = {}) {
     generationDurationSec: Number((numFrames / frameRate).toFixed(2)),
     width: size.width,
     height: size.height,
+    referenceUsed: !!publicReferenceImage,
+    referenceWarning,
   };
-}
-
-function randomDraftId(prefix = 'jaygo') {
-  return `${prefix}_${crypto.randomBytes(8).toString('hex')}`;
 }
 
 function toDraftUs(seconds) {
-  return Math.max(0, Math.round((Number(seconds) || 0) * 1000000));
+  const value = Number(seconds);
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.round(value * 1000000));
+}
+
+function randomDraftId(prefix = 'id') {
+  return `${prefix}_${crypto.randomBytes(8).toString('hex')}`;
 }
 
 function sanitizeDraftName(input) {
-  const value = String(input || '')
-    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
-    .replace(/\s+/g, '_')
-    .replace(/_+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, 80);
-  return value || `JaygoCut_${new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14)}`;
-}
-
-function parseJsonFileNoBom(filePath) {
-  return JSON.parse(fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, ''));
-}
-
-function tryParseJsonFileNoBom(filePath) {
-  try {
-    return { ok: true, value: parseJsonFileNoBom(filePath), error: '' };
-  } catch (err) {
-    return { ok: false, value: null, error: err?.message || String(err) };
-  }
-}
-
-function isValidJianyingDraftContent(content) {
-  return Boolean(
-    content
-    && typeof content === 'object'
-    && !Array.isArray(content)
-    && (
-      Array.isArray(content.tracks)
-      || (content.materials && typeof content.materials === 'object')
-      || content.canvas_config
-      || content.duration
-    ),
-  );
-}
-
-function resolveValidJianyingDraftContentPath(dir) {
-  if (!isDirectorySafe(dir)) return '';
-  const candidates = [
-    path.join(dir, 'draft_content.json'),
-    path.join(dir, 'draft_content.json.bak'),
-  ];
-  for (const candidate of candidates) {
-    if (!fs.existsSync(candidate)) continue;
-    const parsed = tryParseJsonFileNoBom(candidate);
-    if (parsed.ok && isValidJianyingDraftContent(parsed.value)) return candidate;
-  }
-  return '';
-}
-
-function deepClone(value) {
-  return JSON.parse(JSON.stringify(value || {}));
-}
-
-function resolveJianyingTemplatePath(input) {
-  const raw = String(input || '').trim().replace(/^"|"$/g, '');
-  if (!raw) return '';
-  const resolved = path.resolve(raw);
-  if (!fs.existsSync(resolved)) return '';
-  const stat = fs.statSync(resolved);
-  if (stat.isDirectory()) {
-    return resolveValidJianyingDraftContentPath(resolved);
-  }
-  if (stat.isFile() && path.basename(resolved).toLowerCase() === 'draft_content.json') {
-    const parsed = tryParseJsonFileNoBom(resolved);
-    return parsed.ok && isValidJianyingDraftContent(parsed.value) ? resolved : '';
-  }
-  return '';
-}
-
-function resolveJianyingTemplateDir(input) {
-  const contentPath = resolveJianyingTemplatePath(input);
-  return contentPath ? path.dirname(contentPath) : '';
-}
-
-function isDirectorySafe(input) {
-  try {
-    return Boolean(input) && fs.existsSync(input) && fs.statSync(input).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-function looksLikeJianyingDraftDir(dir) {
-  if (!isDirectorySafe(dir)) return false;
-  return Boolean(resolveValidJianyingDraftContentPath(dir));
-}
-
-function looksLikeJianyingDraftRoot(dir) {
-  if (!isDirectorySafe(dir)) return false;
-  const base = path.basename(dir).toLowerCase();
-  if (fs.existsSync(path.join(dir, 'root_meta_info.json'))) return true;
-  if (base !== 'com.lveditor.draft') return false;
-  try {
-    return fs.readdirSync(dir, { withFileTypes: true })
-      .some((entry) => entry.isDirectory() && looksLikeJianyingDraftDir(path.join(dir, entry.name)));
-  } catch {
-    return false;
-  }
-}
-
-function normalizeExistingDir(input) {
-  const raw = String(input || '').trim().replace(/^"|"$/g, '');
-  if (!raw) return '';
-  const resolved = path.resolve(raw);
-  return isDirectorySafe(resolved) ? resolved : '';
-}
-
-function parseConfiguredPathList(value) {
-  if (Array.isArray(value)) {
-    return value.map((item) => String(item || '').trim()).filter(Boolean);
-  }
-  const raw = String(value || '').trim();
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      return parsed.map((item) => String(item || '').trim()).filter(Boolean);
-    }
-  } catch {
-    // Fall through to delimiter parsing.
-  }
+  const raw = String(input || '').trim() || `JaygoCut_${Date.now()}`;
   return raw
-    .split(/\r?\n|[;,]/)
-    .map((item) => item.trim())
+    .replace(/[\\/:*?"<>|]+/g, '_')
+    .replace(/\s+/g, '_')
+    .slice(0, 80)
+    || `JaygoCut_${Date.now()}`;
+}
+
+function stripJianyingSubtitlePunctuation(text) {
+  return String(text || '')
+    .replace(/[，。！？；：,.!?;:、]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeCueList(cues = []) {
+  return (Array.isArray(cues) ? cues : [])
+    .map((cue) => {
+      const start = Number(cue?.start);
+      const end = Number(cue?.end);
+      const rawText = String(cue?.text || '').trim();
+      return {
+        ...cue,
+        start,
+        end,
+        rawText,
+        text: stripJianyingSubtitlePunctuation(rawText),
+      };
+    })
+    .filter((cue) => cue.text && Number.isFinite(cue.start) && Number.isFinite(cue.end) && cue.end > cue.start)
+    .sort((a, b) => (a.start - b.start) || (a.end - b.end));
+}
+
+function splitSubtitleByChineseSentence(rawText, maxChars = 15) {
+  const source = String(rawText || '').trim();
+  const sentenceParts = source
+    .split(/(?<=[，,。！？；：.!?;:、])/u)
+    .map((part) => stripJianyingSubtitlePunctuation(part))
     .filter(Boolean);
+  const baseParts = sentenceParts.length ? sentenceParts : [stripJianyingSubtitlePunctuation(source)].filter(Boolean);
+  const out = [];
+  for (const part of baseParts) {
+    const chars = Array.from(part);
+    if (chars.length <= maxChars) {
+      out.push(part);
+      continue;
+    }
+    let cursor = 0;
+    while (cursor < chars.length) {
+      out.push(chars.slice(cursor, cursor + maxChars).join(''));
+      cursor += maxChars;
+    }
+  }
+  return out;
+}
+
+function textStyleForJianyingPreset(preset = '') {
+  const key = String(preset || '').toLowerCase();
+  const base = {
+    fontSize: 8,
+    color: '#FFFFFF',
+    backgroundColor: '',
+    borderColor: '#000000',
+    borderWidth: 4,
+    position: { x: 0, y: -0.78 },
+  };
+  if (key.includes('black') || key.includes('gold')) {
+    return {
+      ...base,
+      color: '#F7E7B2',
+      borderColor: '#15120A',
+      borderWidth: 5,
+    };
+  }
+  if (key.includes('clean') || key.includes('simple')) {
+    return {
+      ...base,
+      borderWidth: 3,
+    };
+  }
+  return base;
+}
+
+function buildJianyingSubtitleItems(cues = [], textStyle = {}) {
+  const normalized = normalizeCueList(cues);
+  const items = [];
+  let cursor = 0;
+  const gap = 0.012;
+  for (const cue of normalized) {
+    const parts = splitSubtitleByChineseSentence(cue.rawText || cue.text, 15);
+    if (!parts.length) continue;
+    const totalChars = Math.max(1, parts.reduce((sum, part) => sum + Array.from(part).length, 0));
+    const cueDuration = Math.max(0.08, cue.end - cue.start);
+    let localStart = cue.start;
+    for (let i = 0; i < parts.length; i += 1) {
+      const part = parts[i];
+      const ratio = Array.from(part).length / totalChars;
+      const idealDuration = i === parts.length - 1
+        ? Math.max(0.08, cue.end - localStart)
+        : Math.max(0.18, cueDuration * ratio);
+      let start = Math.max(localStart, cursor);
+      let end = i === parts.length - 1 ? cue.end : Math.min(cue.end, localStart + idealDuration);
+      if (end <= start) end = start + 0.12;
+      if (items.length && start < cursor) start = cursor;
+      if (items.length && start - cursor < gap) start = cursor + gap;
+      if (end <= start) end = start + 0.12;
+      items.push({
+        type: 'text',
+        text: part,
+        start: Number(start.toFixed(3)),
+        duration: Number(Math.max(0.05, end - start).toFixed(3)),
+        style: { ...textStyle },
+        ...textStyle,
+      });
+      cursor = start + Math.max(0.05, end - start);
+      localStart = end;
+    }
+  }
+  return items;
+}
+
+function loadJianyingTemplate(templatePath) {
+  const rootDir = String(templatePath || '').trim();
+  if (!rootDir || !looksLikeJianyingDraftDir(rootDir)) return null;
+  return { rootDir };
+}
+
+function createBaseDraftContent(template, draftId, durationUs) {
+  return {
+    id: draftId,
+    name: draftId,
+    duration: Math.max(1000000, Number(durationUs) || 1000000),
+    fps: 30,
+    canvas_config: { width: 1920, height: 1080, ratio: '16:9' },
+    platform: { app_source: 'lv', app_version: '5.9.0', os: 'windows' },
+    tracks: [{ id: randomDraftId('track'), type: 'text', segments: [] }],
+    materials: {
+      videos: [],
+      audios: [],
+      texts: [],
+      stickers: [],
+      video_effects: [],
+      transitions: [],
+      masks: [],
+      chromas: [],
+      audio_fades: [],
+      audio_effects: [],
+      canvases: [],
+      speeds: [],
+      sound_channel_mappings: [],
+      vocal_separations: [],
+      placeholders: [],
+      common_mask: [],
+    },
+    extra_info: {
+      created_via: 'Jaygo Cut',
+      template: template?.rootDir || '',
+    },
+  };
+}
+
+function makeTextMaterialFromTemplate(templateMaterial, text, preset = '') {
+  const style = textStyleForJianyingPreset(preset);
+  return {
+    ...(templateMaterial && typeof templateMaterial === 'object' ? templateMaterial : {}),
+    id: randomDraftId('text'),
+    type: 'text',
+    content: String(text || ''),
+    text: String(text || ''),
+    style,
+  };
+}
+
+function makeTextSegmentFromTemplate(templateSegment, materialId, cue) {
+  const startUs = toDraftUs(cue.start);
+  const durationUs = Math.max(50000, toDraftUs(cue.end) - startUs);
+  return {
+    ...(templateSegment && typeof templateSegment === 'object' ? templateSegment : {}),
+    id: randomDraftId('segment'),
+    material_id: materialId,
+    target_timerange: { start: startUs, duration: durationUs },
+    source_timerange: { start: 0, duration: durationUs },
+  };
+}
+
+function isDirectorySafe(inputPath) {
+  const resolved = path.resolve(String(inputPath || ''));
+  try {
+    return !!resolved && fs.existsSync(resolved) && fs.statSync(resolved).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function resolveMediaFilePathFromAsset(asset = {}, preferredType = '') {
+  const candidates = [];
+  const push = (value) => {
+    const text = String(value || '').trim();
+    if (text) candidates.push(text);
+  };
+  push(asset.filePath);
+  push(asset.path);
+  push(asset.localPath);
+  push(asset.file);
+  if (asset.image && typeof asset.image === 'object') {
+    push(asset.image.filePath);
+    push(asset.image.path);
+    push(asset.image.localPath);
+    push(asset.image.file);
+  }
+  if (asset.video && typeof asset.video === 'object') {
+    push(asset.video.filePath);
+    push(asset.video.path);
+    push(asset.video.localPath);
+    push(asset.video.file);
+  }
+
+  for (const candidate of candidates) {
+    const resolved = path.resolve(candidate);
+    try {
+      if (fs.existsSync(resolved) && fs.statSync(resolved).isFile()) return resolved;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+
+  const nested = preferredType === 'video'
+    ? (asset.video && typeof asset.video === 'object' ? asset.video : {})
+    : preferredType === 'image'
+      ? (asset.image && typeof asset.image === 'object' ? asset.image : {})
+      : {};
+  const fileNameCandidates = [
+    asset.fileName,
+    nested.fileName,
+    asset.name,
+  ].filter(Boolean);
+  const urlCandidates = [
+    asset.url,
+    nested.url,
+    asset.imageUrl,
+    asset.videoUrl,
+  ].filter(Boolean);
+  for (const url of urlCandidates) {
+    const match = String(url).match(/\/(image_assets|video_assets)\/([^/?#]+)(?:[?#].*)?$/i);
+    if (match && match[2]) {
+      try {
+        fileNameCandidates.push(decodeURIComponent(match[2]));
+      } catch {
+        fileNameCandidates.push(match[2]);
+      }
+    }
+  }
+
+  const roots = preferredType === 'video'
+    ? [VIDEO_ASSET_DIR]
+    : preferredType === 'image'
+      ? [IMAGE_ASSET_DIR]
+      : [IMAGE_ASSET_DIR, VIDEO_ASSET_DIR];
+  for (const rawName of fileNameCandidates) {
+    const name = path.basename(String(rawName || '').trim());
+    if (!name || name === '.' || name === '..') continue;
+    for (const root of roots) {
+      const candidate = path.join(root, name);
+      try {
+        if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
+      } catch {
+        // Keep looking.
+      }
+    }
+  }
+  return '';
+}
+
+function sumDraftDeletedDuration(deleteSegments = []) {
+  return (Array.isArray(deleteSegments) ? deleteSegments : []).reduce((sum, seg) => {
+    const start = Number(seg?.start);
+    const end = Number(seg?.end);
+    return Number.isFinite(start) && Number.isFinite(end) && end > start ? sum + (end - start) : sum;
+  }, 0);
+}
+
+function normalizeDraftDeleteSegments(segments = [], sourceDurationSec = Infinity) {
+  const duration = Number.isFinite(Number(sourceDurationSec)) ? Math.max(0, Number(sourceDurationSec)) : Infinity;
+  const raw = (Array.isArray(segments) ? segments : [])
+    .map((seg) => ({
+      start: Math.max(0, Number(seg?.start)),
+      end: Math.min(duration, Number(seg?.end)),
+    }))
+    .filter((seg) => Number.isFinite(seg.start) && Number.isFinite(seg.end) && seg.end > seg.start)
+    .sort((a, b) => (a.start - b.start) || (a.end - b.end));
+  const merged = [];
+  for (const seg of raw) {
+    const last = merged[merged.length - 1];
+    if (!last || seg.start > last.end) {
+      merged.push({ ...seg });
+    } else {
+      last.end = Math.max(last.end, seg.end);
+    }
+  }
+  return merged.map((seg) => ({
+    start: Number(seg.start.toFixed(3)),
+    end: Number(seg.end.toFixed(3)),
+    duration: Number((seg.end - seg.start).toFixed(3)),
+  }));
+}
+
+function buildDraftKeepSegments(deleteSegments = [], sourceDurationSec = 0) {
+  const duration = Math.max(0, Number(sourceDurationSec) || 0);
+  const keeps = [];
+  let sourceCursor = 0;
+  let outputCursor = 0;
+  for (const seg of normalizeDraftDeleteSegments(deleteSegments, duration)) {
+    if (seg.start > sourceCursor) {
+      const keepDuration = seg.start - sourceCursor;
+      keeps.push({
+        start: Number(outputCursor.toFixed(3)),
+        sourceStart: Number(sourceCursor.toFixed(3)),
+        end: Number((outputCursor + keepDuration).toFixed(3)),
+        duration: Number(keepDuration.toFixed(3)),
+      });
+      outputCursor += keepDuration;
+    }
+    sourceCursor = Math.max(sourceCursor, seg.end);
+  }
+  if (duration > sourceCursor) {
+    const keepDuration = duration - sourceCursor;
+    keeps.push({
+      start: Number(outputCursor.toFixed(3)),
+      sourceStart: Number(sourceCursor.toFixed(3)),
+      end: Number((outputCursor + keepDuration).toFixed(3)),
+      duration: Number(keepDuration.toFixed(3)),
+    });
+  }
+  return keeps.filter((seg) => seg.duration > 0.001);
+}
+
+function mapDraftSourceTimeToOutput(time, deleteSegments = []) {
+  const t = Math.max(0, Number(time) || 0);
+  let removed = 0;
+  for (const seg of deleteSegments) {
+    if (t >= seg.end) {
+      removed += seg.end - seg.start;
+    } else if (t > seg.start) {
+      removed += t - seg.start;
+      break;
+    } else {
+      break;
+    }
+  }
+  return Math.max(0, Number((t - removed).toFixed(3)));
+}
+
+function inferJianyingCanvas(payload = {}) {
+  const meta = payload.sourceVideoMeta && typeof payload.sourceVideoMeta === 'object' ? payload.sourceVideoMeta : {};
+  const width = Math.max(1, Math.round(Number(payload.width || meta.width || 1920) || 1920));
+  const height = Math.max(1, Math.round(Number(payload.height || meta.height || 1080) || 1080));
+  const fps = Math.max(1, Math.min(120, Math.round(Number(payload.fps || meta.fps || 30) || 30)));
+  const ratio = payload.ratio || (width && height ? `${width}:${height}` : 'original');
+  return { width, height, fps, ratio };
+}
+
+function collectJianyingMediaItems(payload = {}, type = 'image', deleteSegments = []) {
+  const key = type === 'video' ? 'videos' : 'images';
+  const rawList = payload.mediaAssets && Array.isArray(payload.mediaAssets[key]) ? payload.mediaAssets[key] : [];
+  const out = [];
+  rawList.forEach((item, index) => {
+    const rawStatus = String(item?.status || '').trim().toLowerCase();
+    if (rawStatus && !['done', 'ready', 'imported'].includes(rawStatus)) return;
+    const media = type === 'video'
+      ? (item?.video && typeof item.video === 'object' ? item.video : item)
+      : (item?.image && typeof item.image === 'object' ? item.image : item);
+    const filePath = resolveMediaFilePathFromAsset({ ...item, ...media }, type);
+    if (!filePath) return;
+    const startRaw = Number(item?.start);
+    const endRaw = Number(item?.end);
+    const durationRaw = Number(item?.durationSec || item?.duration);
+    if (!Number.isFinite(startRaw) || startRaw < 0) return;
+    const rawEnd = Number.isFinite(endRaw) && endRaw > startRaw
+      ? endRaw
+      : startRaw + (Number.isFinite(durationRaw) && durationRaw > 0 ? durationRaw : (type === 'video' ? 5 : 7));
+    const mappedStart = mapDraftSourceTimeToOutput(startRaw, deleteSegments);
+    const mappedEnd = mapDraftSourceTimeToOutput(rawEnd, deleteSegments);
+    const duration = Math.max(0, mappedEnd - mappedStart);
+    if (duration < 0.2) return;
+    out.push({
+      ref: `${type}_${index + 1}`,
+      type: type === 'image' ? 'photo' : 'video',
+      path: filePath,
+      start: Number(mappedStart.toFixed(3)),
+      duration: Number(duration.toFixed(3)),
+      width: Number(media.width || item?.width) || undefined,
+      height: Number(media.height || item?.height) || undefined,
+    });
+  });
+  return out;
+}
+
+function isUsableJianyingMediaFile(filePath) {
+  const text = String(filePath || '').trim();
+  if (!text) return false;
+  try {
+    const resolved = path.resolve(text);
+    return fs.existsSync(resolved) && fs.statSync(resolved).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function sanitizeJianyingSpecTracks(tracks = []) {
+  const out = [];
+  for (const track of Array.isArray(tracks) ? tracks : []) {
+    if (!track || typeof track !== 'object') continue;
+    const items = Array.isArray(track.items) ? track.items : [];
+    if (track.type === 'text') {
+      const textItems = items.filter((item) => item && String(item.text || '').trim());
+      if (textItems.length) out.push({ ...track, items: textItems });
+      continue;
+    }
+    const mediaItems = items.filter((item) => isUsableJianyingMediaFile(item?.path));
+    if (mediaItems.length) {
+      out.push({ ...track, items: mediaItems });
+    } else if (/主|main/i.test(String(track.name || ''))) {
+      throw new Error('主视频素材文件不存在，无法导出剪映草稿。');
+    }
+  }
+  return out;
+}
+
+function countJianyingTrackItems(tracks = [], matcher = () => false) {
+  return (Array.isArray(tracks) ? tracks : []).reduce((sum, track) => (
+    sum + (matcher(track) ? (Array.isArray(track.items) ? track.items.length : 0) : 0)
+  ), 0);
+}
+
+function resolveCapcutCliPath() {
+  const candidates = [
+    path.resolve(process.cwd(), 'node_modules', 'capcut-cli', 'dist', 'index.js'),
+    path.resolve(__dirname, '..', '..', 'node_modules', 'capcut-cli', 'dist', 'index.js'),
+  ];
+  const found = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!found) throw new Error('未找到 capcut-cli，请先运行 npm install。');
+  return found;
+}
+
+function isReadableCapcutTemplateDir(templateDir) {
+  const resolved = path.resolve(String(templateDir || ''));
+  try {
+    return fs.existsSync(path.join(resolved, 'draft_content.json'))
+      && fs.existsSync(path.join(resolved, 'draft_info.json'));
+  } catch {
+    return false;
+  }
+}
+
+function findBundledCapcutInitTemplateDir() {
+  const cliPath = resolveCapcutCliPath();
+  const candidates = [
+    path.resolve(path.dirname(cliPath), '..', 'templates', '_init'),
+    path.resolve(process.cwd(), 'node_modules', 'capcut-cli', 'templates', '_init'),
+    path.resolve(__dirname, '..', '..', 'node_modules', 'capcut-cli', 'templates', '_init'),
+  ];
+  return candidates.find((candidate) => isReadableCapcutTemplateDir(candidate)) || '';
+}
+
+function copyCapcutInitTemplateFiles(sourceDir, targetDir) {
+  fs.mkdirSync(targetDir, { recursive: true });
+  for (const fileName of ['draft_content.json', 'draft_info.json']) {
+    const sourceFile = path.join(sourceDir, fileName);
+    const targetFile = path.join(targetDir, fileName);
+    if (!fs.existsSync(sourceFile)) {
+      throw new Error(`剪映默认模板缺少文件：${sourceFile}`);
+    }
+    // In the packaged app the template lives inside app.asar. Directory-level
+    // copy can fail with ENOENT/opendir, but reading individual files is stable.
+    fs.writeFileSync(targetFile, fs.readFileSync(sourceFile, 'utf8'), 'utf8');
+  }
+}
+
+function ensureWritableCapcutInitTemplateDir() {
+  const cacheRoot = path.join(path.resolve(process.cwd(), JIANYING_DRAFT_EXPORT_DIR_NAME), '_capcut_init_template');
+  if (isReadableCapcutTemplateDir(cacheRoot)) return cacheRoot;
+  const source = findBundledCapcutInitTemplateDir();
+  if (!source) {
+    throw new Error('未找到剪映草稿默认模板，无法生成完整剪映草稿。请重新安装 Jaygo Cut 或检查 capcut-cli 依赖。');
+  }
+  const tempRoot = `${cacheRoot}.tmp_${Date.now()}_${process.pid}`;
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(cacheRoot), { recursive: true });
+  try {
+    copyCapcutInitTemplateFiles(source, tempRoot);
+    if (!isReadableCapcutTemplateDir(tempRoot)) {
+      throw new Error(`模板复制后仍不可读：${tempRoot}`);
+    }
+    fs.rmSync(cacheRoot, { recursive: true, force: true });
+    fs.renameSync(tempRoot, cacheRoot);
+  } catch (err) {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+    throw err;
+  }
+  return cacheRoot;
+}
+function looksLikeJianyingDraftRoot(rootPath) {
+  const resolved = path.resolve(String(rootPath || ''));
+  if (!isDirectorySafe(resolved)) return false;
+  if (fs.existsSync(path.join(resolved, 'root_meta_info.json'))) return true;
+  if (/com\.lveditor\.draft$/i.test(resolved.replace(/[\\/]+$/, ''))) return true;
+  try {
+    return fs.readdirSync(resolved, { withFileTypes: true }).some((entry) => (
+      entry.isDirectory() && looksLikeJianyingDraftDir(path.join(resolved, entry.name))
+    ));
+  } catch {
+    return false;
+  }
+}
+
+function looksLikeJianyingDraftDir(draftPath) {
+  const resolved = path.resolve(String(draftPath || ''));
+  if (!isDirectorySafe(resolved)) return false;
+  const contentPath = path.join(resolved, 'draft_content.json');
+  const infoPath = path.join(resolved, 'draft_info.json');
+  const metaPath = path.join(resolved, 'draft_meta_info.json');
+  const candidate = fs.existsSync(contentPath) ? contentPath : (fs.existsSync(infoPath) ? infoPath : '');
+  if (!candidate) return fs.existsSync(metaPath);
+  try {
+    JSON.parse(fs.readFileSync(candidate, 'utf8'));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readJianyingRootConfig() {
+  const { env: fileEnv } = loadEnvFileConfig();
+  return {
+    root: String(envValue(fileEnv, 'JIANYING_DRAFT_ROOT', '') || '').trim(),
+    templates: String(envValue(fileEnv, 'JIANYING_TEMPLATE_PATHS', '') || '').trim(),
+  };
 }
 
 function getConfiguredJianyingDraftRoot() {
-  return normalizeExistingDir(process.env.JIANYING_DRAFT_ROOT || '');
+  return readJianyingRootConfig().root;
 }
 
-function describeJianyingTemplateCandidate(input) {
-  const raw = String(input || '').trim().replace(/^"|"$/g, '');
-  if (!raw) return null;
-  const resolved = path.resolve(raw);
-  if (!fs.existsSync(resolved)) {
-    return { path: resolved, valid: false, reason: '路径不存在' };
-  }
-  let dir = resolved;
+function parseConfiguredJianyingTemplatePaths(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return [];
   try {
-    const stat = fs.statSync(resolved);
-    if (stat.isFile()) dir = path.dirname(resolved);
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) return parsed.map((v) => String(v || '').trim()).filter(Boolean).slice(0, 5);
   } catch {
-    return { path: resolved, valid: false, reason: '路径不可访问' };
+    // Accept newline separated values from older settings/env files.
   }
-  const contentPath = path.join(dir, 'draft_content.json');
-  if (!fs.existsSync(contentPath)) {
-    return { path: dir, valid: false, reason: '缺少 draft_content.json' };
-  }
-  const parsed = tryParseJsonFileNoBom(contentPath);
-  if (!parsed.ok) {
-    return { path: dir, valid: false, reason: 'draft_content.json 不是明文 JSON，可能是新版剪映加密草稿' };
-  }
-  if (!isValidJianyingDraftContent(parsed.value)) {
-    return { path: dir, valid: false, reason: 'draft_content.json 不是可识别的剪映草稿结构' };
-  }
-  return { path: dir, valid: true, reason: '' };
+  return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, 5);
 }
 
 function getConfiguredJianyingTemplateEntries() {
-  const seen = new Set();
-  return parseConfiguredPathList(process.env.JIANYING_TEMPLATE_PATHS || '')
-    .map(describeJianyingTemplateCandidate)
-    .filter(Boolean)
-    .filter((entry) => {
-      const key = String(entry.path || '').toLowerCase();
-      if (!key || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .slice(0, 5);
+  const paths = parseConfiguredJianyingTemplatePaths(readJianyingRootConfig().templates);
+  return paths.map((itemPath) => {
+    const resolved = path.resolve(itemPath);
+    if (!isDirectorySafe(resolved)) {
+      return { path: resolved, valid: false, reason: '文件夹不存在' };
+    }
+    if (!looksLikeJianyingDraftDir(resolved)) {
+      return { path: resolved, valid: false, reason: 'draft_content.json 不是明文 JSON，可能是新版剪映加密草稿' };
+    }
+    return { path: resolved, valid: true, reason: '' };
+  });
 }
 
 function getConfiguredJianyingTemplates() {
-  return getConfiguredJianyingTemplateEntries()
-    .filter((entry) => entry.valid)
-    .map((entry) => entry.path);
+  return getConfiguredJianyingTemplateEntries().filter((entry) => entry.valid).map((entry) => entry.path);
 }
 
-function getJianyingDraftRootCandidates(extra = []) {
-  const roots = [];
-  const push = (value) => {
-    const normalized = normalizeExistingDir(value);
-    if (normalized && !roots.some((item) => item.toLowerCase() === normalized.toLowerCase())) {
-      roots.push(normalized);
+function findJianyingDraftRoots(extraCandidates = []) {
+  const local = process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Local');
+  const roaming = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
+  const candidates = [
+    ...extraCandidates,
+    getConfiguredJianyingDraftRoot(),
+    path.join(local, 'JianyingPro', 'User Data', 'Projects', 'com.lveditor.draft'),
+    path.join(roaming, 'JianyingPro', 'User Data', 'Projects', 'com.lveditor.draft'),
+    path.join(local, 'CapCut', 'User Data', 'Projects', 'com.lveditor.draft'),
+    path.join(roaming, 'CapCut', 'User Data', 'Projects', 'com.lveditor.draft'),
+  ];
+  const seen = new Set();
+  const out = [];
+  for (const candidate of candidates) {
+    const resolved = path.resolve(String(candidate || ''));
+    const key = resolved.toLowerCase();
+    if (!candidate || seen.has(key)) continue;
+    seen.add(key);
+    if (looksLikeJianyingDraftRoot(resolved)) {
+      out.push({ path: resolved, source: extraCandidates.includes(candidate) ? 'custom' : 'detected' });
     }
-  };
-  extra.forEach(push);
-  push(process.env.JIANYING_DRAFT_ROOT);
-  const local = process.env.LOCALAPPDATA || '';
-  const roaming = process.env.APPDATA || '';
-  push(path.join(local, 'JianyingPro', 'User Data', 'Projects', 'com.lveditor.draft'));
-  push(path.join(roaming, 'JianyingPro', 'User Data', 'Projects', 'com.lveditor.draft'));
-  push(path.join(local, 'CapCut', 'User Data', 'Projects', 'com.lveditor.draft'));
-  push(path.join(roaming, 'CapCut', 'User Data', 'Projects', 'com.lveditor.draft'));
-  return roots;
+  }
+  return out;
 }
 
-function findJianyingDraftRoots(extra = []) {
-  return getJianyingDraftRootCandidates(extra)
-    .filter(looksLikeJianyingDraftRoot)
-    .map((dir) => ({
-      path: dir,
-      label: path.basename(path.dirname(path.dirname(path.dirname(dir)))) || path.basename(dir),
-    }));
-}
-
-function listJianyingDrafts(root) {
+function listJianyingDrafts(rootPath) {
+  const root = path.resolve(String(rootPath || ''));
   if (!looksLikeJianyingDraftRoot(root)) return [];
+  let entries = [];
   try {
-    return fs.readdirSync(root, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => {
-        const dir = path.join(root, entry.name);
-        if (!looksLikeJianyingDraftDir(dir)) return null;
-        let name = entry.name;
-        let modified = 0;
-        for (const fileName of ['draft_meta_info.json', 'draft_content.json', 'draft_info.json']) {
-          const filePath = path.join(dir, fileName);
-          if (!fs.existsSync(filePath)) continue;
-          try {
-            const stat = fs.statSync(filePath);
-            modified = Math.max(modified, stat.mtimeMs || 0);
-            const json = parseJsonFileNoBom(filePath);
-            name = String(json.draft_name || json.name || name);
-            break;
-          } catch {
-            // Ignore partially unreadable draft metadata; the folder can still be used.
-          }
-        }
-        return {
-          name,
-          path: dir,
-          modified,
-          modifiedText: modified ? new Date(modified).toLocaleString('zh-CN', { hour12: false }) : '',
-        };
-      })
-      .filter(Boolean)
-      .sort((a, b) => (b.modified || 0) - (a.modified || 0));
+    entries = fs.readdirSync(root, { withFileTypes: true });
   } catch {
     return [];
   }
+  return entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => {
+      const draftPath = path.join(root, entry.name);
+      if (!looksLikeJianyingDraftDir(draftPath)) return null;
+      let modified = 0;
+      try {
+        modified = fs.statSync(draftPath).mtimeMs;
+      } catch {
+        modified = 0;
+      }
+      return {
+        name: entry.name,
+        path: draftPath,
+        modified,
+        modifiedText: modified ? new Date(modified).toLocaleString('zh-CN', { hour12: false }) : '',
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => (b.modified || 0) - (a.modified || 0));
+}
+
+function resolveJianyingTemplateDir(templatePath) {
+  const resolved = path.resolve(String(templatePath || '').trim());
+  return templatePath && looksLikeJianyingDraftDir(resolved) ? resolved : '';
 }
 
 function uniqueDraftName(baseName, exportRoot) {
-  const clean = sanitizeDraftName(baseName);
-  if (!isDirectorySafe(exportRoot)) return clean;
-  let candidate = clean;
-  let index = 2;
+  const base = sanitizeDraftName(baseName);
+  let candidate = base;
+  let counter = 2;
   while (fs.existsSync(path.join(exportRoot, candidate))) {
-    candidate = sanitizeDraftName(`${clean}_${index}`);
-    index += 1;
+    candidate = `${base}_${counter}`;
+    counter += 1;
   }
   return candidate;
 }
 
 function resolveJianyingExportTarget(payload = {}, templateDir = '') {
-  const exportMode = String(payload.exportMode || 'auto').toLowerCase();
-  const rawCustomRoot = String(payload.targetRoot || payload.draftRoot || '').trim();
-  const customRoot = normalizeExistingDir(rawCustomRoot);
-  const templateRoot = templateDir && looksLikeJianyingDraftDir(templateDir)
-    ? path.dirname(templateDir)
-    : '';
-  if (String(payload.templatePath || '').trim() && !templateDir) {
-    throw new Error('所选剪映模板无效：请在主设置中重新选择包含有效 draft_content.json 的剪映草稿文件夹。');
-  }
-  if (exportMode === 'project') {
+  const mode = String(payload.exportMode || 'auto').trim().toLowerCase();
+  if (mode === 'project') {
     return {
       exportRoot: path.resolve(process.cwd(), JIANYING_DRAFT_EXPORT_DIR_NAME),
       exportRootSource: 'project',
@@ -3002,501 +3527,39 @@ function resolveJianyingExportTarget(payload = {}, templateDir = '') {
       templateDir,
     };
   }
-  if (customRoot) {
-    if (looksLikeJianyingDraftRoot(customRoot)) {
-      return { exportRoot: customRoot, exportRootSource: 'custom', autoPlaced: true, templateDir };
-    }
-    if (looksLikeJianyingDraftDir(customRoot)) {
-      return { exportRoot: path.dirname(customRoot), exportRootSource: 'custom-draft-parent', autoPlaced: true, templateDir: templateDir || customRoot };
-    }
-    if (exportMode === 'custom') {
-      return { exportRoot: customRoot, exportRootSource: 'custom-folder', autoPlaced: false, templateDir };
-    }
+  if (mode === 'custom' && payload.targetRoot) {
+    const exportRoot = path.resolve(String(payload.targetRoot));
+    return {
+      exportRoot,
+      exportRootSource: 'custom',
+      autoPlaced: true,
+      templateDir,
+    };
   }
-  if (exportMode === 'custom' && rawCustomRoot) {
-    throw new Error(`自定义剪映导出目录无效或不可访问：${rawCustomRoot}`);
+  if (templateDir) {
+    return {
+      exportRoot: path.dirname(templateDir),
+      exportRootSource: 'template-root',
+      autoPlaced: true,
+      templateDir,
+    };
   }
-  if (templateRoot && looksLikeJianyingDraftRoot(templateRoot)) {
-    return { exportRoot: templateRoot, exportRootSource: 'template-root', autoPlaced: true, templateDir };
-  }
-  const configuredRoot = getConfiguredJianyingDraftRoot();
-  if (configuredRoot) {
-    if (looksLikeJianyingDraftRoot(configuredRoot)) {
-      return { exportRoot: configuredRoot, exportRootSource: 'configured-root', autoPlaced: true, templateDir };
-    }
-    return { exportRoot: configuredRoot, exportRootSource: 'configured-folder', autoPlaced: false, templateDir };
-  }
-  const detected = findJianyingDraftRoots()[0];
-  if (detected?.path) {
-    return { exportRoot: detected.path, exportRootSource: 'auto', autoPlaced: true, templateDir };
+  const configured = getConfiguredJianyingDraftRoot();
+  const detected = findJianyingDraftRoots(configured ? [configured] : [])[0]?.path || '';
+  if (detected) {
+    return {
+      exportRoot: detected,
+      exportRootSource: configured ? 'settings' : 'detected',
+      autoPlaced: true,
+      templateDir: '',
+    };
   }
   return {
     exportRoot: path.resolve(process.cwd(), JIANYING_DRAFT_EXPORT_DIR_NAME),
     exportRootSource: 'project-fallback',
     autoPlaced: false,
-    templateDir,
+    templateDir: '',
   };
-}
-
-function loadJianyingTemplate(templatePath) {
-  const contentPath = resolveJianyingTemplatePath(templatePath);
-  if (!contentPath) {
-    if (String(templatePath || '').trim()) {
-      throw new Error('所选剪映模板无效：请重新选择包含有效 draft_content.json 的剪映草稿文件夹。');
-    }
-    return null;
-  }
-  const content = parseJsonFileNoBom(contentPath);
-  const materials = content.materials && typeof content.materials === 'object' ? content.materials : {};
-  const textMaterial = Array.isArray(materials.texts) && materials.texts.length
-    ? deepClone(materials.texts[0])
-    : null;
-  const textTrack = Array.isArray(content.tracks)
-    ? content.tracks.find((track) => track && track.type === 'text' && Array.isArray(track.segments) && track.segments.length)
-    : null;
-  const textSegment = textTrack ? deepClone(textTrack.segments[0]) : null;
-  return {
-    content,
-    contentPath,
-    rootDir: path.dirname(contentPath),
-    textMaterial,
-    textSegment,
-  };
-}
-
-function htmlEscapeText(text) {
-  return String(text || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function replaceTextContent(templateContent, text) {
-  const plain = String(text || '').trim();
-  const escaped = htmlEscapeText(plain);
-  const raw = String(templateContent || '');
-  if (!raw || !/[<>]/.test(raw)) return plain;
-  if (raw.includes('</text>')) {
-    return raw.replace(/(<text[^>]*>)([\s\S]*?)(<\/text>)/i, `$1${escaped}$3`);
-  }
-  if (raw.includes('&lt;/text&gt;')) {
-    return raw.replace(/(&lt;text[^&]*&gt;)([\s\S]*?)(&lt;\/text&gt;)/i, `$1${escaped}$3`);
-  }
-  const replaced = raw.replace(/(>)([^<>]*)(<\/[^>]+>\s*)$/s, `$1${escaped}$3`);
-  return replaced === raw ? plain : replaced;
-}
-
-function presetTextMaterial(preset, text) {
-  const key = String(preset || 'clean').trim();
-  const presets = {
-    clean: {
-      content: text,
-      font_size: 8,
-      text_color: '#FFFFFF',
-      border_color: '#111827',
-      border_width: 0.08,
-      background_alpha: 0,
-    },
-    blackgold: {
-      content: text,
-      font_size: 9,
-      text_color: '#F8E7B0',
-      border_color: '#0B0F17',
-      border_width: 0.12,
-      background_alpha: 0.18,
-      background_color: '#111111',
-    },
-    variety: {
-      content: text,
-      font_size: 10,
-      text_color: '#FFFFFF',
-      border_color: '#FF7A00',
-      border_width: 0.14,
-      background_alpha: 0,
-    },
-    soft: {
-      content: text,
-      font_size: 8,
-      text_color: '#FFF7ED',
-      border_color: '#7C2D12',
-      border_width: 0.08,
-      background_alpha: 0.08,
-      background_color: '#F97316',
-    },
-  };
-  return presets[key] || presets.clean;
-}
-
-function buildDefaultTextMaterial(text, preset) {
-  const style = presetTextMaterial(preset, text);
-  return {
-    id: randomDraftId('text'),
-    type: 'text',
-    name: 'Jaygo Cut Subtitle',
-    content: String(text || ''),
-    content_rich_text: [],
-    font_path: '',
-    font_resource_id: '',
-    font_size: style.font_size,
-    text_color: style.text_color,
-    border_color: style.border_color,
-    border_width: style.border_width,
-    background_alpha: style.background_alpha || 0,
-    background_color: style.background_color || '',
-    alignment: 1,
-    line_spacing: 0,
-    letter_spacing: 0,
-  };
-}
-
-function buildDefaultTextSegment(materialId, cue) {
-  const start = toDraftUs(cue.start);
-  const duration = Math.max(300000, toDraftUs(Math.max(0.3, Number(cue.end) - Number(cue.start))));
-  return {
-    id: randomDraftId('segment'),
-    material_id: materialId,
-    target_timerange: { start, duration },
-    source_timerange: { start: 0, duration },
-    render_index: 0,
-    visible: true,
-    volume: 1,
-    extra_material_refs: [],
-    clip: {
-      alpha: 1,
-      flip: { horizontal: false, vertical: false },
-      rotation: 0,
-      scale: { x: 1, y: 1 },
-      transform: { x: 0, y: -0.72 },
-    },
-  };
-}
-
-function createBaseDraftContent(template, draftId, durationUs) {
-  const base = template?.content ? deepClone(template.content) : {};
-  base.id = draftId;
-  base.duration = durationUs;
-  base.version = base.version || 360000;
-  base.fps = base.fps || 30;
-  base.canvas_config = base.canvas_config || { width: 1920, height: 1080, ratio: 'original' };
-  base.materials = base.materials && typeof base.materials === 'object' ? base.materials : {};
-  base.materials.texts = [];
-  base.tracks = Array.isArray(base.tracks)
-    ? base.tracks.filter((track) => track && track.type !== 'text')
-    : [];
-  base.tracks.push({
-    id: randomDraftId('track_text'),
-    type: 'text',
-    attribute: 0,
-    flag: 0,
-    is_default_name: true,
-    name: 'Jaygo Cut Subtitles',
-    segments: [],
-  });
-  return base;
-}
-
-function makeTextMaterialFromTemplate(templateMaterial, text, preset) {
-  if (!templateMaterial) return buildDefaultTextMaterial(text, preset);
-  const material = deepClone(templateMaterial);
-  material.id = randomDraftId('text');
-  material.name = material.name || 'Jaygo Cut Subtitle';
-  material.content = replaceTextContent(material.content, text);
-  if ('text' in material) material.text = String(text || '');
-  if ('content_rich_text' in material && Array.isArray(material.content_rich_text)) {
-    material.content_rich_text = [];
-  }
-  return material;
-}
-
-function makeTextSegmentFromTemplate(templateSegment, materialId, cue) {
-  if (!templateSegment) return buildDefaultTextSegment(materialId, cue);
-  const segment = deepClone(templateSegment);
-  segment.id = randomDraftId('segment');
-  segment.material_id = materialId;
-  const start = toDraftUs(cue.start);
-  const duration = Math.max(300000, toDraftUs(Math.max(0.3, Number(cue.end) - Number(cue.start))));
-  segment.target_timerange = { ...(segment.target_timerange || {}), start, duration };
-  segment.source_timerange = { ...(segment.source_timerange || {}), start: 0, duration };
-  segment.visible = segment.visible !== false;
-  return segment;
-}
-
-function normalizeCueList(cues) {
-  if (!Array.isArray(cues)) return [];
-  return cues
-    .map((cue) => ({
-      start: Math.max(0, Number(cue?.start) || 0),
-      end: Math.max(0, Number(cue?.end) || 0),
-      text: String(cue?.text || '').trim(),
-    }))
-    .filter((cue) => cue.text && cue.end > cue.start)
-    .sort((a, b) => a.start - b.start);
-}
-
-function stripJianyingSubtitlePunctuation(text) {
-  return String(text || '')
-    .replace(/[\uFF0C\u3002\uFF01\uFF1F\uFF1B\uFF1A,.!?;:\u3001]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function hasJianyingSubtitleBreak(text) {
-  return /[\uFF0C,\u3002\uFF01\uFF1F\uFF1B\uFF1A.!?;:]$/.test(String(text || '').trim());
-}
-
-function appendJianyingSubtitleText(base, token) {
-  const left = String(base || '').trim();
-  const right = String(token || '').trim();
-  if (!right) return left;
-  if (!left) return right;
-  if (/^[，。！？；：,.!?;:、）】》"”’]/.test(right)) return left + right;
-  if (/[（【《"“‘]$/.test(left)) return left + right;
-  if (/[\u4e00-\u9fff]$/.test(left) && /^[\u4e00-\u9fff]/.test(right)) return left + right;
-  return `${left} ${right}`;
-}
-
-function buildJianyingSubtitleItems(cues, textStyle = {}) {
-  const normalized = normalizeCueList(cues);
-  const normalizedCues = [];
-  for (const cue of normalized) {
-    const start = Number(cue.start);
-    const end = Number(cue.end);
-    const text = String(cue.text || '').trim();
-    if (!text || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
-    const last = normalizedCues[normalizedCues.length - 1];
-    const overlap = last ? last.end - start : 0;
-    const lastDuration = last ? last.end - last.start : 0;
-    const tinyCurrent = end - start < 0.28;
-    const tinyPrevious = lastDuration > 0 && lastDuration < 0.28;
-    const sameSentenceOverlap = !!last && overlap > 0.001 && !hasJianyingSubtitleBreak(last.rawText);
-    const shouldMerge = sameSentenceOverlap && (tinyCurrent || tinyPrevious || text.length <= 2 || last.text.length <= 2);
-    if (shouldMerge) {
-      last.end = Math.max(last.end, end);
-      last.rawText = appendJianyingSubtitleText(last.rawText, text);
-      last.text = stripJianyingSubtitlePunctuation(last.rawText);
-    } else {
-      normalizedCues.push({
-        start,
-        end,
-        rawText: text,
-        text: stripJianyingSubtitlePunctuation(text),
-      });
-    }
-  }
-
-  const items = [];
-  const minReadable = 0.12;
-  const gap = 0.012;
-  for (let i = 0; i < normalizedCues.length; i += 1) {
-    const cue = normalizedCues[i];
-    if (!cue.text) continue;
-    let start = Number(cue.start);
-    let end = Number(cue.end);
-    const nextStart = i < normalizedCues.length - 1 ? Number(normalizedCues[i + 1].start) : Infinity;
-    if (Number.isFinite(nextStart)) {
-      end = Math.min(end, Math.max(start, nextStart - gap));
-    }
-    let duration = end - start;
-    if (duration < minReadable) {
-      if (Number.isFinite(nextStart) && nextStart - start >= 0.05) {
-        duration = nextStart - start - gap;
-      } else if (!Number.isFinite(nextStart)) {
-        duration = minReadable;
-      }
-    }
-    if (duration < 0.05) continue;
-    items.push({
-      ref: `subtitle_${items.length + 1}`,
-      text: cue.text,
-      start: Number(start.toFixed(3)),
-      duration: Number(duration.toFixed(3)),
-      ...textStyle,
-    });
-  }
-  return items;
-}
-
-function clampNumber(value, min, max, fallback = min) {
-  const num = Number(value);
-  if (!Number.isFinite(num)) return fallback;
-  return Math.max(min, Math.min(max, num));
-}
-
-function normalizeDraftDeleteSegments(segments, durationSec = Infinity) {
-  if (!Array.isArray(segments)) return [];
-  const maxEnd = Number.isFinite(durationSec) && durationSec > 0 ? durationSec : Infinity;
-  const normalized = segments
-    .map((seg) => {
-      const start = clampNumber(seg?.start, 0, maxEnd, NaN);
-      const end = clampNumber(seg?.end, 0, maxEnd, NaN);
-      return { start, end };
-    })
-    .filter((seg) => Number.isFinite(seg.start) && Number.isFinite(seg.end) && seg.end > seg.start)
-    .sort((a, b) => a.start - b.start);
-  const merged = [];
-  for (const seg of normalized) {
-    const last = merged[merged.length - 1];
-    if (last && seg.start <= last.end + 0.001) {
-      last.end = Math.max(last.end, seg.end);
-    } else {
-      merged.push({ ...seg });
-    }
-  }
-  return merged;
-}
-
-function sumDraftDeletedDuration(segments) {
-  return normalizeDraftDeleteSegments(segments)
-    .reduce((sum, seg) => sum + Math.max(0, seg.end - seg.start), 0);
-}
-
-function mapDraftTimeAfterDeletes(time, deleteSegments) {
-  const value = Math.max(0, Number(time) || 0);
-  let removed = 0;
-  for (const seg of deleteSegments) {
-    if (seg.end <= value) {
-      removed += seg.end - seg.start;
-    } else if (seg.start < value) {
-      removed += Math.max(0, value - seg.start);
-      break;
-    } else {
-      break;
-    }
-  }
-  return Math.max(0, value - removed);
-}
-
-function buildDraftKeepSegments(deleteSegments, sourceDurationSec) {
-  const duration = Math.max(0, Number(sourceDurationSec) || 0);
-  if (!(duration > 0)) return [];
-  const deletes = normalizeDraftDeleteSegments(deleteSegments, duration);
-  const keep = [];
-  let cursor = 0;
-  let outStart = 0;
-  for (const seg of deletes) {
-    const start = Math.max(0, Math.min(duration, seg.start));
-    const end = Math.max(0, Math.min(duration, seg.end));
-    if (start > cursor + 0.015) {
-      const keepDuration = start - cursor;
-      keep.push({ sourceStart: cursor, start: outStart, duration: keepDuration });
-      outStart += keepDuration;
-    }
-    cursor = Math.max(cursor, end);
-  }
-  if (cursor < duration - 0.015) {
-    keep.push({ sourceStart: cursor, start: outStart, duration: duration - cursor });
-  }
-  return keep.filter((seg) => seg.duration >= 0.04);
-}
-
-function resolveCapcutCliPath() {
-  let pkgPath = require.resolve('capcut-cli/package.json');
-  if (pkgPath.includes('.asar')) {
-    const unpackedPath = pkgPath.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1');
-    if (fs.existsSync(unpackedPath)) pkgPath = unpackedPath;
-  }
-  const cliPath = path.join(path.dirname(pkgPath), 'dist', 'index.js');
-  if (!fs.existsSync(cliPath)) {
-    throw new Error(`capcut-cli not found: ${cliPath}`);
-  }
-  return cliPath;
-}
-
-function inferJianyingCanvas(payload = {}) {
-  const meta = payload.sourceVideoMeta || payload.videoMeta || {};
-  const width = Math.round(Number(meta.width) || Number(payload.width) || 0);
-  const height = Math.round(Number(meta.height) || Number(payload.height) || 0);
-  if (width > 0 && height > 0) {
-    return {
-      width,
-      height,
-      fps: Math.round(Number(meta.fps) || Number(payload.fps) || 30),
-      ratio: 'original',
-    };
-  }
-  return { width: 1920, height: 1080, fps: 30, ratio: 'original' };
-}
-
-function textStyleForJianyingPreset(preset) {
-  const key = String(preset || '').toLowerCase();
-  if (key === 'blackgold') {
-    return { fontSize: 9, color: '#F8E7B0', y: -0.76 };
-  }
-  if (key === 'bold') {
-    return { fontSize: 10, color: '#FFFFFF', y: -0.74 };
-  }
-  return { fontSize: 9, color: '#FFFFFF', y: -0.76 };
-}
-
-function getDraftAssetFilePath(item, kind) {
-  const direct = String(item?.filePath || '').trim();
-  if (isUsableMediaFilePath(direct)) return path.resolve(direct);
-  const nestedKey = kind === 'video' ? 'video' : 'image';
-  return resolveMediaFilePathFromAsset(item?.[nestedKey] || item, kind);
-}
-
-function isUsableMediaFilePath(filePath) {
-  if (!filePath) return false;
-  try {
-    return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
-  } catch {
-    return false;
-  }
-}
-
-function resolveMediaFilePathFromAsset(asset, kind = '') {
-  if (!asset || typeof asset !== 'object') return '';
-  const direct = String(asset.filePath || asset.path || '').trim();
-  if (isUsableMediaFilePath(direct)) return path.resolve(direct);
-  const url = String(asset.url || asset.imageUrl || asset.videoUrl || '').trim();
-  const fileName = String(asset.fileName || '').trim() || (url ? decodeURIComponent(url.split(/[/?#]/).filter(Boolean).pop() || '') : '');
-  if (!fileName) return '';
-  const candidates = [];
-  const lowerKind = String(kind || '').toLowerCase();
-  if (lowerKind === 'image' || url.includes('/image_assets/')) candidates.push(path.join(IMAGE_ASSET_DIR, fileName));
-  if (lowerKind === 'video' || url.includes('/video_assets/')) candidates.push(path.join(VIDEO_ASSET_DIR, fileName));
-  if (!lowerKind && fileName) {
-    candidates.push(path.join(IMAGE_ASSET_DIR, fileName));
-    candidates.push(path.join(VIDEO_ASSET_DIR, fileName));
-  }
-  for (const candidate of candidates) {
-    const resolved = path.resolve(candidate);
-    const allowed = resolved.startsWith(path.resolve(IMAGE_ASSET_DIR)) || resolved.startsWith(path.resolve(VIDEO_ASSET_DIR));
-    if (allowed && isUsableMediaFilePath(resolved)) return resolved;
-  }
-  return '';
-}
-
-function collectJianyingMediaItems(payload = {}, kind, deleteSegments) {
-  const mediaAssets = payload.mediaAssets && typeof payload.mediaAssets === 'object' ? payload.mediaAssets : {};
-  const rawItems = kind === 'video'
-    ? (mediaAssets.videos || payload.videoItems || [])
-    : (mediaAssets.images || payload.imageItems || []);
-  const sanitized = sanitizeReviewMediaItems(rawItems, kind);
-  const mapTime = (time) => mapDraftTimeAfterDeletes(time, deleteSegments);
-  return sanitized.map((item, index) => {
-    const rawStatus = String(item.status || '').toLowerCase();
-    if (rawStatus && !['done', 'ready', 'imported'].includes(rawStatus)) return null;
-    const filePath = getDraftAssetFilePath(item, kind);
-    if (!isUsableMediaFilePath(filePath)) return null;
-    const originalStart = Number(item.start);
-    const originalEnd = Number(item.end);
-    if (!Number.isFinite(originalStart) || !Number.isFinite(originalEnd) || originalEnd <= originalStart) return null;
-    const mappedStart = mapTime(originalStart);
-    const mappedEnd = mapTime(originalEnd);
-    const duration = mappedEnd - mappedStart;
-    if (duration < (kind === 'video' ? 0.4 : 0.8)) return null;
-    return {
-      ref: `${kind}_${index + 1}`,
-      path: path.resolve(filePath),
-      start: Number(mappedStart.toFixed(3)),
-      duration: Number(duration.toFixed(3)),
-      type: kind === 'image' ? 'photo' : 'video',
-      title: item.title || '',
-    };
-  }).filter(Boolean);
 }
 
 function getJianyingSourceDuration(payload, sourceVideoPath, cues, deleteSegments) {
@@ -3556,6 +3619,7 @@ function buildJianyingFullDraftSpec(payload = {}) {
   if (imageItems.length) tracks.push({ type: 'video', name: 'Jaygo Cut 图片素材', items: imageItems });
   if (videoItems.length) tracks.push({ type: 'video', name: 'Jaygo Cut 视频素材', items: videoItems });
   tracks.push({ type: 'text', name: 'Jaygo Cut 字幕', items: textItems });
+  const sanitizedTracks = sanitizeJianyingSpecTracks(tracks);
   return {
     spec: {
       name: sanitizeDraftName(payload.draftName || `JaygoCut_${new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14)}`),
@@ -3563,14 +3627,14 @@ function buildJianyingFullDraftSpec(payload = {}) {
       height: canvas.height,
       fps: canvas.fps,
       ratio: canvas.ratio,
-      tracks,
+      tracks: sanitizedTracks,
     },
     stats: {
       cues: textItems.length,
       deleteSegments: deleteSegments.length,
-      keepSegments: mainVideoItems.length,
-      imageAssets: imageItems.length,
-      videoAssets: videoItems.length,
+      keepSegments: countJianyingTrackItems(sanitizedTracks, (track) => /主|main/i.test(String(track.name || ''))),
+      imageAssets: countJianyingTrackItems(sanitizedTracks, (track) => /图片|image/i.test(String(track.name || ''))),
+      videoAssets: countJianyingTrackItems(sanitizedTracks, (track) => /视频素材|video asset/i.test(String(track.name || ''))),
       sourceDurationSec: Number(sourceDurationSec.toFixed(3)),
       outputDurationSec: Number((sourceDurationSec - sumDraftDeletedDuration(deleteSegments)).toFixed(3)),
     },
@@ -3581,9 +3645,10 @@ function runCapcutCliCompile(specPath, draftDir, templateDir = '') {
   const cliPath = resolveCapcutCliPath();
   const runner = getNodeRunner();
   const args = [cliPath, 'compile', specPath, '--out', draftDir, '--force-write', '--quiet'];
-  if (templateDir && looksLikeJianyingDraftDir(templateDir)) {
-    args.push('--template', templateDir);
-  }
+  const effectiveTemplateDir = (templateDir && looksLikeJianyingDraftDir(templateDir))
+    ? templateDir
+    : ensureWritableCapcutInitTemplateDir();
+  args.push('--template', effectiveTemplateDir);
   const result = spawnSync(
     runner.command,
     args,
@@ -4568,6 +4633,38 @@ function mergeProofreadCorrections(corrections = []) {
   return out.sort((a, b) => a.startIndex - b.startIndex || a.endIndex - b.endIndex).slice(0, 120);
 }
 
+function replaceTextContent(input, correction = {}) {
+  const startIndex = Number(correction?.startIndex);
+  const endIndex = Number(correction?.endIndex);
+  const replacementChars = Array.from(String(correction?.to || '').trim());
+  if (
+    !Number.isInteger(startIndex)
+    || !Number.isInteger(endIndex)
+    || startIndex < 0
+    || endIndex < startIndex
+    || replacementChars.length !== endIndex - startIndex + 1
+  ) {
+    return input;
+  }
+  if (typeof input === 'string') {
+    const chars = Array.from(input);
+    if (endIndex >= chars.length) return input;
+    return [
+      ...chars.slice(0, startIndex),
+      ...replacementChars,
+      ...chars.slice(endIndex + 1),
+    ].join('');
+  }
+  if (!Array.isArray(input) || endIndex >= input.length) return input;
+  return input.map((word, index) => {
+    if (index < startIndex || index > endIndex) return word;
+    if (word && typeof word === 'object') {
+      return { ...word, text: replacementChars[index - startIndex] || word.text || '' };
+    }
+    return replacementChars[index - startIndex] || word;
+  });
+}
+
 async function runOriginalProofread(words, config, originalText) {
   const text = String(originalText || '').trim();
   if (normalizeProofreadComparable(text).length < 4) {
@@ -4614,7 +4711,57 @@ async function runOriginalProofread(words, config, originalText) {
   };
 }
 
-async function runLlmMarking(words, config) {
+
+function buildSubtitleBreakPrompt(tokens, analysis = {}) {
+  const list = (Array.isArray(tokens) ? tokens : [])
+    .slice(0, 1800)
+    .map((t) => String(Number(t.index)) + '|' + Number(t.start || 0).toFixed(2) + '-' + Number(t.end || 0).toFixed(2) + '|' + String(t.text || '').replace(/[\r\n|]+/g, ' ').trim())
+    .join('\n');
+  return [
+    '你是中文短视频字幕断句师。任务：只给口播字幕添加断句点，不改字、不删字。',
+    '目标：导出剪映草稿时字幕要符合用户阅读习惯。逗号也算一句；短句优先，不能把多句话合成一条长字幕。',
+    '规则：',
+    '1. 按语义断句：一个动作、一个判断、一个转折、一个问题通常就是一句。',
+    '2. 每句建议 4-14 个汉字；最多不要超过 18 个汉字，除非专有名词不能拆。',
+    '3. 在应该停顿的位置输出 punctuation，可用 ， 。 ？ ！；不需要输出所有 token，只输出需要断句的 token。',
+    '4. 不要在专有名词、人名、地名中间断开；不要让相邻字幕时间重叠。',
+    '5. 输出只允许 JSON，不要 markdown，不要解释。',
+    '主题参考：' + (String(analysis.topic || '').trim() || '未知'),
+    '梗概参考：' + (String(analysis.outline || '').trim() || '未知'),
+    'JSON 格式：{"breaks":[{"index":123,"punctuation":"，","paragraphAfter":false}]}',
+    '文本单元（index|start-end|text）：',
+    list,
+  ].join('\n');
+}
+
+function sanitizeSubtitleBreaks(parsed, validIndices) {
+  const raw = Array.isArray(parsed?.breaks) ? parsed.breaks : Array.isArray(parsed?.items) ? parsed.items : Array.isArray(parsed?.punctuation) ? parsed.punctuation : [];
+  const punctuationByIndex = {};
+  const paragraphAfterIndices = [];
+  for (const item of raw) {
+    const index = Number(item?.index ?? item?.id ?? item?.unit_id ?? item?.unitId);
+    if (!Number.isInteger(index) || !validIndices.has(index)) continue;
+    const punct = String(item?.punctuation || item?.punct || item?.mark || '').trim().slice(0, 1);
+    if (!/[，。！？；：,.!?;:]/.test(punct)) continue;
+    punctuationByIndex[String(index)] = punct;
+    if (item?.paragraphAfter === true || item?.paragraph_after === true || item?.paragraph === true) paragraphAfterIndices.push(index);
+  }
+  return { punctuationByIndex, paragraphAfterIndices };
+}
+
+async function runLlmSubtitleBreaks(tokens, config, analysis = {}) {
+  const cleanTokens = (Array.isArray(tokens) ? tokens : [])
+    .map((token) => ({ index: Number(token?.index), start: Number(token?.start), end: Number(token?.end), text: String(token?.text || '').trim() }))
+    .filter((token) => Number.isInteger(token.index) && token.text && Number.isFinite(token.start) && Number.isFinite(token.end));
+  if (!cleanTokens.length) throw new Error('没有可断句的字幕文本');
+  const validIndices = new Set(cleanTokens.map((token) => token.index));
+  const raw = await callLlmProvider(config, buildSubtitleBreakPrompt(cleanTokens, analysis));
+  const parsed = extractJsonObject(raw) || {};
+  const result = sanitizeSubtitleBreaks(parsed, validIndices);
+  return { ...result, rawLength: raw.length, breakCount: Object.keys(result.punctuationByIndex).length };
+}
+
+async function runLlmMarking(words, config, onProgress = () => {}) {
   const units = buildTranscriptUnits(words);
   if (!units.length) {
     throw new Error('转录内容为空，无法执行 LLM 标记');
@@ -4622,6 +4769,22 @@ async function runLlmMarking(words, config) {
 
   const allUnitIdSet = new Set(units.map((u) => u.id));
   const chunks = chunkTranscriptUnits(units);
+  const reportProgress = (patch = {}) => {
+    try {
+      onProgress({
+        unitCount: units.length,
+        chunkCount: chunks.length,
+        ...patch,
+      });
+    } catch {
+      // Progress callbacks are best-effort and must never break analysis.
+    }
+  };
+  reportProgress({
+    phase: 'preparing',
+    message: `已拆分 ${units.length} 个文本单元，准备分析 ${chunks.length} 个分块`,
+    progress: 3,
+  });
   const selectedMap = new Map();
   const punctuationByUnitId = new Map();
   let analysis = {
@@ -4662,6 +4825,11 @@ async function runLlmMarking(words, config) {
   }
 
   try {
+    reportProgress({
+      phase: 'structure',
+      message: '正在分析文章结构和必须保留内容',
+      progress: 22,
+    });
     const structureRaw = await callLlmProvider(config, buildStructurePrompt(units, analysis));
     const structureParsed = extractJsonObject(structureRaw);
     if (structureParsed) {
@@ -4672,7 +4840,16 @@ async function runLlmMarking(words, config) {
     // ignore structure errors
   }
 
-  for (const chunk of chunks) {
+  for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+    const chunk = chunks[chunkIndex];
+    reportProgress({
+      phase: 'mark',
+      message: `正在标记第 ${chunkIndex + 1}/${chunks.length} 个文本分块`,
+      progress: Math.min(92, 30 + Math.floor((chunkIndex / Math.max(1, chunks.length)) * 58)),
+      currentChunk: chunkIndex + 1,
+      successfulChunks,
+      failedChunks,
+    });
     const prompt = buildLlmPrompt(chunk, analysis);
     let raw = '';
     try {
@@ -4721,8 +4898,24 @@ async function runLlmMarking(words, config) {
     if (!summaryText && ((parsed && parsed.summary) || parsedAnalysis.outline)) {
       summaryText = String((parsed && parsed.summary) || parsedAnalysis.outline).trim().slice(0, 120);
     }
+    reportProgress({
+      phase: 'mark',
+      message: `已完成第 ${chunkIndex + 1}/${chunks.length} 个文本分块`,
+      progress: Math.min(94, 30 + Math.floor(((chunkIndex + 1) / Math.max(1, chunks.length)) * 58)),
+      currentChunk: chunkIndex + 1,
+      successfulChunks,
+      failedChunks,
+    });
   }
   steps.mark = successfulChunks > 0;
+
+  reportProgress({
+    phase: 'finalizing',
+    message: '正在整理 AI 建议和标点分段',
+    progress: 96,
+    successfulChunks,
+    failedChunks,
+  });
 
   const rawCandidates = Array.from(selectedMap.values())
     .sort((a, b) => b.confidence - a.confidence);
@@ -5337,8 +5530,25 @@ function getReviewHtmlCompatibilityPatch() {
     + '      if (!next) return true;\n'
     + '      if (/[\\uFF0C,\\u3002\\uFF01\\uFF1F\\uFF1B\\uFF1A.!?;:]$/.test(raw)) return true;\n'
     + '      if (typeof window.shouldParagraphBreakAfter === "function" && window.shouldParagraphBreakAfter(index) && content.length >= 2) return true;\n'
-    + '      return content.length >= 18;\n'
+    + '      if ((Number(end) || 0) - (Number(start) || 0) >= 2.8 && content.length >= 10) return true;\n'
+    + '      if (content.length >= 15) return true;\n'
+    + '      return content.length >= 12;\n'
     + '  };\n'
+    + '  if (!window.__jaygoLlmMarkTimeoutPatched && typeof window.fetch === "function") {\n'
+    + '    window.__jaygoLlmMarkTimeoutPatched = true;\n'
+    + '    var nativeFetch = window.fetch.bind(window);\n'
+    + '    window.fetch = function(input, init) {\n'
+    + '      var url = typeof input === "string" ? input : (input && input.url ? String(input.url) : "");\n'
+    + '      if (url.indexOf("/api/llm-mark") >= 0 && !(init && init.signal) && typeof AbortController === "function") {\n'
+    + '        var controller = new AbortController();\n'
+    + '        var timer = setTimeout(function(){ controller.abort(); }, 600000);\n'
+    + '        return nativeFetch(input, Object.assign({}, init || {}, { signal: controller.signal }))\n'
+    + '          .finally(function(){ clearTimeout(timer); })\n'
+    + '          .catch(function(err){ if (err && err.name === "AbortError") throw new Error("AI分析超时：模型响应太慢，已停止本次分析，请稍后重试或切换模型。"); throw err; });\n'
+    + '      }\n'
+    + '      return nativeFetch(input, init);\n'
+    + '    };\n'
+    + '  }\n'
     + '  window.normalizeExportCuesForSingleTrack = function(cues) {\n'
     + '    var raw = (Array.isArray(cues) ? cues : []).map(function(cue){ return { start: Math.max(0, Number(cue && cue.start) || 0), end: Math.max(0, Number(cue && cue.end) || 0), text: window.stripSubtitlePunctuation(String((cue && cue.text) || "").trim()) }; })\n'
     + '      .filter(function(cue){ return cue.text && cue.end > cue.start; }).sort(function(a,b){ return a.start - b.start; });\n'
@@ -5383,6 +5593,8 @@ function injectReviewHtmlCompatibility(html) {
     || !body.includes('function appendSubtitleToken')
     || !body.includes('function shouldBreakSubtitleCue')
     || !body.includes('stripSubtitlePunctuation')
+    || !body.includes('__jaygoLlmMarkTimeoutPatched')
+    || body.includes('content.length >= 18')
     || body.includes('content.length >= 28')
     || body.includes('duration >= 3.8')
     || body.includes('duration >= 2.8')
@@ -5574,6 +5786,12 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'GET' && pathname === '/api/llm-mark-status') {
+      const jobId = String(requestUrl.searchParams.get('jobId') || '').trim();
+      writeJson(res, 200, serializeLlmMarkJob(llmMarkJobs.get(jobId)));
+      return;
+    }
+
     if (req.method === 'POST' && pathname === '/api/llm-mark') {
       const config = getLlmConfig();
       if (!config.ready) {
@@ -5588,6 +5806,12 @@ const server = http.createServer(async (req, res) => {
       }
       if (words.length > 50000) {
         throw new Error('转录数据过大，请先裁剪后再执行 LLM 标记');
+      }
+
+      if (payload.async === true) {
+        const job = startLlmMarkJob(words, config);
+        writeJson(res, 202, serializeLlmMarkJob(job));
+        return;
       }
 
       appendCutLog(`LLM 标记开始：provider=${config.provider}, model=${config.model}, words=${words.length}`);
@@ -5698,6 +5922,20 @@ const server = http.createServer(async (req, res) => {
       appendCutLog(`Visual reference planning started: provider=${config.provider || 'fallback'}, model=${config.model || '-'}`);
       const result = await runLlmVisualReferencePlan(words, config, payload);
       appendCutLog(`Visual reference planning completed: ${(result.visualReference?.assets || []).length} assets`);
+      writeJson(res, 200, { success: true, ...result });
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/llm-subtitle-breaks') {
+      const config = getLlmConfig();
+      if (!config.ready) throw new Error(`LLM 配置不完整：缺少 ${config.missing.join(', ')}`);
+      const body = await readBody(req);
+      const payload = JSON.parse(body || '{}');
+      const tokens = Array.isArray(payload.tokens) ? payload.tokens : [];
+      if (!tokens.length) throw new Error('tokens 为空，无法执行字幕断句');
+      appendCutLog(`AI 字幕断句开始：tokens=${tokens.length}`);
+      const result = await runLlmSubtitleBreaks(tokens, config, sanitizeAnalysisInput(payload.analysis));
+      appendCutLog(`AI 字幕断句完成：breaks=${result.breakCount}`);
       writeJson(res, 200, { success: true, ...result });
       return;
     }
@@ -6055,6 +6293,9 @@ if (process.env.JAYGO_CUT_TEST_EXPORTS === '1') {
     resolveReferenceImageInput,
     resolveReferenceImageInputs,
     buildLlmPrompt,
+    buildSubtitleBreakPrompt,
+    sanitizeSubtitleBreaks,
+    runLlmSubtitleBreaks,
     buildChatAdjustPrompt,
     buildOriginalProofreadPrompt,
     buildProofreadCandidates,
@@ -6096,3 +6337,4 @@ if (process.env.JAYGO_CUT_TEST_EXPORTS === '1') {
     console.log('');
   });
 }
+

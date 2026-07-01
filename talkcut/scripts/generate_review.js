@@ -3200,12 +3200,26 @@ const html = `<!doctype html>
     function getReferenceAssetsForItem(item, limit = 2) {
       const assets = getActiveReferenceAssets();
       if (!assets.length) return [];
-      return assets
-        .map((asset, index) => ({ asset, index, score: scoreReferenceAssetForItem(asset, item) }))
-        .sort((a, b) => (b.score - a.score) || (a.index - b.index))
-        .slice(0, Math.max(1, limit))
-        .map((entry) => entry.asset)
-        .filter((asset) => asset.image?.url);
+      const text = String([item?.title, item?.purpose, item?.textBasis, item?.sceneStory, item?.visual, item?.prompt, item?.videoPrompt].filter(Boolean).join(' '));
+      const ranked = assets.map((asset, index) => {
+          let score = scoreReferenceAssetForItem(asset, item);
+          if (item?.storyId && asset.storyId === item.storyId) score += 12;
+          if (asset.type === 'character' && /主角|人物|他|她|男|女|孩子|老人|青年|动作|表情|摔|看|走|坐|站|拿|吃|喝/.test(text)) score += 4;
+          if (asset.type === 'scene' && /场景|房间|街|路|餐厅|办公室|窗|天台|城市|室内|室外|书桌|沙发|手机|电脑/.test(text)) score += 4;
+          return { asset, index, score };
+        }).filter((entry) => entry.asset?.image?.url).sort((a, b) => (b.score - a.score) || (a.index - b.index));
+      const pool = item?.storyId && ranked.some((entry) => entry.asset.storyId === item.storyId) ? ranked.filter((entry) => entry.asset.storyId === item.storyId) : ranked;
+      const picked = [];
+      const add = (entry) => { if (!entry || picked.some((asset) => asset.id === entry.asset.id)) return; picked.push(entry.asset); };
+      const max = Math.max(1, Number(limit) || 2);
+      const wantsScene = /场景|房间|街|路|餐厅|办公室|窗|天台|城市|室内|室外|书桌|沙发|店|厨房|学校/.test(text);
+      const wantsCharacter = /主角|人物|他|她|男|女|孩子|老人|青年|动作|表情|摔|看|走|坐|站|拿|吃|喝/.test(text) || !wantsScene;
+      if (max >= 2) {
+        if (wantsCharacter) add(pool.find((entry) => entry.asset.type === 'character') || ranked.find((entry) => entry.asset.type === 'character'));
+        if (wantsScene) add(pool.find((entry) => entry.asset.type === 'scene') || ranked.find((entry) => entry.asset.type === 'scene'));
+      }
+      for (const entry of pool) { if (picked.length >= max) break; add(entry); }
+      return picked.slice(0, max);
     }
 
     function referenceImagesFromAssets(assets) {
@@ -3221,20 +3235,20 @@ const html = `<!doctype html>
       if (!refs.length) return item;
       const hasCharacter = refs.some((asset) => asset.type === 'character');
       const hasScene = refs.some((asset) => asset.type === 'scene');
-      const refTitles = refs.map((asset) => asset.title).filter(Boolean).join(', ');
-      const storyLine = [item?.sceneStory || item?.visual || item?.title || '', item?.camera || ''].filter(Boolean).join(' | ');
+      const refTitles = refs.map((asset) => asset.title).filter(Boolean).join('、');
+      const storyLine = [item?.sceneStory || item?.visual || item?.title || '', item?.camera || ''].filter(Boolean).join('；');
       const styleLine = imageStyleEl ? String(imageStyleEl.value || '').trim() : '';
       const concisePrompt = [
-        'Use the provided reference image(s) as visual anchors: ' + refTitles + '.',
-        hasCharacter ? 'Character identity, face, hair, clothing and temperament must follow the character reference image. Do not invent a new detailed character description.' : '',
-        hasScene ? 'Location, lighting, props and atmosphere should follow the scene reference image when relevant.' : '',
-        storyLine ? 'Current shot: ' + storyLine : '',
-        styleLine ? 'Style: ' + styleLine : '',
-        'No subtitles, no readable text, no watermark, no logo. Match the current storyboard instead of copying transcript words literally.',
-      ].filter(Boolean).join(' ');
+        '参考图：' + refTitles + '。只沿用匹配的人物身份、服饰、场景基调，不把所有参考图硬塞进画面。',
+        hasCharacter ? '人物脸型、发型、年龄气质和服装以人物参考图为准，不重新发明角色。' : '',
+        hasScene ? '地点、光线、道具和空间氛围以场景参考图为准。' : '',
+        storyLine ? '当前分镜：' + storyLine + '。' : '',
+        styleLine ? '画风：' + styleLine + '。' : '',
+        type === 'video' ? '轻微自然运动，镜头稳定，动作连贯。' : '',
+        '无字幕、无可读文字、无水印、无logo。',
+      ].filter(Boolean).join('');
       const next = { ...item, referenceAssetIds: refs.map((asset) => asset.id).filter(Boolean) };
-      if (type === 'video') { next.videoPrompt = concisePrompt; next.prompt = concisePrompt; }
-      else next.prompt = concisePrompt;
+      if (type === 'video') { next.videoPrompt = concisePrompt; next.prompt = concisePrompt; } else next.prompt = concisePrompt;
       return next;
     }
 
@@ -4371,7 +4385,9 @@ const html = `<!doctype html>
       if (!next) return true;
       if (breakPunctuation && /[，,。！？；：.!?;:]$/.test(String(breakPunctuation))) return true;
       if (shouldParagraphBreakAfter(index) && content.length >= 2) return true;
-      return content.length >= 18;
+      if (content.length >= 16) return true;
+      if (content.length >= 12 && /[呢吗吧呀啊了的嘛么啦喽]$/.test(content)) return true;
+      return false;
     }
 
     function buildExportCues() {
@@ -4472,6 +4488,61 @@ const html = `<!doctype html>
       return out;
     }
 
+
+    function collectSubtitleBreakTokensForExport() {
+      const tokens = [];
+      WORDS.forEach((w, i) => {
+        if (!w || w.isGap || selected.has(i)) return;
+        const text = stripSubtitlePunctuation(getWordText(i).trim());
+        const start = Number(w.start);
+        const end = Number(w.end);
+        if (!text || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+        tokens.push({ index: i, start, end, text });
+      });
+      return tokens;
+    }
+
+    function hasEnoughSubtitleBreaksForExport(tokens) {
+      if (!Array.isArray(tokens) || tokens.length < 8) return true;
+      let count = 0;
+      tokens.forEach((token) => {
+        if (llmPunctByIndex.has(token.index) || /[，,。！？；：.!?;:]$/.test(String(getWordText(token.index) || ''))) count += 1;
+      });
+      return count >= Math.max(3, Math.floor(tokens.length / 18));
+    }
+
+    async function ensureAiSubtitleBreaksBeforeExport() {
+      const tokens = collectSubtitleBreakTokensForExport();
+      if (!tokens.length || hasEnoughSubtitleBreaksForExport(tokens)) return false;
+      try {
+        setExportStatus('正在让 AI 为剪映字幕分析断句点...');
+        const { response, data } = await fetchJsonWithTimeout('/api/llm-subtitle-breaks', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tokens, analysis: { topic: llmTopic || '', outline: llmOutline || '' } }),
+        }, 45000);
+        if (!response.ok || !data.success) throw new Error(data.error || ('HTTP ' + response.status));
+        const punct = data.punctuationByIndex && typeof data.punctuationByIndex === 'object' ? data.punctuationByIndex : {};
+        Object.keys(punct).forEach((key) => {
+          const idx = Number(key);
+          const mark = String(punct[key] || '').trim();
+          if (Number.isInteger(idx) && idx >= 0 && idx < WORDS.length && /[，。！？；：,.!?;:]/.test(mark)) llmPunctByIndex.set(idx, mark[0]);
+        });
+        (Array.isArray(data.paragraphAfterIndices) ? data.paragraphAfterIndices : []).forEach((idx) => {
+          idx = Number(idx);
+          if (Number.isInteger(idx) && idx >= 0 && idx < WORDS.length) llmParagraphAfterIndex.add(idx);
+        });
+        if (Object.keys(punct).length) {
+          scheduleReviewStateSave(100);
+          render();
+          setExportStatus('AI 字幕断句完成，正在继续导出剪映草稿...');
+          return true;
+        }
+      } catch (err) {
+        setExportStatus('AI 字幕断句失败，已改用本地断句规则继续导出：' + (err.message || String(err)));
+      }
+      return false;
+    }
+
     function fillJianyingDraftOptions(targetEl, options, mapValue) {
       if (!targetEl) return;
       targetEl.innerHTML = '';
@@ -4492,7 +4563,7 @@ const html = `<!doctype html>
       btnExportJianyingDraft.textContent = busy ? (label || '\u5bfc\u51fa\u4e2d...') : btnExportJianyingDraft.dataset.defaultLabel;
     }
 
-    async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 8000) {
+    async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 8000, timeoutMessage = '') {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || 8000));
       try {
@@ -4500,11 +4571,57 @@ const html = `<!doctype html>
         const data = await response.json().catch(() => ({}));
         return { response, data };
       } catch (err) {
-        if (err && err.name === 'AbortError') throw new Error('\u8bf7\u6c42\u8d85\u65f6\uff0c\u8bf7\u68c0\u67e5\u526a\u6620\u76ee\u5f55\u6216\u7a0d\u540e\u91cd\u8bd5');
+        if (err && err.name === 'AbortError') throw new Error(timeoutMessage || '\u8bf7\u6c42\u8d85\u65f6\uff0c\u8bf7\u68c0\u67e5\u526a\u6620\u76ee\u5f55\u6216\u7a0d\u540e\u91cd\u8bd5');
         throw err;
       } finally {
         clearTimeout(timer);
       }
+    }
+
+    function sleepMs(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function formatLlmJobStatus(data) {
+      if (!data || typeof data !== 'object') return 'AI 分析任务正在准备...';
+      const progress = Number.isFinite(Number(data.progress)) ? Math.max(0, Math.min(100, Math.round(Number(data.progress)))) : 0;
+      const message = String(data.message || 'AI 分析任务正在进行...').trim();
+      const chunks = Number(data.chunkCount || 0);
+      const current = Number(data.currentChunk || 0);
+      const chunkText = chunks > 0 ? (' | 分块 ' + Math.min(current || 0, chunks) + '/' + chunks) : '';
+      return 'AI 分析中 ' + progress + '% | ' + message + chunkText;
+    }
+
+    async function waitForLlmMarkJob(jobId) {
+      if (!jobId) throw new Error('AI 分析任务没有返回任务编号');
+      const deadline = Date.now() + 20 * 60 * 1000;
+      let lastMessage = '';
+      while (Date.now() < deadline) {
+        const { response, data } = await fetchJsonWithTimeout(
+          '/api/llm-mark-status?jobId=' + encodeURIComponent(jobId),
+          {},
+          10000,
+          'AI 分析状态查询超时，请稍后重试'
+        );
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || ('AI 分析状态查询失败 HTTP ' + response.status));
+        }
+        const statusText = formatLlmJobStatus(data);
+        if (statusText !== lastMessage) {
+          setStatus(statusText);
+          refreshLlmSummary(statusText);
+          lastMessage = statusText;
+        }
+        if (data.state === 'finished') {
+          const result = (data && typeof data.result === 'object' && data.result) ? data.result : {};
+          return { success: true, ...result };
+        }
+        if (data.state === 'failed') {
+          throw new Error(data.error || data.message || 'AI 分析失败');
+        }
+        await sleepMs(data.state === 'queued' ? 700 : 1500);
+      }
+      throw new Error('AI 分析仍在后台运行但等待时间过长，请稍后重新打开审核页查看结果');
     }
 
     async function loadJianyingDraftTargets(showMessage, timeoutMs = 6000) {
@@ -4588,6 +4705,7 @@ const html = `<!doctype html>
       setExportStatus('\u6b63\u5728\u51c6\u5907\u526a\u6620\u5bfc\u51fa\u76ee\u6807...');
       try {
         await loadJianyingDraftTargets(false, 3500);
+        await ensureAiSubtitleBreaksBeforeExport();
         const cues = normalizeExportCuesForSingleTrack(buildExportCues());
         if (!cues.length) throw new Error('\u6ca1\u6709\u53ef\u5bfc\u51fa\u7684\u5b57\u5e55\uff0c\u8bf7\u68c0\u67e5\u662f\u5426\u5168\u90e8\u5185\u5bb9\u90fd\u88ab\u6807\u8bb0\u5220\u9664\u3002');
         const selection = getJianyingExportSelection();
@@ -4908,32 +5026,42 @@ const html = `<!doctype html>
       item.status = 'generating';
       item.error = '';
       renderImageCards();
-      const referenceAssets = getReferenceAssetsForItem(item, 2);
-      const requestItem = prepareReferenceAwareMediaItem(item, referenceAssets, 'image');
-      const response = await fetch('/api/generate-image', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          item: requestItem,
-          retry,
-          referenceImage: referenceImagesFromAssets(referenceAssets),
-          imageSize: imageAspectEl ? imageAspectEl.value : '',
-        }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || ('HTTP ' + response.status));
+      try {
+        const referenceAssets = getReferenceAssetsForItem(item, 2);
+        const requestItem = prepareReferenceAwareMediaItem(item, referenceAssets, 'image');
+        const response = await fetch('/api/generate-image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            item: requestItem,
+            retry,
+            referenceImage: referenceImagesFromAssets(referenceAssets),
+            imageSize: imageAspectEl ? imageAspectEl.value : '',
+          }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || ('HTTP ' + response.status));
+        }
+        imageItems[index] = {
+          ...item,
+          ...(data.item || {}),
+          image: data.image,
+          status: 'done',
+          error: '',
+        };
+        normalizeImageItemTiming(imageItems[index]);
+        renderImageCards();
+        scheduleReviewStateSave(200);
+      } catch (err) {
+        if (imageItems[index]) {
+          imageItems[index].status = 'error';
+          imageItems[index].error = err.message || String(err);
+          renderImageCards();
+          scheduleReviewStateSave(200);
+        }
+        throw err;
       }
-      imageItems[index] = {
-        ...item,
-        ...(data.item || {}),
-        image: data.image,
-        status: 'done',
-        error: '',
-      };
-      normalizeImageItemTiming(imageItems[index]);
-      renderImageCards();
-      scheduleReviewStateSave(200);
     }
 
     async function generateVideoImages() {
@@ -7018,15 +7146,17 @@ const html = `<!doctype html>
       try {
         setStatus('AI正在分析文本，请稍候...');
         refreshLlmSummary('AI建议：分析中...');
-        const response = await fetch('/api/llm-mark', {
+        const { response, data: startData } = await fetchJsonWithTimeout('/api/llm-mark', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ words: WORDS }),
-        });
-        const data = await response.json();
-        if (!data.success) {
-          throw new Error(data.error || 'AI分析失败');
+          body: JSON.stringify({ words: WORDS, async: true }),
+        }, 15000, 'AI \u5206\u6790\u4efb\u52a1\u542f\u52a8\u8d85\u65f6\uff0c\u8bf7\u68c0\u67e5\u6a21\u578b\u914d\u7f6e\u6216\u7f51\u7edc\u540e\u91cd\u8bd5\u3002');
+        if (!response.ok || !startData.success) {
+          throw new Error(startData.error || 'AI\u5206\u6790\u5931\u8d25');
         }
+        const data = startData.jobId
+          ? await waitForLlmMarkJob(startData.jobId)
+          : startData;
 
         pushSelectionUndo();
         clearLlmMarks(false);

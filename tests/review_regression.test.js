@@ -206,7 +206,7 @@ function testImagePlanPromptRulesAndAspectRatio() {
   assert.ok(prompt.includes('导演转译'));
   assert.ok(prompt.includes('严禁把 textBasis 或原文句子直接塞进 prompt'));
   assert.ok(prompt.includes('delete|... 是最终视频不会出现的时间段'), 'image plan prompt should explicitly avoid deleted ranges');
-  assert.ok(prompt.includes('Existing image/video media ranges'), 'image plan prompt should avoid existing media ranges');
+  assert.ok(prompt.includes('video|4.00-9.00|existing b-roll'), 'image plan prompt should avoid existing media ranges');
   assert.ok(prompt.includes('video|4.00-9.00|existing b-roll'), 'image plan prompt should include blocked video ranges');
   assert.ok(prompt.includes('delete|1.00-2.00|deleted speech'), 'image plan prompt should include blocked delete ranges');
   assert.strictEqual(reviewServerTools.imageSizeToMiniMaxAspectRatio('2:3'), '2:3');
@@ -244,8 +244,8 @@ function testVisualPlanUsesOnlyKeptTranscript() {
   assert.strictEqual(visualReference.assets[1].type, 'scene');
   assert.strictEqual(visualReference.assets[0].storyId, 'story_01');
   assert.strictEqual(visualReference.assets[1].storyId, 'story_01');
-  assert.ok(/white-background|front view/i.test(visualReference.assets[0].prompt), 'character asset should be a reusable white-background reference sheet');
-  assert.ok(/no people|environment-only/i.test(visualReference.assets[1].prompt), 'scene asset should avoid people and only describe the environment');
+  assert.ok(/白底人物设定参考图|正面/.test(visualReference.assets[0].prompt), 'character asset should be a reusable white-background reference sheet');
+  assert.ok(/纯场景设定参考图|不出现人物/.test(visualReference.assets[1].prompt), 'scene asset should avoid people and only describe the environment');
 }
 
 function testAgnesVideoPlanningAndOverlayWiring() {
@@ -261,7 +261,7 @@ function testAgnesVideoPlanningAndOverlayWiring() {
   assert.ok(prompt.includes('videoPrompt'), 'video plan prompt should ask for a video generation prompt');
   assert.ok(prompt.includes('禁止直接复制原文句子'), 'video plan prompt should prevent direct transcript copy');
 
-  assert.ok(prompt.includes('Existing image/video media ranges'), 'video plan prompt should avoid existing media ranges');
+  assert.ok(prompt.includes('image|12.00-18.00|existing image'), 'video plan prompt should avoid existing media ranges');
   assert.ok(prompt.includes('image|12.00-18.00|existing image'), 'video plan prompt should include blocked image ranges');
 
   const items = reviewServerTools.sanitizeVideoPlanItems({
@@ -533,10 +533,12 @@ function testJianyingDraftMediaPathFallbacks() {
         images: [
           { id: 'img_file_name', start: 0.5, end: 6.5, durationSec: 6, status: 'done', image: { fileName: imageName, url: `/image_assets/${encodeURIComponent(imageName)}` } },
           { id: 'img_failed_old_state', start: 6.6, end: 9.6, durationSec: 3, status: 'error', image: { fileName: '', url: '/image_assets/' } },
+          { id: 'img_directory_dirty_state', start: 7, end: 9, durationSec: 2, status: 'done', image: { filePath: imageAssetDir, url: '/image_assets/' } },
         ],
         videos: [
           { id: 'vid_file_name', start: 5.2, end: 8.2, durationSec: 3, status: 'done', video: { fileName: videoName, url: `/video_assets/${encodeURIComponent(videoName)}` } },
           { id: 'vid_failed_old_state', start: 8.3, end: 9.3, durationSec: 1, status: 'error', video: { fileName: '', url: '/video_assets/' } },
+          { id: 'vid_directory_dirty_state', start: 8.4, end: 9.4, durationSec: 1, status: 'done', video: { filePath: videoAssetDir, url: '/video_assets/' } },
         ],
       },
     });
@@ -695,6 +697,7 @@ function testGeneratedReviewInlineScriptSyntax() {
   assert.ok(html.includes('fetchJsonWithTimeout'), 'Jianying export should not hang forever while resolving targets');
   assert.ok(html.includes('function buildTimeMapper'), 'Jianying full draft export should remap subtitle time after deletions');
   assert.ok(html.includes('resetInterruptedMediaGenerationState'), 'review page should recover interrupted media generation as retryable cards');
+  assert.ok(html.includes("imageItems[index].status = 'error'"), 'single image retry should reset failed state so retry remains clickable');
   assert.ok(html.includes('runAiButlerLocalCommand'), 'AI butler should execute common app operations locally');
   assert.ok(html.includes('AI\u7ba1\u5bb6'), 'review page should rename LLM chat to AI butler');
   assert.ok(html.includes('AI\u5206\u6790'), 'review page should rename LLM marking to AI analysis');
@@ -874,6 +877,10 @@ function testReviewServerProvidesSafeSourceVideoRoute() {
   assert.ok(server.includes('buildConciseChineseScenePrompt'), 'image/video prompts should be compressed into short Chinese storyboard prompts');
   assert.ok(server.includes('原文“哪怕她摔了一跤”'), 'media planning prompts should teach concrete director translation examples');
   assert.ok(server.includes("rawStatus && !['done', 'ready', 'imported'].includes(rawStatus)"), 'Jianying export should skip failed or unfinished generated media');
+  assert.ok(server.includes('sanitizeJianyingSpecTracks'), 'Jianying export should sanitize final media tracks before capcut-cli');
+  assert.ok(server.includes('ensureWritableCapcutInitTemplateDir'), 'Jianying export should pass a writable default template to capcut-cli');
+  assert.ok(server.includes("args.push('--template', effectiveTemplateDir)"), 'Jianying export should always pass an explicit template path');
+  assert.ok(server.includes('copyCapcutInitTemplateFiles'), 'packaged app should copy bundled capcut template files without directory opendir');
   assert.ok(server.includes('from 和 to 必须字数相同'), 'original proofreading should enforce equal-length keyword replacements');
   const cutVideo = fs.readFileSync(path.join(__dirname, '..', 'talkcut', 'scripts', 'cut_video.js'), 'utf8');
   assert.ok(cutVideo.includes('loadMediaOverlays'), 'cut script should read media overlay plans');
