@@ -463,6 +463,7 @@ function toSubtitlesWords(words, externalGapSegments = []) {
       start: Number(word.start.toFixed(3)),
       end: Number(word.end.toFixed(3)),
       isGap: false,
+      timeSource: word.timeSource || 'local_model_word',
     });
   }
 
@@ -535,8 +536,20 @@ function runWhisper() {
   const silenceForTimeline = normalizeSilenceSegments([...detectedSilence, ...inferredSilence]);
   const words = stripRepeatedTokens(buildWordTimeline(segments, silenceForTimeline));
   const subtitlesWords = toSubtitlesWords(words, silenceForTimeline);
+  const gapCount = subtitlesWords.filter((x) => x.isGap).length;
+  const localWordCount = subtitlesWords.filter((x) => !x.isGap).length;
 
   fs.writeFileSync(outputPath, `${JSON.stringify(subtitlesWords, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(path.resolve('transcript_timestamp_source.json'), `${JSON.stringify({
+    provider: 'local_whisper',
+    model: modelName,
+    mode: 'local_model_word',
+    nativeWordCount: localWordCount,
+    estimatedWordCount: 0,
+    gapCount,
+    totalTextItems: localWordCount,
+    message: '本地 Whisper 生成模型级字词时间戳',
+  }, null, 2)}\n`, 'utf8');
   fs.rmSync(rawPath, { force: true });
 
   console.log(`原始段数: ${segments.length}`);

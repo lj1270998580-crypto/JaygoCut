@@ -33,6 +33,7 @@ for (const utt of utterances) {
       text: String(w.text ?? ''),
       start,
       end,
+      timeSource: 'native_word',
     });
   }
 }
@@ -52,6 +53,7 @@ if (rawWords.length === 0 && utterances.length > 0) {
         text: char,
         start: start + step * index,
         end: index === chars.length - 1 ? end : start + step * (index + 1),
+        timeSource: 'estimated_from_sentence',
       });
     });
   }
@@ -108,6 +110,7 @@ if (deleteFile && fs.existsSync(deleteFile)) {
       start: round3(w.start - shift),
       end: round3(w.end - shift),
       isGap: false,
+      timeSource: w.timeSource || 'native_word',
     });
   }
 
@@ -133,11 +136,19 @@ for (const w of words) {
     start: round3(w.start),
     end: round3(w.end),
     isGap: false,
+    timeSource: w.timeSource || 'native_word',
   });
   lastEnd = w.end;
 }
 
 const gapCount = withGaps.filter((x) => x.isGap).length;
+const nativeWordCount = withGaps.filter((x) => !x.isGap && x.timeSource === 'native_word').length;
+const estimatedWordCount = withGaps.filter((x) => !x.isGap && x.timeSource === 'estimated_from_sentence').length;
+const timestampMode = nativeWordCount > 0 && estimatedWordCount === 0
+  ? 'native_word'
+  : nativeWordCount > 0
+    ? 'mixed'
+    : 'estimated_from_sentence';
 console.log(`总元素数: ${withGaps.length}`);
 console.log(`空白段数: ${gapCount}`);
 
@@ -151,4 +162,17 @@ if (quality.warnings.length) {
 }
 
 fs.writeFileSync('subtitles_words.json', JSON.stringify(withGaps, null, 2), 'utf8');
+fs.writeFileSync('transcript_timestamp_source.json', JSON.stringify({
+  provider: 'volcengine',
+  mode: timestampMode,
+  nativeWordCount,
+  estimatedWordCount,
+  gapCount,
+  totalTextItems: nativeWordCount + estimatedWordCount,
+  message: timestampMode === 'native_word'
+    ? '?????????????'
+    : timestampMode === 'mixed'
+      ? '????????????????????????'
+      : '???????????????????????',
+}, null, 2), 'utf8');
 console.log('✅ 已保存 subtitles_words.json');

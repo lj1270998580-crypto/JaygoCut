@@ -42,7 +42,7 @@ function runAutoSelectFixture() {
 function testTranscriptQuality() {
   const quality = analyzeTranscriptQuality([
     { text: '好', start: 0, end: 0.2, isGap: false },
-    { text: '���', start: 0.2, end: 0.3, isGap: false },
+    { text: '\uFFFD\uFFFD\uFFFD', start: 0.2, end: 0.3, isGap: false },
     { text: '', start: 0.3, end: 9, isGap: true },
     { text: '坏', start: 0.1, end: 0.4, isGap: false },
   ]);
@@ -190,6 +190,26 @@ function testImageDirectorPromptSanitizer() {
     '直接复述原文的提示词应被重写',
   );
   assert.ok(reviewServerTools.hasDirectorVisualLanguage(items[0].prompt), '重写后的提示词应具备场景/动作/镜头语言');
+
+  const abstractItems = reviewServerTools.sanitizeImagePlanItems({
+    style: '彩铅画',
+    items: [{
+      id: 'img_abstract',
+      start: 6,
+      end: 12,
+      title: '生命意义',
+      purpose: '观点说明',
+      textBasis: '如果人的生命终将逝去，为什么我们还要努力活着',
+      sceneStory: '生命的意义和努力的价值',
+      visual: '生命的意义和努力的价值',
+      camera: '有哲理的画面',
+      prompt: '生命的意义和努力的价值',
+    }],
+  }, units, 4, { topic: '人生思考' }, '彩铅画');
+  assert.ok(abstractItems.length >= 1, '抽象文案也应能生成可用配图点');
+  assert.ok(!abstractItems[0].prompt.includes('生命的意义和努力的价值'), '抽象词不能直接进入最终生图提示词');
+  assert.ok(/窗边|书桌|背包|笔记本|手机|城市|街|办公室|沙发/.test(abstractItems[0].prompt), '抽象观点应被翻译成具体地点和道具');
+  assert.ok(/整理|看|拿|站|坐|写|走|低头|打开/.test(abstractItems[0].prompt), '抽象观点应被翻译成具体动作');
 }
 
 function testImagePlanPromptRulesAndAspectRatio() {
@@ -627,6 +647,15 @@ function testGeneratedReviewInlineScriptSyntax() {
   ]), 'utf8');
   fs.writeFileSync(selectedPath, JSON.stringify({ indices: [2] }), 'utf8');
   fs.writeFileSync(audioPath, '');
+  fs.writeFileSync(path.join(dir, 'transcript_timestamp_source.json'), JSON.stringify({
+    provider: 'aliyun_qwen',
+    mode: 'native_word',
+    nativeWordCount: 2,
+    estimatedWordCount: 0,
+    gapCount: 1,
+    totalTextItems: 2,
+    message: '阿里云 Qwen-ASR 返回原生字级时间戳',
+  }), 'utf8');
 
   const result = spawnSync(process.execPath, [
     path.join(__dirname, '..', 'talkcut', 'scripts', 'generate_review.js'),
@@ -652,6 +681,8 @@ function testGeneratedReviewInlineScriptSyntax() {
   assert.ok(html.includes('id="reviewToolFold"'), 'review page should group low-frequency tools in a compact fold panel');
   assert.ok(html.includes('class="toolbar-status-grid"'), 'review page should show compact status chips below primary actions');
   assert.ok(html.includes('id="statDeletedCount"'), 'review page should expose deleted segment count as a status chip');
+  assert.ok(html.includes('id="statTimestampSource"'), 'review page should expose transcript timestamp source as a status chip');
+  assert.ok(html.includes('const TIMESTAMP_SOURCE'), 'review page should carry timestamp source metadata');
   assert.ok(html.includes('max-height: min(235px, 32vh)'), 'expanded review tool panel should not consume too much first-screen space');
   assert.ok(html.includes('scrollbar-gutter: stable'), 'expanded review tool panel should keep an internal stable scrollbar');
   assert.ok(html.includes('.tool-fold button'), 'review tool panel buttons should use compact sizing');
@@ -693,6 +724,10 @@ function testGeneratedReviewInlineScriptSyntax() {
   assert.ok(html.includes('getReferenceAssetsForItem'), 'image/video generation should match reference assets to each storyboard item');
   assert.ok(html.includes('prepareReferenceAwareMediaItem'), 'image/video generation should simplify prompts when reference assets are present');
   assert.ok(html.includes('referenceImagesFromAssets(referenceAssets)'), 'image/video generation should pass matched reference images instead of every asset');
+  assert.ok(html.includes('if (item?.promptEdited)'), 'manual prompt edits should bypass reference prompt rewriting');
+  assert.ok(html.includes('preservedPrompt'), 'manual prompt edits should be preserved for image and video regeneration');
+  assert.ok(html.includes('await generateOneImage(index, !imageItems[index]?.promptEdited)'), 'AI butler image regeneration should respect edited prompts');
+  assert.ok(html.includes('await generateOneVideoAsset(index, !videoItems[index]?.promptEdited)'), 'AI butler video regeneration should respect edited prompts');
   assert.ok(html.includes('setJianyingExportBusy'), 'Jianying export button should expose busy state');
   assert.ok(html.includes('fetchJsonWithTimeout'), 'Jianying export should not hang forever while resolving targets');
   assert.ok(html.includes('function buildTimeMapper'), 'Jianying full draft export should remap subtitle time after deletions');
@@ -876,6 +911,9 @@ function testReviewServerProvidesSafeSourceVideoRoute() {
   assert.ok(server.includes('allowedMotionEffects'), 'review server should sanitize media overlay motion effects');
   assert.ok(server.includes('buildConciseChineseScenePrompt'), 'image/video prompts should be compressed into short Chinese storyboard prompts');
   assert.ok(server.includes('原文“哪怕她摔了一跤”'), 'media planning prompts should teach concrete director translation examples');
+  assert.ok(server.includes('ABSTRACT_VISUAL_TERMS'), 'media prompts should filter abstract words before generation');
+  assert.ok(server.includes('hasConcreteStoryboardLanguage'), 'media prompts should require concrete scene/action/camera language');
+  assert.ok(server.includes('isWeakStoryboardScene'), 'image/video storyboard prompts should be repaired when too abstract');
   assert.ok(server.includes("rawStatus && !['done', 'ready', 'imported'].includes(rawStatus)"), 'Jianying export should skip failed or unfinished generated media');
   assert.ok(server.includes('sanitizeJianyingSpecTracks'), 'Jianying export should sanitize final media tracks before capcut-cli');
   assert.ok(server.includes('ensureWritableCapcutInitTemplateDir'), 'Jianying export should pass a writable default template to capcut-cli');
@@ -998,6 +1036,13 @@ function testMainSettingsDoNotExposeImageSize() {
   assert.ok(!renderer.includes('imageSize:'), 'main renderer should not read image ratio from removed settings control');
 }
 
+function testPackagedFilesDoNotIncludeDotEnv() {
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  const files = Array.isArray(pkg?.build?.files) ? pkg.build.files : [];
+  assert.ok(!files.includes('.env'), 'packaged app should not include local .env secrets');
+  assert.ok(!files.some((entry) => /(^|[/\\])\.env($|[/\\*])/.test(String(entry))), 'packaged app should not include any .env glob');
+}
+
 runAutoSelectFixture();
 testTranscriptQuality();
 testReviewBoundarySettings();
@@ -1022,6 +1067,7 @@ testReviewStateBackupWriter();
 testHistoryReviewCanOpenWhenOriginalVideoIsMissing();
 testHistoryEntryHealthAndRelinkVideo();
 testMainSettingsDoNotExposeImageSize();
+testPackagedFilesDoNotIncludeDotEnv();
 testTermGlossaryParsingAndSettingsWiring();
 testReviewServerProvidesSafeSourceVideoRoute();
 testTextFilesStayUtf8Readable();

@@ -1,7 +1,7 @@
 # Jaygo Cut Handoff Document
 
-更新时间：2026-06-29
-当前源码版本：`0.1.24`
+更新时间：2026-07-16
+当前源码版本：`0.1.25`
 项目目录：`C:\Users\15119\Documents\New project\repo`
 本机测试安装目录：`D:\Jaygo Cut\JaygoCut`
 在线更新地址：`https://ailabing.cn/downloads/jaygo/`
@@ -92,7 +92,7 @@ NSIS 打包后 `dist/` 至少包含：
 桌面复制示例：
 
 ```powershell
-$version = "0.1.24"
+$version = "0.1.25"
 Copy-Item "dist\JaygoCut-Setup-$version.exe" "C:\Users\15119\Desktop\JaygoCut-Setup-$version.exe" -Force
 Copy-Item "HANDOFF_JaygoCut.md" "C:\Users\15119\Desktop\HANDOFF_JaygoCut.md" -Force
 ```
@@ -126,7 +126,7 @@ Copy-Item "HANDOFF_JaygoCut.md" "C:\Users\15119\Desktop\HANDOFF_JaygoCut.md" -Fo
 
 ```json
 {
-  "version": "0.1.24",
+  "version": "0.1.25",
   "notes": "- 更新内容第一条\n- 更新内容第二条"
 }
 ```
@@ -136,7 +136,7 @@ Copy-Item "HANDOFF_JaygoCut.md" "C:\Users\15119\Desktop\HANDOFF_JaygoCut.md" -Fo
 ```json
 {
   "versions": {
-    "0.1.24": "- 更新内容第一条\n- 更新内容第二条"
+    "0.1.25": "- 修复手动提示词重生成\n- 优化中文电影分镜提示词"
   }
 }
 ```
@@ -147,7 +147,7 @@ Copy-Item "HANDOFF_JaygoCut.md" "C:\Users\15119\Desktop\HANDOFF_JaygoCut.md" -Fo
 
 ```powershell
 cd "C:\Users\15119\Documents\New project\repo"
-$version = "0.1.24"
+$version = "0.1.25"
 $remote = "root@47.115.58.109:/www/wwwroot/ailabing.cn/downloads/jaygo/"
 $tmp = Join-Path $env:TEMP 'jaygo_askpass.cmd'
 $pw = '<SSH_PASSWORD>'
@@ -174,7 +174,7 @@ try {
 ## 11. 上传后验证
 
 ```powershell
-$version = "0.1.24"
+$version = "0.1.25"
 curl.exe -L --max-time 30 https://ailabing.cn/downloads/jaygo/latest.yml
 curl.exe -L --max-time 30 https://ailabing.cn/downloads/jaygo/release-notes.json
 curl.exe -I --max-time 30 "https://ailabing.cn/downloads/jaygo/JaygoCut-Setup-$version.exe"
@@ -182,7 +182,7 @@ curl.exe -I --max-time 30 "https://ailabing.cn/downloads/jaygo/JaygoCut-Setup-$v
 
 检查点：
 
-- `latest.yml` 的 `version` 和 `path` 是当前版本：0.1.24
+- `latest.yml` 的 `version` 和 `path` 是当前版本：0.1.25
 - 安装包 HEAD 请求返回 200。
 - `release-notes.json` 正常返回 UTF-8 中文。
 - 客户端更新页能显示更新内容。
@@ -195,17 +195,17 @@ curl.exe -I --max-time 30 "https://ailabing.cn/downloads/jaygo/JaygoCut-Setup-$v
 cd "C:\Users\15119\Documents\New project\repo"
 git status --short
 git add electron/main.js electron/preload.js electron/renderer/renderer.js electron/renderer/styles.css electron/history_utils.js talkcut/scripts/generate_review.js talkcut/scripts/review_segment_utils.js talkcut/scripts/review_server.js tests/review_regression.test.js package.json package-lock.json release-notes.json CHANGELOG.md HANDOFF_JaygoCut.md
-git commit -m "chore: release 0.1.24"
-git tag v0.1.24
+git commit -m "chore: release 0.1.25"
+git tag v0.1.25
 git push origin main
-git push origin v0.1.24
+git push origin v0.1.25
 
-gh release create v0.1.24 `
-  "dist\JaygoCut-Setup-0.1.24.exe" `
-  "dist\JaygoCut-Setup-0.1.24.exe.blockmap" `
+gh release create v0.1.25 `
+  "dist\JaygoCut-Setup-0.1.25.exe" `
+  "dist\JaygoCut-Setup-0.1.25.exe.blockmap" `
   "dist\latest.yml" `
   "release-notes.json" `
-  --title "JaygoCut v0.1.24" `
+  --title "JaygoCut v0.1.25" `
   --notes-file CHANGELOG.md
 ```
 
@@ -272,8 +272,8 @@ gh release create v0.1.24 `
 
 
 
-## 0.1.24 发布补充
+## 0.1.25 发布补充
 
 - 本次重点修复安装版剪映草稿导出在 app.asar 模板路径下的 ENOENT/opendir 问题。
-- 发布前需上传 dist/JaygoCut-Setup-0.1.24.exe、blockmap、latest.yml 和 release-notes.json 到 https://ailabing.cn/downloads/jaygo/。
-- GitHub Release 需要同步上传同一批产物，README 当前版本也应保持 0.1.24。
+- 发布前需上传 dist/JaygoCut-Setup-0.1.25.exe、blockmap、latest.yml 和 release-notes.json 到 https://ailabing.cn/downloads/jaygo/。
+- GitHub Release 需要同步上传同一批产物，README 当前版本也应保持 0.1.25。

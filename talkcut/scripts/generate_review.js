@@ -72,6 +72,7 @@ function normalizeReviewWords(items) {
 const words = normalizeReviewWords(sourceWords);
 const liveQuality = analyzeTranscriptQuality(words);
 const qualityFile = path.resolve(path.dirname(path.resolve(subtitlesFile)), 'transcript_quality.json');
+const timestampSourceFile = path.resolve(path.dirname(path.resolve(subtitlesFile)), 'transcript_timestamp_source.json');
 let savedQuality = null;
 if (fs.existsSync(qualityFile)) {
   try {
@@ -79,6 +80,40 @@ if (fs.existsSync(qualityFile)) {
   } catch (err) {
     savedQuality = { ok: false, warnings: [`质量报告读取失败: ${err.message}`] };
   }
+}
+let timestampSource = {
+  provider: 'unknown',
+  mode: 'unknown',
+  message: '未找到时间戳来源信息',
+};
+if (fs.existsSync(timestampSourceFile)) {
+  try {
+    timestampSource = JSON.parse(fs.readFileSync(timestampSourceFile, 'utf8').replace(/^\uFEFF/, ''));
+  } catch (err) {
+    timestampSource = {
+      provider: 'unknown',
+      mode: 'unknown',
+      message: `时间戳来源读取失败: ${err.message}`,
+    };
+  }
+}
+
+function formatTimestampSourceLabel(source) {
+  const mode = String(source?.mode || '');
+  const provider = String(source?.provider || '').replace(/^aliyun_/, '阿里').replace(/^local_/, '本地 ');
+  if (mode === 'native_word') return '原生字级';
+  if (mode === 'mixed') return '混合时间戳';
+  if (mode === 'estimated_from_sentence') return '句级估算';
+  if (mode === 'local_model_word') return '本地模型';
+  return provider || '未知';
+}
+
+function escapeHtmlAttribute(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 let autoSelected = [];
@@ -111,6 +146,9 @@ const selectedJson = JSON.stringify(autoSelected).replace(/</g, '\\u003c');
 const autoReasonsJson = JSON.stringify(autoReasonByIndex || {}).replace(/</g, '\\u003c');
 const autoStatsJson = JSON.stringify(autoStats || {}).replace(/</g, '\\u003c');
 const termGlossaryJson = JSON.stringify(parseTermGlossary(process.env.TERM_GLOSSARY || '')).replace(/</g, '\\u003c');
+const timestampSourceJson = JSON.stringify(timestampSource || {}).replace(/</g, '\\u003c');
+const timestampSourceLabel = formatTimestampSourceLabel(timestampSource);
+const timestampSourceTitle = escapeHtmlAttribute(timestampSource?.message || '');
 const qualityJson = JSON.stringify({
   generated: liveQuality,
   saved: savedQuality,
@@ -2052,6 +2090,7 @@ const html = `<!doctype html>
         <span class="status-chip"><span>预计成片</span><strong id="statOutputDuration">0.00 秒</strong></span>
         <span class="status-chip"><span>原时长</span><strong id="statTotalDuration">0.00 秒</strong></span>
         <span class="status-chip"><span>模式</span><strong id="statCutMode">标准</strong></span>
+        <span class="status-chip" title="${timestampSourceTitle}"><span>\u65f6\u95f4\u6233</span><strong id="statTimestampSource">${timestampSourceLabel}</strong></span>
       </div>
       <div id="exportStatus" class="meta export-status-inline"></div>
       <details class="fold-panel tool-fold" id="reviewToolFold">
@@ -2386,6 +2425,7 @@ const html = `<!doctype html>
     const AUTO_STATS = ${autoStatsJson};
     const TERM_GLOSSARY = ${termGlossaryJson};
     const QUALITY = ${qualityJson};
+    const TIMESTAMP_SOURCE = ${timestampSourceJson};
 
     const audio = document.getElementById('audio');
     const toolbarCardEl = document.querySelector('.toolbar-card');
@@ -2403,6 +2443,7 @@ const html = `<!doctype html>
     const statOutputDurationEl = document.getElementById('statOutputDuration');
     const statTotalDurationEl = document.getElementById('statTotalDuration');
     const statCutModeEl = document.getElementById('statCutMode');
+    const statTimestampSourceEl = document.getElementById('statTimestampSource');
     const runtimeEl = document.getElementById('runtime');
     const draftStateEl = document.getElementById('draftState');
     const logsEl = document.getElementById('logs');
@@ -3233,6 +3274,19 @@ const html = `<!doctype html>
     function prepareReferenceAwareMediaItem(item, referenceAssets, type) {
       const refs = Array.isArray(referenceAssets) ? referenceAssets.filter((asset) => asset?.image?.url) : [];
       if (!refs.length) return item;
+      const next = { ...item, referenceAssetIds: refs.map((asset) => asset.id).filter(Boolean) };
+      if (item?.promptEdited) {
+        const preservedPrompt = String(type === 'video' ? (item.videoPrompt || item.prompt || '') : (item.prompt || '')).trim();
+        if (preservedPrompt) {
+          if (type === 'video') {
+            next.videoPrompt = preservedPrompt;
+            next.prompt = preservedPrompt;
+          } else {
+            next.prompt = preservedPrompt;
+          }
+          return next;
+        }
+      }
       const hasCharacter = refs.some((asset) => asset.type === 'character');
       const hasScene = refs.some((asset) => asset.type === 'scene');
       const refTitles = refs.map((asset) => asset.title).filter(Boolean).join('、');
@@ -3247,7 +3301,6 @@ const html = `<!doctype html>
         type === 'video' ? '轻微自然运动，镜头稳定，动作连贯。' : '',
         '无字幕、无可读文字、无水印、无logo。',
       ].filter(Boolean).join('');
-      const next = { ...item, referenceAssetIds: refs.map((asset) => asset.id).filter(Boolean) };
       if (type === 'video') { next.videoPrompt = concisePrompt; next.prompt = concisePrompt; } else next.prompt = concisePrompt;
       return next;
     }
@@ -7357,7 +7410,7 @@ const html = `<!doctype html>
         const index = ordinal ? ordinal - 1 : -1;
         if (index >= 0 && imageItems[index]) {
           setAiButlerStatus('重生成图片', 'busy');
-          await generateOneImage(index, true);
+          await generateOneImage(index, !imageItems[index]?.promptEdited);
           actions.push('已重新生成第 ' + ordinal + ' 张图片');
         } else {
           actions.push('没有找到第 ' + (ordinal || '?') + ' 张图片');
@@ -7369,7 +7422,7 @@ const html = `<!doctype html>
         const index = ordinal ? ordinal - 1 : -1;
         if (index >= 0 && videoItems[index]) {
           setAiButlerStatus('重生成视频', 'busy');
-          await generateOneVideoAsset(index, true);
+          await generateOneVideoAsset(index, !videoItems[index]?.promptEdited);
           actions.push('已重新生成第 ' + ordinal + ' 段视频素材');
         } else {
           actions.push('没有找到第 ' + (ordinal || '?') + ' 段视频素材');

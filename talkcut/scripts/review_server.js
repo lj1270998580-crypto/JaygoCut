@@ -7,6 +7,12 @@ const crypto = require('crypto');
 const { spawn, spawnSync, execSync } = require('child_process');
 const { normalizeSelectedIndices } = require('./auto_selected_utils');
 const { normalizeBoundarySettings } = require('./review_segment_utils');
+const {
+  stripJianyingSubtitlePunctuation,
+  normalizeCueList,
+  buildJianyingSubtitleItems,
+  textStyleForJianyingPreset,
+} = require('./review_jianying_subtitles');
 
 const PORT = Number(process.argv[2]) || 8899;
 const VIDEO_FILE = process.argv[3] || findVideoFile(process.cwd());
@@ -1946,6 +1952,45 @@ function hasDirectorVisualLanguage(text) {
   return false;
 }
 
+const ABSTRACT_VISUAL_TERMS = [
+  '意义', '价值', '人生', '生命', '规则', '选择权', '努力', '坚持', '成长', '焦虑',
+  '迷茫', '情绪', '问题', '主题', '观点', '思考', '启示', '突破', '认知', '关系',
+  '自我', '内心', '心态', '未来', '现实', '人性', '复杂', '温柔', '清醒', '觉醒',
+  '束缚', '自由', '尊严', '希望', '压力', '命运', '困境', '答案', '方向',
+];
+
+const CONCRETE_SCENE_RE = /街|路|人行道|房间|客厅|书桌|办公室|窗边|餐厅|沙发|手机|电脑|白板|天台|城市|地铁|厨房|学校|医院|咖啡馆|桌|门口|公交|车站|电梯|楼道|床|灯|包|文件|便签|水杯|笔记本|屏幕|镜子|窗帘|阳台|书架/;
+const CONCRETE_ACTION_RE = /走|坐|站|看|拿|摔|捡|低头|打开|收到|整理|写|喝|吃|跑|停下|回头|举起|放下|推开|靠着|盯着|翻|递|握|抬头|转身|蹲下|扶起|收拾|点击|划动/;
+const CAMERA_LANGUAGE_RE = /近景|中景|远景|特写|俯拍|平视|侧光|逆光|推镜|手持|构图|前景|背景|浅景深|长镜头|广角|虚化|留白|侧脸|背影|自然光|灯光/;
+
+function countMatchesByList(text, list) {
+  const value = String(text || '');
+  return list.reduce((sum, term) => sum + (value.includes(term) ? 1 : 0), 0);
+}
+
+function hasAbstractVisualLanguage(text) {
+  return countMatchesByList(text, ABSTRACT_VISUAL_TERMS) >= 2;
+}
+
+function hasConcreteStoryboardLanguage(text) {
+  const value = String(text || '');
+  if (compactForVisualCompare(value).length < 22) return false;
+  const hits = [
+    CONCRETE_SCENE_RE.test(value),
+    CONCRETE_ACTION_RE.test(value),
+    CAMERA_LANGUAGE_RE.test(value),
+  ].filter(Boolean).length;
+  return hits >= 2;
+}
+
+function isWeakStoryboardScene(text, textBasis = '') {
+  const value = String(text || '');
+  if (!value.trim()) return true;
+  if (hasDirectTranscriptCopy(value, textBasis)) return true;
+  if (!hasConcreteStoryboardLanguage(value)) return true;
+  return hasAbstractVisualLanguage(value) && !CONCRETE_SCENE_RE.test(value);
+}
+
 function buildDirectorFallbackScene(textBasis, title, purpose, index) {
   const raw = String([textBasis, title, purpose].filter(Boolean).join(' '));
   const cue = trimByChars(String(textBasis || title || purpose || '关键内容').replace(/\s+/g, ' '), 34);
@@ -1992,13 +2037,18 @@ function normalizeStoryboardCue(text) {
 }
 
 function buildConciseChineseScenePrompt(options = {}) {
-  const sceneStory = normalizeStoryboardCue(options.sceneStory || options.visual || options.textBasis || options.title || '主角面对一个关键选择');
-  const camera = normalizeStoryboardCue(options.camera || '中景，平视镜头，主体清楚，背景简洁');
+  let sceneStory = normalizeStoryboardCue(options.sceneStory || options.visual || options.textBasis || options.title || '主角面对一个关键选择');
+  let camera = normalizeStoryboardCue(options.camera || '中景，平视镜头，主体清楚，背景简洁');
+  if (isWeakStoryboardScene(sceneStory, options.textBasis || options.title || '')) {
+    const fallback = buildDirectorFallbackScene(options.textBasis || sceneStory, options.title, options.purpose, Number(options.index) || 0);
+    sceneStory = normalizeStoryboardCue(fallback.sceneStory);
+    camera = normalizeStoryboardCue(camera && !isWeakStoryboardScene(camera, options.textBasis) ? camera : fallback.camera);
+  }
   const styleAnchor = normalizeStoryboardCue(options.styleAnchor || '统一画风');
   const kind = String(options.kind || 'image');
   const hasReference = !!options.hasReference;
   const referenceHint = hasReference
-    ? '参考已匹配的人物或场景资产，只沿用身份、服饰、场景基调，不把所有参考图硬塞进画面。'
+    ? '参考匹配的人物或场景资产，只保持身份、服饰、场景基调。'
     : '';
   const motionHint = kind === 'video' ? '轻微自然运动，镜头稳定，人物动作连贯。' : '';
   const prompt = [
@@ -2041,13 +2091,13 @@ function sanitizeImagePlanItems(parsed, units, count, analysis, fallbackStyle) {
     let visual = trimByChars(String(item.visual || item.description || sceneStory || '').replace(/\s+/g, ' '), 160);
     const rawPrompt = trimByChars(String(item.prompt || '').replace(/\s+/g, ' '), 900);
     const fallbackScene = buildDirectorFallbackScene(textBasis, title, item.purpose, out.length);
-    if (!sceneStory || hasDirectTranscriptCopy(sceneStory, textBasis) || !hasDirectorVisualLanguage(sceneStory)) {
+    if (!sceneStory || hasDirectTranscriptCopy(sceneStory, textBasis) || !hasDirectorVisualLanguage(sceneStory) || isWeakStoryboardScene(sceneStory, textBasis)) {
       sceneStory = fallbackScene.sceneStory;
     }
     if (!camera || hasDirectTranscriptCopy(camera, textBasis)) {
       camera = fallbackScene.camera;
     }
-    if (!visual || hasDirectTranscriptCopy(visual, textBasis) || !hasDirectorVisualLanguage(visual)) {
+    if (!visual || hasDirectTranscriptCopy(visual, textBasis) || !hasDirectorVisualLanguage(visual) || isWeakStoryboardScene(visual, textBasis)) {
       visual = trimByChars(sceneStory, 160);
     }
     const prompt = buildConciseChineseScenePrompt({
@@ -2057,6 +2107,8 @@ function sanitizeImagePlanItems(parsed, units, count, analysis, fallbackStyle) {
       styleAnchor: `用户选择画风：${styleAnchor || visualBible || '统一画风'}`,
       textBasis,
       title,
+      purpose: item.purpose,
+      index: out.length,
       kind: 'image',
       hasReference: !!visualBible,
     });
@@ -2215,7 +2267,7 @@ function sanitizeVideoPlanItems(parsed, units, count, analysis, fallbackStyle, a
     let sceneStory = trimByChars(String(item.sceneStory || item.scene_story || item.story || '').replace(/\s+/g, ' '), 220);
     let camera = trimByChars(String(item.camera || item.shot || item.composition || '').replace(/\s+/g, ' '), 120);
     const fallbackScene = buildDirectorFallbackScene(textBasis, title, purpose, out.length);
-    if (!sceneStory || hasDirectTranscriptCopy(sceneStory, textBasis) || !hasDirectorVisualLanguage(sceneStory)) {
+    if (!sceneStory || hasDirectTranscriptCopy(sceneStory, textBasis) || !hasDirectorVisualLanguage(sceneStory) || isWeakStoryboardScene(sceneStory, textBasis)) {
       sceneStory = fallbackScene.sceneStory;
     }
     if (!camera || hasDirectTranscriptCopy(camera, textBasis)) {
@@ -2228,6 +2280,8 @@ function sanitizeVideoPlanItems(parsed, units, count, analysis, fallbackStyle, a
       styleAnchor: `用户选择风格：${styleAnchor || visualBible || '统一风格'}`,
       textBasis,
       title,
+      purpose,
+      index: out.length,
       kind: 'video',
       hasReference: !!visualBible,
     });
@@ -2878,119 +2932,6 @@ function sanitizeDraftName(input) {
     .replace(/\s+/g, '_')
     .slice(0, 80)
     || `JaygoCut_${Date.now()}`;
-}
-
-function stripJianyingSubtitlePunctuation(text) {
-  return String(text || '')
-    .replace(/[，。！？；：,.!?;:、]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function normalizeCueList(cues = []) {
-  return (Array.isArray(cues) ? cues : [])
-    .map((cue) => {
-      const start = Number(cue?.start);
-      const end = Number(cue?.end);
-      const rawText = String(cue?.text || '').trim();
-      return {
-        ...cue,
-        start,
-        end,
-        rawText,
-        text: stripJianyingSubtitlePunctuation(rawText),
-      };
-    })
-    .filter((cue) => cue.text && Number.isFinite(cue.start) && Number.isFinite(cue.end) && cue.end > cue.start)
-    .sort((a, b) => (a.start - b.start) || (a.end - b.end));
-}
-
-function splitSubtitleByChineseSentence(rawText, maxChars = 15) {
-  const source = String(rawText || '').trim();
-  const sentenceParts = source
-    .split(/(?<=[，,。！？；：.!?;:、])/u)
-    .map((part) => stripJianyingSubtitlePunctuation(part))
-    .filter(Boolean);
-  const baseParts = sentenceParts.length ? sentenceParts : [stripJianyingSubtitlePunctuation(source)].filter(Boolean);
-  const out = [];
-  for (const part of baseParts) {
-    const chars = Array.from(part);
-    if (chars.length <= maxChars) {
-      out.push(part);
-      continue;
-    }
-    let cursor = 0;
-    while (cursor < chars.length) {
-      out.push(chars.slice(cursor, cursor + maxChars).join(''));
-      cursor += maxChars;
-    }
-  }
-  return out;
-}
-
-function textStyleForJianyingPreset(preset = '') {
-  const key = String(preset || '').toLowerCase();
-  const base = {
-    fontSize: 8,
-    color: '#FFFFFF',
-    backgroundColor: '',
-    borderColor: '#000000',
-    borderWidth: 4,
-    position: { x: 0, y: -0.78 },
-  };
-  if (key.includes('black') || key.includes('gold')) {
-    return {
-      ...base,
-      color: '#F7E7B2',
-      borderColor: '#15120A',
-      borderWidth: 5,
-    };
-  }
-  if (key.includes('clean') || key.includes('simple')) {
-    return {
-      ...base,
-      borderWidth: 3,
-    };
-  }
-  return base;
-}
-
-function buildJianyingSubtitleItems(cues = [], textStyle = {}) {
-  const normalized = normalizeCueList(cues);
-  const items = [];
-  let cursor = 0;
-  const gap = 0.012;
-  for (const cue of normalized) {
-    const parts = splitSubtitleByChineseSentence(cue.rawText || cue.text, 15);
-    if (!parts.length) continue;
-    const totalChars = Math.max(1, parts.reduce((sum, part) => sum + Array.from(part).length, 0));
-    const cueDuration = Math.max(0.08, cue.end - cue.start);
-    let localStart = cue.start;
-    for (let i = 0; i < parts.length; i += 1) {
-      const part = parts[i];
-      const ratio = Array.from(part).length / totalChars;
-      const idealDuration = i === parts.length - 1
-        ? Math.max(0.08, cue.end - localStart)
-        : Math.max(0.18, cueDuration * ratio);
-      let start = Math.max(localStart, cursor);
-      let end = i === parts.length - 1 ? cue.end : Math.min(cue.end, localStart + idealDuration);
-      if (end <= start) end = start + 0.12;
-      if (items.length && start < cursor) start = cursor;
-      if (items.length && start - cursor < gap) start = cursor + gap;
-      if (end <= start) end = start + 0.12;
-      items.push({
-        type: 'text',
-        text: part,
-        start: Number(start.toFixed(3)),
-        duration: Number(Math.max(0.05, end - start).toFixed(3)),
-        style: { ...textStyle },
-        ...textStyle,
-      });
-      cursor = start + Math.max(0.05, end - start);
-      localStart = end;
-    }
-  }
-  return items;
 }
 
 function loadJianyingTemplate(templatePath) {

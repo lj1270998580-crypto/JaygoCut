@@ -52,6 +52,7 @@ function wordFromQwenWord(word) {
     text: text + punctuation,
     start: startMs / 1000,
     end: endMs / 1000,
+    timeSource: 'native_word',
   };
 }
 
@@ -68,6 +69,7 @@ function sentenceToChars(sentence) {
     text: char,
     start: start + step * index,
     end: index === chars.length - 1 ? end : start + step * (index + 1),
+    timeSource: 'estimated_from_sentence',
   }));
 }
 
@@ -110,10 +112,36 @@ function toSubtitlesWords(result) {
       start: round3(word.start),
       end: round3(word.end),
       isGap: false,
+      timeSource: word.timeSource || 'native_word',
     });
     lastEnd = Math.max(lastEnd, word.end);
   }
   return out;
+}
+
+function buildTimestampSource(subtitles) {
+  const gapCount = subtitles.filter((x) => x.isGap).length;
+  const nativeWordCount = subtitles.filter((x) => !x.isGap && x.timeSource === 'native_word').length;
+  const estimatedWordCount = subtitles.filter((x) => !x.isGap && x.timeSource === 'estimated_from_sentence').length;
+  const mode = nativeWordCount > 0 && estimatedWordCount === 0
+    ? 'native_word'
+    : nativeWordCount > 0
+      ? 'mixed'
+      : 'estimated_from_sentence';
+  return {
+    provider: 'aliyun_qwen',
+    model: MODEL,
+    mode,
+    nativeWordCount,
+    estimatedWordCount,
+    gapCount,
+    totalTextItems: nativeWordCount + estimatedWordCount,
+    message: mode === 'native_word'
+      ? '阿里云 Qwen-ASR 返回原生字级时间戳'
+      : mode === 'mixed'
+        ? '阿里云 Qwen-ASR 结果混合了原生字级时间戳和句级估算时间戳'
+        : '阿里云 Qwen-ASR 未返回字级时间戳，已按句级时间估算到字',
+  };
 }
 
 function findTranscriptionUrl(output) {
@@ -199,6 +227,7 @@ async function main() {
       fs.writeFileSync('qwen_asr_result.json', `${JSON.stringify(transcription, null, 2)}\n`, 'utf8');
       const subtitles = toSubtitlesWords(normalizeTranscriptionPayload(transcription));
       fs.writeFileSync('subtitles_words.json', `${JSON.stringify(subtitles, null, 2)}\n`, 'utf8');
+      fs.writeFileSync('transcript_timestamp_source.json', `${JSON.stringify(buildTimestampSource(subtitles), null, 2)}\n`, 'utf8');
       const gapCount = subtitles.filter((x) => x.isGap).length;
       const wordCount = subtitles.length - gapCount;
       console.log(`Qwen-ASR completed. words=${wordCount}, gaps=${gapCount}`);

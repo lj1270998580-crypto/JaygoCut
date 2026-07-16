@@ -2624,6 +2624,7 @@ async function runWorkflow(input) {
   }
 
   const subtitlesFile = path.join(transcribeDir, 'subtitles_words.json');
+  const timestampSourceFile = path.join(transcribeDir, 'transcript_timestamp_source.json');
   if (!fs.existsSync(subtitlesFile)) {
     throw new Error('未生成 subtitles_words.json');
   }
@@ -2631,6 +2632,9 @@ async function runWorkflow(input) {
   const analysisSubtitles = path.join(analysisDir, 'subtitles_words.json');
   const analysisAutoSelected = path.join(analysisDir, 'auto_selected.json');
   await copyFileSafe(subtitlesFile, analysisSubtitles);
+  if (fs.existsSync(timestampSourceFile)) {
+    await copyFileSafe(timestampSourceFile, path.join(analysisDir, 'transcript_timestamp_source.json'));
+  }
 
   await runNodeScript(AUTO_SELECT_SCRIPT, [analysisSubtitles, analysisAutoSelected, String(settings.silenceThresholdSec || 0.2)], {
     cwd: analysisDir,
@@ -2641,6 +2645,9 @@ async function runWorkflow(input) {
   await copyFileSafe(analysisSubtitles, path.join(reviewDir, 'subtitles_words.json'));
   await copyFileSafe(analysisAutoSelected, path.join(reviewDir, 'auto_selected.json'));
   await copyFileSafe(audioWav, path.join(reviewDir, 'audio.wav'));
+  if (fs.existsSync(timestampSourceFile)) {
+    await copyFileSafe(timestampSourceFile, path.join(reviewDir, 'transcript_timestamp_source.json'));
+  }
   if (fs.existsSync(timelineJson)) {
     await copyFileSafe(timelineJson, path.join(reviewDir, 'audio_timeline.json'));
   }
